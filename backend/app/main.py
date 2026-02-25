@@ -420,7 +420,53 @@ SIMULATED_PLAYING_MAX_PAID = max(SIMULATED_SELECTING_MAX_PAID, env_int("SIMULATE
 SIMULATED_SELECTING_STEP_SECONDS = max(1, env_int("SIMULATED_SELECTING_STEP_SECONDS", 3))
 SIMULATED_SELECTING_CARDS_PER_STEP = max(1, env_int("SIMULATED_SELECTING_CARDS_PER_STEP", 2))
 SIMULATED_PLAYING_CARDS_PER_CALL = max(1, env_int("SIMULATED_PLAYING_CARDS_PER_CALL", 1))
-SIMULATED_EXTRA_PLAYERS_MAX = max(0, env_int("SIMULATED_EXTRA_PLAYERS_MAX", 120))
+SIMULATED_BOT_POOL_SIZE = max(1, env_int("SIMULATED_BOT_POOL_SIZE", 36))
+SIMULATED_PHONE_START = max(0, min(99999999, env_int("SIMULATED_PHONE_START", 96000000)))
+SIMULATED_USER_TAG = "__simulated_bot__"
+SIMULATED_PASSWORD_HASH = "simbot$disabled"
+SIMULATED_MALE_NAMES = [
+    "Abebe",
+    "Alemu",
+    "Aschalew",
+    "Assefa",
+    "Ayele",
+    "Bekele",
+    "Biniam",
+    "Birhanu",
+    "Daniel",
+    "Dawit",
+    "Demissie",
+    "Dereje",
+    "Elias",
+    "Endale",
+    "Eshetu",
+    "Eyob",
+    "Fasil",
+    "Fekadu",
+    "Fikru",
+    "Getachew",
+    "Getahun",
+    "Haile",
+    "Henok",
+    "Kedir",
+    "Kassahun",
+    "Kebede",
+    "Kidus",
+    "Lidetu",
+    "Mekonnen",
+    "Merga",
+    "Mesfin",
+    "Mohammed",
+    "Mulugeta",
+    "Natnael",
+    "Nega",
+    "Nigatu",
+    "Seifu",
+    "Solomon",
+    "Tamirat",
+    "Teshome",
+    "Yared",
+]
 ADMIN_BOOTSTRAP_PHONES = env_list("ADMIN_BOOTSTRAP_PHONES", os.getenv("ADMIN_PHONE_NUMBERS", ""))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 DEFAULT_ADMIN_ALERT_EMAIL = "embetalemayehuengr@gmail.com"
@@ -492,9 +538,13 @@ def ensure_db_ready() -> None:
     try:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     except PermissionError:
-        fallback_path = Path(
-            os.getenv("ETHIO_BINGO_FALLBACK_DB_PATH", "/tmp/ethio_bingo.db")
-        ).expanduser()
+        fallback_raw = os.getenv("ETHIO_BINGO_FALLBACK_DB_PATH", "").strip()
+        if not fallback_raw:
+            raise RuntimeError(
+                f"DB path '{DB_PATH}' is not writable. Attach a persistent disk, set DATABASE_URL, "
+                "or set ETHIO_BINGO_FALLBACK_DB_PATH explicitly."
+            ) from None
+        fallback_path = Path(fallback_raw).expanduser()
         print(
             f"DB path '{DB_PATH}' is not writable. Falling back to '{fallback_path}'."
         )
@@ -593,13 +643,52 @@ def persist_withdraw_tickets() -> None:
 
 
 def persist_deposit_methods() -> None:
+    if PG_STORE.enabled():
+        PG_STORE.persist_deposit_methods([method.model_dump(mode="json") for method in DEPOSIT_METHODS])
+        return
     db_write_state("deposit_methods", [method.model_dump(mode="json") for method in DEPOSIT_METHODS])
 
 
 def load_persisted_state() -> None:
     global DEPOSIT_METHODS
 
-    persisted_users = db_read_state("users")
+    if PG_STORE.enabled():
+        # One-time migration helper: if Postgres is empty and a SQLite snapshot exists, copy it first.
+        if PG_STORE.is_empty() and DB_PATH.exists():
+            sqlite_snapshot = read_sqlite_state(DB_PATH)
+            users_snapshot = sqlite_snapshot.get("users")
+            users_loaded = isinstance(users_snapshot, dict) and bool(users_snapshot)
+            if users_loaded:
+                PG_STORE.persist_users(dict(users_snapshot))
+            if users_loaded and isinstance(sqlite_snapshot.get("sessions"), dict):
+                PG_STORE.persist_sessions(dict(sqlite_snapshot.get("sessions", {})))
+            if users_loaded and isinstance(sqlite_snapshot.get("rooms"), dict):
+                PG_STORE.persist_rooms(dict(sqlite_snapshot.get("rooms", {})))
+            if users_loaded and (
+                isinstance(sqlite_snapshot.get("used_deposit_tx"), dict)
+                or isinstance(sqlite_snapshot.get("used_receipt_links"), dict)
+            ):
+                PG_STORE.persist_receipts(
+                    dict(sqlite_snapshot.get("used_deposit_tx", {})),
+                    dict(sqlite_snapshot.get("used_receipt_links", {})),
+                )
+            if users_loaded and isinstance(sqlite_snapshot.get("withdraw_tickets"), list):
+                PG_STORE.persist_withdraw_tickets(list(sqlite_snapshot.get("withdraw_tickets", [])))
+            if isinstance(sqlite_snapshot.get("deposit_methods"), list):
+                PG_STORE.persist_deposit_methods(list(sqlite_snapshot.get("deposit_methods", [])))
+        persisted = PG_STORE.load_all()
+    else:
+        persisted = {
+            "users": db_read_state("users"),
+            "sessions": db_read_state("sessions"),
+            "rooms": db_read_state("rooms"),
+            "used_deposit_tx": db_read_state("used_deposit_tx"),
+            "used_receipt_links": db_read_state("used_receipt_links"),
+            "withdraw_tickets": db_read_state("withdraw_tickets"),
+            "deposit_methods": db_read_state("deposit_methods"),
+        }
+
+    persisted_users = persisted.get("users")
     if isinstance(persisted_users, dict):
         USERS.clear()
         for phone, raw in persisted_users.items():
@@ -608,7 +697,7 @@ def load_persisted_state() -> None:
             except Exception:
                 continue
 
-    persisted_sessions = db_read_state("sessions")
+    persisted_sessions = persisted.get("sessions")
     if isinstance(persisted_sessions, dict):
         SESSIONS.clear()
         for token, raw_record in persisted_sessions.items():
@@ -620,7 +709,7 @@ def load_persisted_state() -> None:
             SESSIONS[token] = normalized_record
         prune_expired_sessions(persist=False)
 
-    persisted_rooms = db_read_state("rooms")
+    persisted_rooms = persisted.get("rooms")
     if isinstance(persisted_rooms, dict):
         ROOMS.clear()
         for stake_id, raw in persisted_rooms.items():
@@ -629,21 +718,21 @@ def load_persisted_state() -> None:
             except Exception:
                 continue
 
-    persisted_tx = db_read_state("used_deposit_tx")
+    persisted_tx = persisted.get("used_deposit_tx")
     if isinstance(persisted_tx, dict):
         USED_DEPOSIT_TX.clear()
         for tx, owner in persisted_tx.items():
             if isinstance(tx, str) and isinstance(owner, str):
                 USED_DEPOSIT_TX[tx] = owner
 
-    persisted_links = db_read_state("used_receipt_links")
+    persisted_links = persisted.get("used_receipt_links")
     if isinstance(persisted_links, dict):
         USED_RECEIPT_LINKS.clear()
         for link, owner in persisted_links.items():
             if isinstance(link, str) and isinstance(owner, str):
                 USED_RECEIPT_LINKS[link] = owner
 
-    persisted_tickets = db_read_state("withdraw_tickets")
+    persisted_tickets = persisted.get("withdraw_tickets")
     if isinstance(persisted_tickets, list):
         WITHDRAW_TICKETS.clear()
         for raw in persisted_tickets:
@@ -654,7 +743,7 @@ def load_persisted_state() -> None:
             except Exception:
                 continue
 
-    persisted_methods = db_read_state("deposit_methods")
+    persisted_methods = persisted.get("deposit_methods")
     if isinstance(persisted_methods, list):
         methods: list[DepositMethod] = []
         for raw in persisted_methods:
@@ -986,6 +1075,8 @@ def record_bet_history_for_round(
         winner_payouts_by_phone[entry.phone_number] = round(winner_payouts_by_phone.get(entry.phone_number, 0.0) + entry.payout, 2)
 
     for owner_phone, cards in by_user_cards.items():
+        if is_simulated_phone(owner_phone):
+            continue
         user = USERS.get(owner_phone)
         if not user:
             continue
@@ -1154,6 +1245,62 @@ def create_room(stake: StakeOption) -> RoomStore:
         started_at=utc_now(),
         called_sequence=generate_called_sequence(),
     )
+
+
+def simulated_user_marker(index: int) -> str:
+    return f"{SIMULATED_USER_TAG}:{index}"
+
+
+def is_simulated_user(user: UserStore | None) -> bool:
+    if not user:
+        return False
+    marker = user.telegram_username or ""
+    return marker.startswith(f"{SIMULATED_USER_TAG}:")
+
+
+def is_simulated_phone(phone_number: str | None) -> bool:
+    if not phone_number:
+        return False
+    return is_simulated_user(USERS.get(phone_number))
+
+
+def get_or_create_simulated_user(index: int) -> tuple[UserStore, bool]:
+    marker = simulated_user_marker(index)
+    for user in USERS.values():
+        if user.telegram_username == marker:
+            return user, False
+
+    user_name = SIMULATED_MALE_NAMES[index % len(SIMULATED_MALE_NAMES)]
+    base = (SIMULATED_PHONE_START + index) % 100000000
+    for attempt in range(10000):
+        candidate = f"09{(base + attempt * SIMULATED_BOT_POOL_SIZE) % 100000000:08d}"
+        existing = USERS.get(candidate)
+        if existing is not None:
+            if existing.telegram_username == marker:
+                return existing, False
+            continue
+
+        simulated = UserStore(
+            user_name=user_name,
+            phone_number=candidate,
+            password_hash=SIMULATED_PASSWORD_HASH,
+            referral_code=create_referral_code(),
+            is_admin=False,
+            telegram_id=None,
+            telegram_username=marker,
+            wallet=WalletState(main_balance=0.0, bonus_balance=0.0),
+        )
+        USERS[candidate] = simulated
+        return simulated, True
+
+    raise RuntimeError("Unable to allocate phone number for simulated user.")
+
+
+def get_simulated_owner_phone(room: RoomStore, queue: Literal["current", "next"], cartella_no: int) -> tuple[str, bool]:
+    seed = f"{room.id}:{queue}:{cartella_no}"
+    index = int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12], 16) % SIMULATED_BOT_POOL_SIZE
+    user, created = get_or_create_simulated_user(index)
+    return user.phone_number, created
 
 
 def get_or_create_room(stake: StakeOption) -> RoomStore:
@@ -1364,9 +1511,15 @@ def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
         if key in seen:
             continue
         seen.add(key)
+        owner_phone = room.taken_cartellas.get(claim.cartella_no)
+        if owner_phone != claim.phone_number:
+            continue
         if claim.phone_number not in USERS:
             continue
-        marks = get_user_marked_numbers(room, claim.phone_number, claim.cartella_no)
+        if is_simulated_phone(claim.phone_number):
+            marks = sorted(set(called_numbers).intersection(card_numbers_set(claim.cartella_no)))
+        else:
+            marks = get_user_marked_numbers(room, claim.phone_number, claim.cartella_no)
         if has_bingo_for_marks(claim.cartella_no, called_numbers, marks):
             valid_claims.append(claim)
 
@@ -1396,8 +1549,9 @@ def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
         if not winner_user:
             continue
 
-        winner_user.wallet.main_balance += payout
-        record_transaction(winner_user, "Win", payout, "Completed")
+        if not is_simulated_phone(claim.phone_number):
+            winner_user.wallet.main_balance += payout
+            record_transaction(winner_user, "Win", payout, "Completed")
         winners.append(
             WinnerEntry(
                 phone_number=claim.phone_number,
@@ -1469,14 +1623,6 @@ def end_room_if_calls_complete(room: RoomStore, now: datetime) -> None:
     persist_rooms()
 
 
-def advance_room_if_needed(room: RoomStore) -> None:
-    now = utc_now()
-    finalize_claim_window_if_needed(room, now)
-    end_room_if_calls_complete(room, now)
-    if room.ended_at is not None and room.result_until is not None and now >= room.result_until:
-        start_next_round(room, now)
-
-
 def get_queue_maps(
     room: RoomStore, queue: Literal["current", "next"]
 ) -> tuple[dict[int, str], dict[int, str], dict[int, datetime]]:
@@ -1485,41 +1631,152 @@ def get_queue_maps(
     return room.taken_cartellas, room.held_cartellas, room.held_updated_at
 
 
-def compute_simulated_paid_cartellas(
-    room: RoomStore,
+def compute_simulated_target(
     phase: Literal["selecting", "playing", "finished"],
-    active_queue: Literal["current", "next"],
-    called_numbers: list[int],
     countdown_seconds: int,
-) -> list[int]:
+    called_numbers: list[int],
+) -> int:
     if not ENABLE_SIMULATED_ACTIVITY or phase == "finished":
-        return []
-
-    taken_map, held_map, _ = get_queue_maps(room, active_queue)
-    blocked = set(taken_map.keys()) | set(held_map.keys())
-    available = [cartella_no for cartella_no in range(1, CARTELLA_TOTAL + 1) if cartella_no not in blocked]
-    if not available:
-        return []
+        return 0
 
     if phase == "selecting":
         elapsed_select = max(0, SELECT_PHASE_SECONDS - max(0, countdown_seconds))
         step_index = elapsed_select // SIMULATED_SELECTING_STEP_SECONDS
-        target = min(SIMULATED_SELECTING_MAX_PAID, step_index * SIMULATED_SELECTING_CARDS_PER_STEP)
-        seed_bucket = step_index
-    else:
-        step_index = len(called_numbers)
-        target = max(SIMULATED_SELECTING_MAX_PAID, step_index * SIMULATED_PLAYING_CARDS_PER_CALL)
-        target = min(SIMULATED_PLAYING_MAX_PAID, target)
-        seed_bucket = step_index
+        return min(SIMULATED_SELECTING_MAX_PAID, step_index * SIMULATED_SELECTING_CARDS_PER_STEP)
 
-    target = min(target, len(available))
+    step_index = len(called_numbers)
+    return min(SIMULATED_PLAYING_MAX_PAID, step_index * SIMULATED_PLAYING_CARDS_PER_CALL)
+
+
+def ensure_simulated_cards_for_queue(
+    room: RoomStore,
+    queue: Literal["current", "next"],
+    target: int,
+) -> tuple[bool, bool]:
     if target <= 0:
-        return []
+        return False, False
 
-    seed_source = f"{room.id}:{room.started_at.isoformat()}:{active_queue}:{phase}:{seed_bucket}:{target}"
-    seed_value = int(hashlib.sha256(seed_source.encode("utf-8")).hexdigest()[:16], 16)
-    rng = Random(seed_value)
-    return sorted(rng.sample(available, target))
+    taken_map, held_map, _ = get_queue_maps(room, queue)
+    current_simulated = [cartella_no for cartella_no, owner in taken_map.items() if is_simulated_phone(owner)]
+    deficit = max(0, target - len(current_simulated))
+    if deficit <= 0:
+        return False, False
+
+    blocked = set(taken_map.keys()) | set(held_map.keys())
+    available = [cartella_no for cartella_no in range(1, CARTELLA_TOTAL + 1) if cartella_no not in blocked]
+    if not available:
+        return False, False
+
+    seed_source = f"{room.id}:{queue}:{room.started_at.isoformat()}:{target}:{len(taken_map)}"
+    seed = int(hashlib.sha256(seed_source.encode("utf-8")).hexdigest()[:16], 16)
+    rng = Random(seed)
+    chosen = rng.sample(available, min(deficit, len(available)))
+
+    changed_room = False
+    changed_users = False
+    for cartella_no in chosen:
+        owner_phone, user_created = get_simulated_owner_phone(room, queue, cartella_no)
+        if cartella_no in taken_map:
+            continue
+        taken_map[cartella_no] = owner_phone
+        room.marked_by_user_card.setdefault(mark_key(owner_phone, cartella_no), [])
+        changed_room = True
+        if user_created:
+            changed_users = True
+
+    return changed_room, changed_users
+
+
+def ensure_simulated_activity(room: RoomStore, now: datetime) -> None:
+    if not ENABLE_SIMULATED_ACTIVITY or room.ended_at is not None:
+        return
+
+    elapsed_seconds = int((now - room.started_at).total_seconds())
+    if elapsed_seconds < 0:
+        elapsed_seconds = 0
+
+    if elapsed_seconds < SELECT_PHASE_SECONDS:
+        phase: Literal["selecting", "playing", "finished"] = "selecting"
+        queue: Literal["current", "next"] = "current"
+        countdown_seconds = SELECT_PHASE_SECONDS - elapsed_seconds
+        called_numbers: list[int] = []
+    else:
+        phase = "playing"
+        queue = "next"
+        countdown_seconds = 0
+        called_numbers = compute_called_numbers(room, now)
+
+    target = compute_simulated_target(phase, countdown_seconds, called_numbers)
+    changed_room, changed_users = ensure_simulated_cards_for_queue(room, queue, target)
+    if changed_users:
+        persist_users()
+    if changed_room:
+        persist_rooms()
+
+
+def inject_simulated_claims(room: RoomStore, now: datetime) -> bool:
+    if not ENABLE_SIMULATED_ACTIVITY:
+        return False
+    if room.ended_at is not None:
+        return False
+    if (now - room.started_at).total_seconds() < SELECT_PHASE_SECONDS:
+        return False
+
+    reference_time = room.claim_window_reference_time or now
+    called_numbers = compute_called_numbers(room, reference_time)
+    if not called_numbers:
+        return False
+    called_set = set(called_numbers)
+
+    changed = False
+    added_count = 0
+    max_new_claims = 1 if room.claim_window_ends_at is None else 2
+    existing = {(entry.phone_number, entry.cartella_no) for entry in room.pending_claims}
+    for cartella_no, owner_phone in sorted(room.taken_cartellas.items()):
+        if not is_simulated_phone(owner_phone):
+            continue
+        key = (owner_phone, cartella_no)
+        if key in existing:
+            continue
+        marks = sorted(called_set.intersection(card_numbers_set(cartella_no)))
+        if not has_bingo_for_marks(cartella_no, called_numbers, marks):
+            continue
+        room.pending_claims.append(
+            ClaimEntry(phone_number=owner_phone, cartella_no=cartella_no, claimed_at=now)
+        )
+        existing.add(key)
+        changed = True
+        added_count += 1
+        if added_count >= max_new_claims:
+            break
+
+    if changed and room.claim_window_ends_at is None:
+        room.claim_window_ends_at = now + timedelta(seconds=CLAIM_GRACE_SECONDS)
+        room.claim_window_reference_time = now
+
+    return changed
+
+
+def advance_room_if_needed(room: RoomStore) -> None:
+    now = utc_now()
+    ensure_simulated_activity(room, now)
+    if inject_simulated_claims(room, now):
+        persist_rooms()
+    finalize_claim_window_if_needed(room, now)
+    end_room_if_calls_complete(room, now)
+    if room.ended_at is not None and room.result_until is not None and now >= room.result_until:
+        start_next_round(room, now)
+
+
+def compute_simulated_paid_cartellas(
+    room: RoomStore,
+    _phase: Literal["selecting", "playing", "finished"],
+    active_queue: Literal["current", "next"],
+    _called_numbers: list[int],
+    _countdown_seconds: int,
+) -> list[int]:
+    taken_map, _, _ = get_queue_maps(room, active_queue)
+    return sorted([cartella_no for cartella_no, owner in taken_map.items() if is_simulated_phone(owner)])
 
 
 def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
@@ -1575,8 +1832,7 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
         called_numbers=called_numbers,
         countdown_seconds=countdown_seconds,
     )
-    display_paid_count = len(paid_cartellas) + len(simulated_paid_cartellas)
-    simulated_players = min(SIMULATED_EXTRA_PLAYERS_MAX, len(simulated_paid_cartellas) // 2)
+    display_paid_count = len(paid_cartellas)
     held_cartellas = sorted([cartella_no for cartella_no in queue_held.keys() if cartella_no not in queue_taken])
     unavailable = sorted(
         set(
@@ -1602,7 +1858,7 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
         id=room.id,
         stake=room.stake,
         card_price=room.card_price,
-        players=room.players_seed + len(room.taken_cartellas) + len(room.next_taken_cartellas) + simulated_players,
+        players=room.players_seed + len(room.taken_cartellas) + len(room.next_taken_cartellas),
         phase=phase,
         countdown_seconds=countdown_seconds,
         call_countdown_seconds=call_countdown_seconds,

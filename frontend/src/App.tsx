@@ -1744,7 +1744,7 @@ export default function App() {
                         <strong>{pickerRoom?.next_my_cartellas.length ?? 0}</strong> My Next
                       </span>
                     </div>
-                    <p className="cartella-legend">White = available, Red = held, Blue = paid, Gold = activity preview (still available).</p>
+                    <p className="cartella-legend">White = available, Red = held, Blue = paid, Gold = simulated player card.</p>
                     <div className="cartella-surface">
                       <div className="cartella-grid">
                         {cartellaList.map((num) => {
@@ -1752,7 +1752,7 @@ export default function App() {
                           const mineHeld = pickerRoom?.my_held_cartella === num;
                           const held = heldSet.has(num);
                           const heldByOther = held && !mineHeld;
-                          const simulated = simulatedPaidSet.has(num) && !paid && !held;
+                          const simulated = simulatedPaidSet.has(num);
                           const red = processingCartella === num || held;
                           const selected = selectedCartella === num;
                           return (
