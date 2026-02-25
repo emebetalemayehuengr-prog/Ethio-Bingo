@@ -26,7 +26,7 @@ services:
       - key: SIGNUP_INITIAL_BONUS_BALANCE
         value: "0"
       - key: ETHIO_BINGO_DB_PATH
-        value: /var/data/ethio_bingo.db
+        value: /tmp/ethio_bingo.db
       - key: ADMIN_ALERT_EMAILS
         value: embetalemayehuengr@gmail.com
       - key: CORS_ALLOWED_ORIGINS
