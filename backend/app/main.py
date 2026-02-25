@@ -1644,25 +1644,8 @@ def compute_simulated_target(
         step_index = elapsed_select // SIMULATED_SELECTING_STEP_SECONDS
         return min(SIMULATED_SELECTING_MAX_PAID, step_index * SIMULATED_SELECTING_CARDS_PER_STEP)
 
-    step_index = len(called_numbers)
-    target = max(SIMULATED_SELECTING_MAX_PAID, step_index * SIMULATED_PLAYING_CARDS_PER_CALL)
-    return min(SIMULATED_PLAYING_MAX_PAID, target)
-
-
-def carry_simulated_cards_to_next_queue(room: RoomStore) -> bool:
-    next_taken, next_held, _ = get_queue_maps(room, "next")
-    blocked = set(next_taken.keys()) | set(next_held.keys())
-    changed = False
-    for cartella_no, owner in sorted(room.taken_cartellas.items()):
-        if not is_simulated_phone(owner):
-            continue
-        if cartella_no in blocked:
-            continue
-        next_taken[cartella_no] = owner
-        room.marked_by_user_card.setdefault(mark_key(owner, cartella_no), [])
-        blocked.add(cartella_no)
-        changed = True
-    return changed
+    _ = (called_numbers,)
+    return 0
 
 
 def ensure_simulated_cards_for_queue(
@@ -1718,12 +1701,7 @@ def ensure_simulated_activity(room: RoomStore, now: datetime) -> None:
         countdown_seconds = SELECT_PHASE_SECONDS - elapsed_seconds
         called_numbers: list[int] = []
     else:
-        phase = "playing"
-        queue = "next"
-        countdown_seconds = 0
-        called_numbers = compute_called_numbers(room, now)
-        if carry_simulated_cards_to_next_queue(room):
-            persist_rooms()
+        return
 
     target = compute_simulated_target(phase, countdown_seconds, called_numbers)
     changed_room, changed_users = ensure_simulated_cards_for_queue(room, queue, target)
