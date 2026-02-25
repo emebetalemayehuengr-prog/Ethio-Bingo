@@ -1175,10 +1175,6 @@ export default function App() {
                         (( ))
                       </button>
                     </div>
-                    <p className="pot-formula">
-                      {currentPaidCount} cards x {room.card_price} Birr = {currentTotalSales.toFixed(2)} Birr | House 15% ={" "}
-                      {currentHouseCommission.toFixed(2)} Birr | Winner Pool = {realWinnerPool.toFixed(2)} Birr
-                    </p>
                     <div className="caller-layout">
                       <aside className="caller-side-card">
                         <div className="caller-ball-shell">
@@ -1970,3 +1966,4 @@ export default function App() {
     </div>
   );
 }
+

@@ -344,8 +344,8 @@ BRAND = {
 }
 
 DEFAULT_DEPOSIT_LOGOS: dict[str, str] = {
-    "telebirr": "https://brandfetch.com/ethiotelebirr.com",
-    "cbebirr": "https://ethiopianlogos.com/logos/cbe_birr_light/cbe_birr_light.svg",
+    "telebirr": "https://tse3.mm.bing.net/th/id/OIP.4yqd3lozkEImH0fgytD6RgHaD4?rs=1&pid=ImgDetMain&o=7&rm=3",
+    "cbebirr": "/providers/cbebirr.svg",
 }
 
 DEPOSIT_METHODS = [
@@ -2576,3 +2576,4 @@ def claim_bingo(payload: ClaimBingoRequest, user: UserStore = Depends(get_curren
         "wallet": user.wallet.model_dump(),
         "room": next_state.model_dump(),
     }
+
