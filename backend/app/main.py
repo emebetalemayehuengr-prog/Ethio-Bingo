@@ -343,11 +343,16 @@ BRAND = {
     "surface": "#a693c8",
 }
 
+DEFAULT_DEPOSIT_LOGOS: dict[str, str] = {
+    "telebirr": "https://brandfetch.com/ethiotelebirr.com",
+    "cbebirr": "https://ethiopianlogos.com/logos/cbe_birr_light/cbe_birr_light.svg",
+}
+
 DEPOSIT_METHODS = [
     DepositMethod(
         code="telebirr",
         label="Telebirr Deposit",
-        logo_url="/providers/telebirr.png",
+        logo_url=DEFAULT_DEPOSIT_LOGOS["telebirr"],
         transfer_accounts=[
             DepositAccount(phone_number="+251945811613", owner_name="ERGO"),
             DepositAccount(phone_number="0923794255", owner_name="KIYA"),
@@ -363,7 +368,7 @@ DEPOSIT_METHODS = [
     DepositMethod(
         code="cbebirr",
         label="CBE Birr Deposit",
-        logo_url="/providers/cbebirr.png",
+        logo_url=DEFAULT_DEPOSIT_LOGOS["cbebirr"],
         transfer_accounts=[
             DepositAccount(phone_number="+251945811613", owner_name="ERGO"),
             DepositAccount(phone_number="0923794255", owner_name="KIYA"),
@@ -801,6 +806,19 @@ def apply_admin_bootstrap() -> None:
             changed = True
     if changed:
         persist_users()
+
+
+def apply_default_deposit_logos() -> None:
+    changed = False
+    for method in DEPOSIT_METHODS:
+        desired_logo = DEFAULT_DEPOSIT_LOGOS.get(method.code)
+        if not desired_logo:
+            continue
+        if method.logo_url != desired_logo:
+            method.logo_url = desired_logo
+            changed = True
+    if changed:
+        persist_deposit_methods()
 
 
 def create_session_record(phone_number: str) -> dict[str, str]:
@@ -1960,6 +1978,7 @@ def seed_demo_users() -> None:
 
 ensure_db_ready()
 load_persisted_state()
+apply_default_deposit_logos()
 apply_admin_bootstrap()
 if ENABLE_DEMO_SEED:
     seed_demo_users()

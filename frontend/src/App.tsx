@@ -195,7 +195,10 @@ function AuthScreen({
   return (
     <div className="auth-shell">
       <div className="auth-card">
-        <h1>Ethio Bingo</h1>
+        <div className="auth-brand">
+          <img src="/brand/ethio-bingo-logo.svg" alt="Ethio Bingo logo" className="auth-brand-logo" />
+          <h1>Ethio Bingo</h1>
+        </div>
         <p>Sign in to continue.</p>
         <div className="auth-switch">
           <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
@@ -230,7 +233,6 @@ function AuthScreen({
             </button>
           )}
         </form>
-        <p className="auth-demo">Demo: 0913885322 / 123456</p>
       </div>
     </div>
   );
@@ -1041,6 +1043,10 @@ export default function App() {
 
       <header className="top-header">
         <div className="top-strip">
+          <div className="brand-inline">
+            <img src="/brand/ethio-bingo-logo.svg" alt="Ethio Bingo logo" className="brand-inline-logo" />
+            <span>Ethio Bingo</span>
+          </div>
           <button className="menu-toggle" type="button" onClick={() => setDrawerOpen((state) => !state)}>
             =
           </button>
@@ -1073,7 +1079,7 @@ export default function App() {
               </article>
               <article className="service-card">
                 <h3>Wallet</h3>
-                <p>Demo account starts with test balance so you can play immediately.</p>
+                <p>Manage your balance, deposits, withdrawals, and transfer history.</p>
                 <button className="primary-btn" type="button" onClick={() => openService("wallet")}>
                   Open
                 </button>
@@ -1286,7 +1292,7 @@ export default function App() {
         {service === "wallet" && (
           <section className="panel wallet-panel">
             <h2>Wallet</h2>
-            <p className="panel-subtitle">Demo test balance is preloaded for this account.</p>
+            <p className="panel-subtitle">Withdraw requests notify admin by email for manual bank payout.</p>
             <div className="balance-row">
               <div className="balance-card">
                 <h3>Main Balance</h3>

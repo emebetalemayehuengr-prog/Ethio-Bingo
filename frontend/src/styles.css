@@ -1721,6 +1721,19 @@ body {
   margin: 8px 0 0;
 }
 
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.auth-brand-logo {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
 .auth-switch {
   margin-top: 14px;
   display: grid;
@@ -1764,12 +1777,6 @@ body {
   margin: 0;
 }
 
-.auth-demo {
-  margin-top: 12px;
-  font-size: 0.9rem;
-  color: #495069;
-}
-
 /* App overrides */
 .top-header {
   position: sticky;
@@ -1787,9 +1794,19 @@ body {
 
 .brand-inline {
   margin-right: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-family: "Teko", sans-serif;
-  font-size: 1.9rem;
+  font-size: 1.4rem;
   color: #f7f0ff;
+}
+
+.brand-inline-logo {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  object-fit: cover;
 }
 
 .panel {
