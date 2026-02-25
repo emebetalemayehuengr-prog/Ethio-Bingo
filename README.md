@@ -84,6 +84,9 @@ Steps:
    - `SMTP_PASSWORD` = your Brevo SMTP key
 4. Redeploy backend service.
 
+If backend build fails with `pydantic-core` on Python `3.14.x`, set backend
+`PYTHON_VERSION=3.11.11` in Render env vars and redeploy.
+
 Important:
 
 - If your frontend service URL is not exactly `https://ethio-bingo-frontend.onrender.com`, update backend `CORS_ALLOWED_ORIGINS` to the real URL.
