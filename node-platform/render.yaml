@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: ethio-bingo-api
+    runtime: node
+    plan: starter
+    rootDir: node-platform
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ethio-bingo-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: ethio-bingo-redis
+          property: connectionString
+
+  - type: redis
+    name: ethio-bingo-redis
+    plan: starter
+    ipAllowList: []
+
+databases:
+  - name: ethio-bingo-db
+    plan: starter

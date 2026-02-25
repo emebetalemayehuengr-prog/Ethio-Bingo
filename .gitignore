@@ -1,0 +1,12 @@
+backend/.venv/
+backend/data/
+backend/logs/
+frontend/node_modules/
+frontend/dist/
+frontend/logs/
+node-platform/node_modules/
+node-platform/dist/
+node-platform/db/*.sqlite
+*.tsbuildinfo
+__pycache__/
+*.pyc

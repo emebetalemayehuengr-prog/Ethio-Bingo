@@ -1,0 +1,2214 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import hashlib
+import hmac
+import math
+import os
+import re
+import secrets
+import smtplib
+import sqlite3
+import threading
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
+from pathlib import Path
+from random import Random, randint, sample, shuffle
+from typing import Literal
+from urllib.parse import parse_qsl, urlparse
+from urllib.request import Request, urlopen
+
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+except Exception:  # pragma: no cover - optional dependency for postgres runtime
+    psycopg = None
+    dict_row = None
+    Jsonb = None
+
+from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from .postgres_store import PostgresStateStore, read_sqlite_state
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_list(name: str, default: str = "") -> list[str]:
+    raw = os.getenv(name, default)
+    if not raw:
+        return []
+    return [item.strip() for item in re.split(r"[,\n;]+", raw) if item.strip()]
+
+
+APP_ENV = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).strip().lower()
+
+DEV_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5188",
+    "http://127.0.0.1:5188",
+    "http://localhost:5192",
+    "http://127.0.0.1:5192",
+]
+
+CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS")
+if not CORS_ALLOWED_ORIGINS and APP_ENV in {"dev", "development", "local", "test"}:
+    CORS_ALLOWED_ORIGINS = DEV_CORS_ORIGINS
+
+CORS_ALLOWED_ORIGIN_REGEX = os.getenv("CORS_ALLOWED_ORIGIN_REGEX", "").strip()
+if not CORS_ALLOWED_ORIGIN_REGEX and APP_ENV in {"dev", "development", "local", "test"}:
+    CORS_ALLOWED_ORIGIN_REGEX = (
+        r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|"
+        r"172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$"
+    )
+
+app = FastAPI(title="Ethio Bingo API", version="2.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_origin_regex=CORS_ALLOWED_ORIGIN_REGEX or None,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class StakeOption(BaseModel):
+    id: str
+    stake: int
+    status: Literal["countdown", "playing", "none"]
+    countdown_seconds: int | None = None
+    possible_win: int | None = None
+    bonus: bool = False
+    room_phase: Literal["selecting", "playing", "finished"] | None = None
+    my_cards_current: int = 0
+    my_cards_next: int = 0
+    open_available: bool = False
+
+
+class DepositAccount(BaseModel):
+    phone_number: str = Field(pattern=r"^(09\d{8}|\+2519\d{8})$")
+    owner_name: str = Field(min_length=2, max_length=60)
+
+
+class DepositMethod(BaseModel):
+    code: Literal["telebirr", "cbebirr"]
+    label: str
+    logo_url: str | None = None
+    transfer_accounts: list[DepositAccount]
+    instruction_steps: list[str]
+    receipt_example: str
+
+
+class WalletState(BaseModel):
+    currency: str = "ETB"
+    main_balance: float
+    bonus_balance: float
+
+
+class TransactionRecord(BaseModel):
+    type: Literal["Deposit", "Withdraw", "Transfer", "Bet", "Win"]
+    amount: float
+    status: Literal["Completed", "Pending", "Failed"]
+    created_at: str
+
+
+class BetHistoryRecord(BaseModel):
+    id: str
+    stake: int
+    game_winning: float
+    winner_cards: list[int]
+    your_cards: list[int]
+    date: str
+    result: Literal["Won", "Lost"]
+    payout: float = 0.0
+    called_numbers: list[int] = Field(default_factory=list)
+    preview_card: BingoCardResponse | None = None
+
+
+class UserPublic(BaseModel):
+    user_name: str
+    phone_number: str
+    referral_code: str
+    is_admin: bool = False
+
+
+class SignupRequest(BaseModel):
+    user_name: str = Field(min_length=2, max_length=40)
+    phone_number: str = Field(pattern=r"^(09\d{8}|\+2519\d{8})$")
+    password: str = Field(min_length=6, max_length=64)
+
+
+class LoginRequest(BaseModel):
+    phone_number: str = Field(pattern=r"^(09\d{8}|\+2519\d{8})$")
+    password: str = Field(min_length=6, max_length=64)
+
+
+class TelegramAuthRequest(BaseModel):
+    init_data: str = Field(min_length=10, max_length=5000)
+
+
+class DepositRequest(BaseModel):
+    method: Literal["telebirr", "cbebirr"]
+    amount: float = Field(gt=0, le=20000)
+    transaction_number: str = Field(min_length=3, max_length=120)
+    receipt_message: str | None = Field(default=None, max_length=1000)
+
+
+class AdminUpdateDepositAccountsRequest(BaseModel):
+    transfer_accounts: list[DepositAccount] = Field(min_length=1, max_length=6)
+
+
+class TransferRequest(BaseModel):
+    phone_number: str = Field(pattern=r"^(09\d{8}|\+2519\d{8})$")
+    amount: int = Field(gt=0, le=5000)
+    otp: str = Field(pattern=r"^\d{4,6}$")
+
+
+class WithdrawRequest(BaseModel):
+    bank: str = Field(min_length=2, max_length=40)
+    account_number: str = Field(min_length=6, max_length=20)
+    account_holder: str = Field(min_length=2, max_length=60)
+    amount: int = Field(gt=2, le=50000)
+
+
+class WithdrawTicket(BaseModel):
+    id: str
+    phone_number: str
+    user_name: str
+    bank: str
+    account_number: str
+    account_holder: str
+    amount: float
+    status: Literal["Pending", "Processing", "Paid", "Rejected", "Approved"] = "Pending"
+    created_at: str
+    reviewed_at: str | None = None
+    reviewed_by: str | None = None
+    processing_at: str | None = None
+    processing_by: str | None = None
+    paid_at: str | None = None
+    paid_by: str | None = None
+    payout_reference: str | None = None
+    admin_note: str | None = None
+
+
+class AdminMarkPaidRequest(BaseModel):
+    payout_reference: str = Field(min_length=3, max_length=120)
+    admin_note: str | None = Field(default=None, max_length=300)
+
+
+class PreviewCardRequest(BaseModel):
+    stake_id: str
+    cartella_no: int = Field(ge=1, le=200)
+
+
+class JoinStakeRequest(BaseModel):
+    stake_id: str
+    cartella_no: int = Field(ge=1, le=200)
+
+
+class MarkNumberRequest(BaseModel):
+    room_id: str
+    number: int = Field(ge=1, le=75)
+    marked: bool
+    cartella_no: int | None = Field(default=None, ge=1, le=200)
+
+
+class ClaimBingoRequest(BaseModel):
+    room_id: str
+    cartella_no: int | None = Field(default=None, ge=1, le=200)
+
+
+class RoomState(BaseModel):
+    id: str
+    stake: int
+    card_price: int
+    players: int
+    phase: Literal["selecting", "playing", "finished"]
+    countdown_seconds: int
+    call_countdown_seconds: int = 0
+    cartella_total: int
+    paid_cartellas: list[int]
+    held_cartellas: list[int]
+    unavailable_cartellas: list[int]
+    my_cartella: int | None = None
+    my_cartellas: list[int] = Field(default_factory=list)
+    next_my_cartellas: list[int] = Field(default_factory=list)
+    my_held_cartella: int | None = None
+    active_queue: Literal["current", "next"] = "current"
+    called_numbers: list[int]
+    latest_number: int | None = None
+    my_marked_numbers: list[int] = Field(default_factory=list)
+    my_marked_numbers_by_card: dict[str, list[int]] = Field(default_factory=dict)
+    winner_name: str | None = None
+    winner_cartella: int | None = None
+    winner_payout: float | None = None
+    house_commission: float | None = None
+    winners: list["WinnerEntry"] = Field(default_factory=list)
+    claim_window_seconds: int = 0
+    announcement_seconds: int = 0
+
+
+class BingoCardResponse(BaseModel):
+    card_no: int
+    grid: list[list[int | str]]
+
+
+class ClaimEntry(BaseModel):
+    phone_number: str
+    cartella_no: int
+    claimed_at: datetime
+
+
+class WinnerEntry(BaseModel):
+    phone_number: str
+    user_name: str
+    cartella_no: int
+    payout: float
+    card: BingoCardResponse
+
+
+class UserStore(BaseModel):
+    user_name: str
+    phone_number: str
+    password_hash: str
+    referral_code: str
+    is_admin: bool = False
+    telegram_id: int | None = None
+    telegram_username: str | None = None
+    wallet: WalletState
+    history: list[TransactionRecord] = Field(default_factory=list)
+    bet_history: list[BetHistoryRecord] = Field(default_factory=list)
+    joined_rooms: dict[str, list[int]] = Field(default_factory=dict)
+
+
+class RoomStore(BaseModel):
+    id: str
+    stake_id: str
+    stake: int
+    card_price: int
+    players_seed: int
+    started_at: datetime
+    called_sequence: list[int]
+    taken_cartellas: dict[int, str] = Field(default_factory=dict)
+    held_cartellas: dict[int, str] = Field(default_factory=dict)
+    held_updated_at: dict[int, datetime] = Field(default_factory=dict)
+    next_taken_cartellas: dict[int, str] = Field(default_factory=dict)
+    next_held_cartellas: dict[int, str] = Field(default_factory=dict)
+    next_held_updated_at: dict[int, datetime] = Field(default_factory=dict)
+    marked_by_user_card: dict[str, list[int]] = Field(default_factory=dict)
+    ended_at: datetime | None = None
+    winner_phone: str | None = None
+    winner_cartella: int | None = None
+    winner_payout: float | None = None
+    house_commission: float | None = None
+    pending_claims: list[ClaimEntry] = Field(default_factory=list)
+    claim_window_ends_at: datetime | None = None
+    claim_window_reference_time: datetime | None = None
+    winners: list[WinnerEntry] = Field(default_factory=list)
+    result_until: datetime | None = None
+
+
+BRAND = {
+    "name": "Ethio Bingo",
+    "tagline": "Play smart. Win fair.",
+    "primary": "#391066",
+    "accent": "#ffd400",
+    "surface": "#a693c8",
+}
+
+DEPOSIT_METHODS = [
+    DepositMethod(
+        code="telebirr",
+        label="Telebirr Deposit",
+        logo_url="/providers/telebirr.png",
+        transfer_accounts=[
+            DepositAccount(phone_number="+251945811613", owner_name="ERGO"),
+            DepositAccount(phone_number="0923794255", owner_name="KIYA"),
+        ],
+        instruction_steps=[
+            "Open Telebirr app and dial *127#.",
+            "Transfer to one of the listed account numbers.",
+            "Copy the transaction number from your receipt.",
+            "Submit it in Ethio Bingo Transaction Checker.",
+        ],
+        receipt_example="CA999DASAD",
+    ),
+    DepositMethod(
+        code="cbebirr",
+        label="CBE Birr Deposit",
+        logo_url="/providers/cbebirr.png",
+        transfer_accounts=[
+            DepositAccount(phone_number="+251945811613", owner_name="ERGO"),
+            DepositAccount(phone_number="0923794255", owner_name="KIYA"),
+        ],
+        instruction_steps=[
+            "Open CBE Birr app and dial *847#.",
+            "Transfer to one of the listed account numbers.",
+            "Copy the transaction number from your receipt.",
+            "Submit it in Ethio Bingo Transaction Checker.",
+        ],
+        receipt_example="CAA2K819ZY",
+    ),
+]
+
+STAKE_OPTIONS: list[StakeOption] = [
+    StakeOption(id="stake-10", stake=10, status="countdown", countdown_seconds=43, possible_win=134, bonus=True),
+    StakeOption(id="stake-20", stake=20, status="playing", possible_win=666),
+    StakeOption(id="stake-30", stake=30, status="countdown", countdown_seconds=28, possible_win=123),
+    StakeOption(id="stake-50", stake=50, status="playing", possible_win=170),
+    StakeOption(id="stake-80", stake=80, status="none", possible_win=None),
+    StakeOption(id="stake-100", stake=100, status="countdown", countdown_seconds=14, possible_win=2158, bonus=True),
+    StakeOption(id="stake-150", stake=150, status="none", possible_win=None),
+    StakeOption(id="stake-200", stake=200, status="none", possible_win=None),
+    StakeOption(id="stake-300", stake=300, status="none", possible_win=None),
+]
+
+FAQ_ITEMS = [
+    {
+        "id": "faq-1",
+        "question": "How does playing work?",
+        "answer": "Choose a stake, pick one cartella number from 1 to 200, confirm card, and wait for live calls.",
+    },
+    {
+        "id": "faq-2",
+        "question": "How do I deposit?",
+        "answer": "Open Deposit, choose Telebirr or CBE Birr, transfer to the listed account, then submit the transaction number.",
+    },
+    {
+        "id": "faq-3",
+        "question": "How do I withdraw?",
+        "answer": "Use Withdraw, add your bank details, request amount, verify OTP, then submit your withdrawal.",
+    },
+]
+
+CARTELLA_TOTAL = 200
+CALL_INTERVAL_SECONDS = 5.0
+SELECT_PHASE_SECONDS = 43
+HOLD_TTL_SECONDS = 20
+DEMO_START_BALANCE = 700.0
+HOUSE_COMMISSION_RATE = 0.15
+RESULT_ANNOUNCE_SECONDS = 5
+MAX_CARDS_PER_USER = 10
+CLAIM_GRACE_SECONDS = 2
+ENABLE_DEMO_SEED = env_flag("ENABLE_DEMO_SEED", False)
+ADMIN_BOOTSTRAP_PHONES = env_list("ADMIN_BOOTSTRAP_PHONES", os.getenv("ADMIN_PHONE_NUMBERS", ""))
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+DEFAULT_ADMIN_ALERT_EMAIL = "embetalemayehuengr@gmail.com"
+ADMIN_ALERT_EMAILS = [
+    email
+    for email in re.split(
+        r"[,\s;]+",
+        os.getenv("ADMIN_ALERT_EMAILS", os.getenv("ADMIN_ALERT_EMAIL", DEFAULT_ADMIN_ALERT_EMAIL)).strip(),
+    )
+    if email
+]
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+try:
+    SMTP_PORT = int(os.getenv("SMTP_PORT", "587").strip() or "587")
+except ValueError:
+    SMTP_PORT = 587
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
+SMTP_FROM = os.getenv("SMTP_FROM", "").strip() or SMTP_USERNAME or "noreply@ethiobingo.local"
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").strip().lower() in {"1", "true", "yes", "on"}
+try:
+    SESSION_TTL_SECONDS = max(300, int(os.getenv("SESSION_TTL_SECONDS", "86400").strip() or "86400"))
+except ValueError:
+    SESSION_TTL_SECONDS = 86400
+ENABLE_INTERNAL_TRANSFER = env_flag("ENABLE_INTERNAL_TRANSFER", False)
+TRANSFER_OTP_VERIFY_URL = os.getenv("TRANSFER_OTP_VERIFY_URL", "").strip()
+try:
+    TRANSFER_OTP_VERIFY_TIMEOUT_SECONDS = float(os.getenv("TRANSFER_OTP_VERIFY_TIMEOUT_SECONDS", "6").strip() or "6")
+except ValueError:
+    TRANSFER_OTP_VERIFY_TIMEOUT_SECONDS = 6.0
+try:
+    SIGNUP_INITIAL_MAIN_BALANCE = float(os.getenv("SIGNUP_INITIAL_MAIN_BALANCE", "0").strip() or "0")
+except ValueError:
+    SIGNUP_INITIAL_MAIN_BALANCE = 0.0
+try:
+    SIGNUP_INITIAL_BONUS_BALANCE = float(os.getenv("SIGNUP_INITIAL_BONUS_BALANCE", "0").strip() or "0")
+except ValueError:
+    SIGNUP_INITIAL_BONUS_BALANCE = 0.0
+
+USERS: dict[str, UserStore] = {}
+SESSIONS: dict[str, dict[str, str]] = {}
+ROOMS: dict[str, RoomStore] = {}
+GAME_TICKER_TASK: asyncio.Task | None = None
+USED_DEPOSIT_TX: dict[str, str] = {}
+USED_RECEIPT_LINKS: dict[str, str] = {}
+WITHDRAW_TICKETS: list[WithdrawTicket] = []
+
+DEPOSIT_SOURCE_DOMAINS: dict[str, set[str]] = {
+    "telebirr": {"telebirr.et", "telebirr.com.et", "ethiotelecom.et"},
+    "cbebirr": {"cbebirr.com.et", "commercialbankofethiopia.com", "cbe.com.et"},
+}
+
+DB_PATH = Path(
+    os.getenv(
+        "ETHIO_BINGO_DB_PATH",
+        str((Path(__file__).resolve().parent.parent / "data" / "ethio_bingo.db")),
+    )
+).expanduser()
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+PG_STORE = PostgresStateStore(DATABASE_URL)
+DB_LOCK = threading.Lock()
+
+
+def ensure_db_ready() -> None:
+    if PG_STORE.enabled():
+        PG_STORE.ensure_schema()
+        return
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with DB_LOCK:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_state (
+                    state_key TEXT PRIMARY KEY,
+                    state_value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+
+
+def db_read_state(state_key: str) -> object | None:
+    ensure_db_ready()
+    with DB_LOCK:
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT state_value FROM app_state WHERE state_key = ?",
+                (state_key,),
+            ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(str(row[0]))
+    except json.JSONDecodeError:
+        return None
+
+
+def db_write_state(state_key: str, value: object) -> None:
+    ensure_db_ready()
+    payload = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    now = utc_now().replace(microsecond=0).isoformat()
+    with DB_LOCK:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                """
+                INSERT INTO app_state (state_key, state_value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(state_key) DO UPDATE SET
+                    state_value = excluded.state_value,
+                    updated_at = excluded.updated_at
+                """,
+                (state_key, payload, now),
+            )
+
+
+def persist_users() -> None:
+    if PG_STORE.enabled():
+        PG_STORE.persist_users({phone: user.model_dump(mode="json") for phone, user in USERS.items()})
+        return
+    db_write_state("users", {phone: user.model_dump(mode="json") for phone, user in USERS.items()})
+
+
+def persist_sessions() -> None:
+    normalized: dict[str, dict[str, str]] = {}
+    for token, raw_record in list(SESSIONS.items()):
+        record = normalize_session_record(raw_record)
+        if record is None:
+            continue
+        normalized[token] = record
+    SESSIONS.clear()
+    SESSIONS.update(normalized)
+
+    if PG_STORE.enabled():
+        PG_STORE.persist_sessions(SESSIONS)
+        return
+    db_write_state("sessions", SESSIONS)
+
+
+def persist_rooms() -> None:
+    if PG_STORE.enabled():
+        PG_STORE.persist_rooms({stake_id: room.model_dump(mode="json") for stake_id, room in ROOMS.items()})
+        return
+    db_write_state("rooms", {stake_id: room.model_dump(mode="json") for stake_id, room in ROOMS.items()})
+
+
+def persist_receipt_cache() -> None:
+    if PG_STORE.enabled():
+        PG_STORE.persist_receipts(USED_DEPOSIT_TX, USED_RECEIPT_LINKS)
+        return
+    db_write_state("used_deposit_tx", USED_DEPOSIT_TX)
+    db_write_state("used_receipt_links", USED_RECEIPT_LINKS)
+
+
+def persist_withdraw_tickets() -> None:
+    if PG_STORE.enabled():
+        PG_STORE.persist_withdraw_tickets([ticket.model_dump(mode="json") for ticket in WITHDRAW_TICKETS])
+        return
+    db_write_state("withdraw_tickets", [ticket.model_dump(mode="json") for ticket in WITHDRAW_TICKETS])
+
+
+def persist_deposit_methods() -> None:
+    db_write_state("deposit_methods", [method.model_dump(mode="json") for method in DEPOSIT_METHODS])
+
+
+def load_persisted_state() -> None:
+    global DEPOSIT_METHODS
+
+    persisted_users = db_read_state("users")
+    if isinstance(persisted_users, dict):
+        USERS.clear()
+        for phone, raw in persisted_users.items():
+            try:
+                USERS[str(phone)] = UserStore.model_validate(raw)
+            except Exception:
+                continue
+
+    persisted_sessions = db_read_state("sessions")
+    if isinstance(persisted_sessions, dict):
+        SESSIONS.clear()
+        for token, raw_record in persisted_sessions.items():
+            if not isinstance(token, str):
+                continue
+            normalized_record = normalize_session_record(raw_record)
+            if normalized_record is None:
+                continue
+            SESSIONS[token] = normalized_record
+        prune_expired_sessions(persist=False)
+
+    persisted_rooms = db_read_state("rooms")
+    if isinstance(persisted_rooms, dict):
+        ROOMS.clear()
+        for stake_id, raw in persisted_rooms.items():
+            try:
+                ROOMS[str(stake_id)] = RoomStore.model_validate(raw)
+            except Exception:
+                continue
+
+    persisted_tx = db_read_state("used_deposit_tx")
+    if isinstance(persisted_tx, dict):
+        USED_DEPOSIT_TX.clear()
+        for tx, owner in persisted_tx.items():
+            if isinstance(tx, str) and isinstance(owner, str):
+                USED_DEPOSIT_TX[tx] = owner
+
+    persisted_links = db_read_state("used_receipt_links")
+    if isinstance(persisted_links, dict):
+        USED_RECEIPT_LINKS.clear()
+        for link, owner in persisted_links.items():
+            if isinstance(link, str) and isinstance(owner, str):
+                USED_RECEIPT_LINKS[link] = owner
+
+    persisted_tickets = db_read_state("withdraw_tickets")
+    if isinstance(persisted_tickets, list):
+        WITHDRAW_TICKETS.clear()
+        for raw in persisted_tickets:
+            try:
+                ticket = WithdrawTicket.model_validate(raw)
+                normalize_withdraw_ticket_status(ticket)
+                WITHDRAW_TICKETS.append(ticket)
+            except Exception:
+                continue
+
+    persisted_methods = db_read_state("deposit_methods")
+    if isinstance(persisted_methods, list):
+        methods: list[DepositMethod] = []
+        for raw in persisted_methods:
+            try:
+                methods.append(DepositMethod.model_validate(raw))
+            except Exception:
+                continue
+        if methods:
+            DEPOSIT_METHODS = methods
+
+
+def utc_now() -> datetime:
+    return datetime.now(tz=timezone.utc)
+
+
+def normalize_phone(phone_number: str) -> str:
+    value = phone_number.strip()
+    if value.startswith("+2519") and len(value) == 13:
+        return "0" + value[4:]
+    return value
+
+
+def parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def is_bootstrap_admin_phone(phone_number: str) -> bool:
+    if not ADMIN_BOOTSTRAP_PHONES:
+        return False
+    normalized = normalize_phone(phone_number)
+    return normalized in {normalize_phone(candidate) for candidate in ADMIN_BOOTSTRAP_PHONES}
+
+
+def apply_admin_bootstrap() -> None:
+    if not ADMIN_BOOTSTRAP_PHONES:
+        return
+    changed = False
+    for raw_phone in ADMIN_BOOTSTRAP_PHONES:
+        phone = normalize_phone(raw_phone)
+        user = USERS.get(phone)
+        if user and not user.is_admin:
+            user.is_admin = True
+            changed = True
+    if changed:
+        persist_users()
+
+
+def create_session_record(phone_number: str) -> dict[str, str]:
+    now = utc_now()
+    expires_at = now + timedelta(seconds=SESSION_TTL_SECONDS)
+    return {
+        "phone_number": phone_number,
+        "created_at": now.replace(microsecond=0).isoformat(),
+        "expires_at": expires_at.replace(microsecond=0).isoformat(),
+    }
+
+
+def normalize_session_record(record: object) -> dict[str, str] | None:
+    # Backward compatibility: old snapshots stored token -> phone_number as a plain string.
+    if isinstance(record, str):
+        return create_session_record(record)
+    if isinstance(record, dict):
+        phone = record.get("phone_number")
+        if not isinstance(phone, str) or not phone:
+            return None
+        expires_at = record.get("expires_at")
+        created_at = record.get("created_at")
+        if not isinstance(expires_at, str) or parse_iso_datetime(expires_at) is None:
+            expires_at = (utc_now() + timedelta(seconds=SESSION_TTL_SECONDS)).replace(microsecond=0).isoformat()
+        if not isinstance(created_at, str) or parse_iso_datetime(created_at) is None:
+            created_at = utc_now().replace(microsecond=0).isoformat()
+        return {
+            "phone_number": phone,
+            "created_at": created_at,
+            "expires_at": expires_at,
+        }
+    return None
+
+
+def prune_expired_sessions(persist: bool = True) -> None:
+    now = utc_now()
+    expired_tokens: list[str] = []
+    for token, record in list(SESSIONS.items()):
+        normalized = normalize_session_record(record)
+        if normalized is None:
+            expired_tokens.append(token)
+            continue
+        expires_at = parse_iso_datetime(normalized.get("expires_at"))
+        if expires_at is None or now >= expires_at:
+            expired_tokens.append(token)
+            continue
+        SESSIONS[token] = normalized
+
+    if expired_tokens:
+        for token in expired_tokens:
+            SESSIONS.pop(token, None)
+        if persist:
+            persist_sessions()
+
+
+def verify_transfer_otp(phone_number: str, otp: str) -> bool:
+    if not TRANSFER_OTP_VERIFY_URL:
+        return False
+
+    payload = json.dumps(
+        {
+            "phone_number": normalize_phone(phone_number),
+            "otp": otp.strip(),
+            "context": "wallet_transfer",
+        }
+    ).encode("utf-8")
+
+    request = Request(
+        TRANSFER_OTP_VERIFY_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=TRANSFER_OTP_VERIFY_TIMEOUT_SECONDS) as response:
+            body = response.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return False
+
+    try:
+        data = json.loads(body) if body else {}
+    except json.JSONDecodeError:
+        return False
+
+    return bool(data.get("valid") is True or str(data.get("status", "")).lower() in {"approved", "ok", "valid"})
+
+
+def normalize_withdraw_ticket_status(ticket: WithdrawTicket) -> None:
+    # Backward compatibility for older snapshots where "Approved" meant final payout.
+    if ticket.status == "Approved":
+        ticket.status = "Paid"
+
+
+def send_admin_withdraw_email(ticket: WithdrawTicket) -> bool:
+    if not ADMIN_ALERT_EMAILS or not SMTP_HOST:
+        return False
+
+    subject = f"[Ethio Bingo] Withdraw request {ticket.id} needs manual payout"
+    body = (
+        "A user submitted a withdraw request.\n\n"
+        f"Request ID: {ticket.id}\n"
+        f"User: {ticket.user_name}\n"
+        f"Phone: {ticket.phone_number}\n"
+        f"Bank: {ticket.bank}\n"
+        f"Account Number: {ticket.account_number}\n"
+        f"Account Holder: {ticket.account_holder}\n"
+        f"Amount: ETB {ticket.amount:.2f}\n"
+        f"Created At: {ticket.created_at}\n\n"
+        "Action required:\n"
+        "1) Send bank transfer manually from company account.\n"
+        "2) Open Admin > Withdraw Requests.\n"
+        "3) Move to Processing, then Mark Paid with transfer reference.\n"
+    )
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = ", ".join(ADMIN_ALERT_EMAILS)
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
+            if SMTP_USE_TLS:
+                smtp.starttls()
+            if SMTP_USERNAME:
+                smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.send_message(msg)
+        return True
+    except Exception as exc:
+        print(f"Failed to send withdraw alert email for ticket {ticket.id}: {exc}")
+        return False
+
+
+def hash_password(raw_password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", raw_password.encode("utf-8"), salt.encode("utf-8"), 150000)
+    return f"{salt}${digest.hex()}"
+
+
+def verify_password(raw_password: str, stored_hash: str) -> bool:
+    try:
+        salt, digest_hex = stored_hash.split("$", maxsplit=1)
+    except ValueError:
+        return False
+    check = hashlib.pbkdf2_hmac("sha256", raw_password.encode("utf-8"), salt.encode("utf-8"), 150000).hex()
+    return hmac.compare_digest(check, digest_hex)
+
+
+def create_referral_code() -> str:
+    used = {user.referral_code for user in USERS.values()}
+    while True:
+        code = "".join(str(randint(0, 9)) for _ in range(6))
+        if code not in used:
+            return code
+
+
+def generate_phone_for_telegram_user(telegram_id: int) -> str:
+    seed = int(str(abs(telegram_id))[-8:]) if telegram_id else randint(10000000, 99999999)
+    attempts = 0
+    while attempts < 1000:
+        phone = f"09{(seed + attempts) % 100000000:08d}"
+        existing = USERS.get(phone)
+        if not existing or existing.telegram_id == telegram_id:
+            return phone
+        attempts += 1
+    raise HTTPException(status_code=500, detail="Unable to allocate a phone number for Telegram account.")
+
+
+def verify_telegram_init_data(init_data: str) -> dict:
+    if not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(status_code=500, detail="Telegram bot token is not configured on server.")
+
+    parsed_items = dict(parse_qsl(init_data, keep_blank_values=True))
+    hash_value = parsed_items.pop("hash", None)
+    if not hash_value:
+        raise HTTPException(status_code=401, detail="Invalid Telegram initData: missing hash.")
+
+    data_check_string = "\n".join(f"{key}={value}" for key, value in sorted(parsed_items.items()))
+    secret_key = hmac.new(b"WebAppData", TELEGRAM_BOT_TOKEN.encode("utf-8"), hashlib.sha256).digest()
+    expected_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected_hash, hash_value):
+        raise HTTPException(status_code=401, detail="Invalid Telegram initData signature.")
+
+    user_raw = parsed_items.get("user")
+    if not user_raw:
+        raise HTTPException(status_code=401, detail="Invalid Telegram initData: missing user.")
+    try:
+        user_data = json.loads(user_raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=401, detail="Invalid Telegram user payload.") from exc
+
+    if "id" not in user_data:
+        raise HTTPException(status_code=401, detail="Invalid Telegram user payload: missing id.")
+
+    auth_date_raw = parsed_items.get("auth_date")
+    if auth_date_raw and auth_date_raw.isdigit():
+        auth_ts = int(auth_date_raw)
+        if abs(int(utc_now().timestamp()) - auth_ts) > 60 * 60 * 24:
+            raise HTTPException(status_code=401, detail="Expired Telegram session payload.")
+
+    return user_data
+
+
+def make_public_user(user: UserStore) -> UserPublic:
+    return UserPublic(
+        user_name=user.user_name,
+        phone_number=user.phone_number,
+        referral_code=user.referral_code,
+        is_admin=user.is_admin,
+    )
+
+
+def can_manage_deposit_accounts(user: UserStore) -> bool:
+    return bool(user.is_admin)
+
+
+def require_admin_user(user: UserStore) -> None:
+    if not can_manage_deposit_accounts(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
+def find_deposit_method(method_code: Literal["telebirr", "cbebirr"]) -> DepositMethod:
+    method = next((item for item in DEPOSIT_METHODS if item.code == method_code), None)
+    if method is None:
+        raise HTTPException(status_code=404, detail="Deposit method not found")
+    return method
+
+
+def record_transaction(
+    user: UserStore,
+    tx_type: Literal["Deposit", "Withdraw", "Transfer", "Bet", "Win"],
+    amount: float,
+    status_value: Literal["Completed", "Pending", "Failed"],
+) -> None:
+    user.history.insert(
+        0,
+        TransactionRecord(
+            type=tx_type,
+            amount=amount,
+            status=status_value,
+            created_at=utc_now().replace(microsecond=0).isoformat(),
+        ),
+    )
+
+
+def update_latest_pending_withdraw_status(user: UserStore, amount: float, next_status: Literal["Completed", "Failed"]) -> None:
+    for entry in user.history:
+        if entry.type == "Withdraw" and entry.status == "Pending" and abs(entry.amount - amount) < 1e-9:
+            entry.status = next_status
+            return
+
+
+def get_withdraw_ticket_or_404(ticket_id: str) -> WithdrawTicket:
+    ticket = next((item for item in WITHDRAW_TICKETS if item.id == ticket_id), None)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Withdraw request not found")
+    normalize_withdraw_ticket_status(ticket)
+    return ticket
+
+
+def record_bet_history_for_round(
+    room: RoomStore,
+    now: datetime,
+    called_numbers: list[int],
+    winners: list[WinnerEntry],
+    game_winning: float,
+) -> None:
+    by_user_cards: dict[str, list[int]] = {}
+    for cartella_no, owner_phone in room.taken_cartellas.items():
+        by_user_cards.setdefault(owner_phone, []).append(cartella_no)
+
+    winner_cards = sorted({entry.cartella_no for entry in winners})
+    winner_payouts_by_phone: dict[str, float] = {}
+    for entry in winners:
+        winner_payouts_by_phone[entry.phone_number] = round(winner_payouts_by_phone.get(entry.phone_number, 0.0) + entry.payout, 2)
+
+    for owner_phone, cards in by_user_cards.items():
+        user = USERS.get(owner_phone)
+        if not user:
+            continue
+        cards_sorted = sorted(cards)
+        payout = round(winner_payouts_by_phone.get(owner_phone, 0.0), 2)
+        result: Literal["Won", "Lost"] = "Won" if payout > 0 else "Lost"
+        preview_card = create_bingo_card(cards_sorted[0]) if cards_sorted else None
+        user.bet_history.insert(
+            0,
+            BetHistoryRecord(
+                id=f"{room.id}:{now.timestamp()}:{owner_phone}:{len(user.bet_history) + 1}",
+                stake=room.stake,
+                game_winning=round(game_winning, 2),
+                winner_cards=winner_cards,
+                your_cards=cards_sorted,
+                date=now.date().isoformat(),
+                result=result,
+                payout=payout,
+                called_numbers=called_numbers,
+                preview_card=preview_card,
+            ),
+        )
+        if len(user.bet_history) > 200:
+            user.bet_history = user.bet_history[:200]
+
+
+def normalize_transaction_number(value: str) -> str:
+    cleaned = re.sub(r"\s+", "", value.strip().upper())
+    return cleaned
+
+
+def ensure_valid_transaction_number(value: str) -> None:
+    if not re.fullmatch(r"[A-Z0-9-]{3,120}", value):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid transaction number format. Use letters/numbers only.",
+        )
+
+
+def extract_receipt_links(message: str | None) -> list[str]:
+    if not message:
+        return []
+    return re.findall(r"https?://[^\s]+", message)
+
+
+def is_allowed_domain(hostname: str, allowed_domains: set[str]) -> bool:
+    host = hostname.lower().rstrip(".")
+    return any(host == domain or host.endswith(f".{domain}") for domain in allowed_domains)
+
+
+def validate_receipt_source_links(method: Literal["telebirr", "cbebirr"], message: str | None) -> list[str]:
+    links = extract_receipt_links(message)
+    if not links:
+        return []
+
+    allowed_domains = DEPOSIT_SOURCE_DOMAINS[method]
+    for link in links:
+        try:
+            hostname = urlparse(link).hostname
+        except Exception:
+            hostname = None
+        if not hostname or not is_allowed_domain(hostname, allowed_domains):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid receipt source link for {method}. Use an official {method} link.",
+            )
+    return links
+
+
+def reserve_deposit_receipt(tx_number: str, phone_number: str, links: list[str]) -> None:
+    existing_owner = USED_DEPOSIT_TX.get(tx_number)
+    if existing_owner:
+        if existing_owner == phone_number:
+            raise HTTPException(status_code=409, detail="This receipt is already used by this account.")
+        raise HTTPException(status_code=409, detail="This receipt is already used by another account.")
+
+    for link in links:
+        key = link.strip().lower()
+        owner = USED_RECEIPT_LINKS.get(key)
+        if owner:
+            if owner == phone_number:
+                raise HTTPException(status_code=409, detail="This receipt link is already used by this account.")
+            raise HTTPException(status_code=409, detail="This receipt link is already used by another account.")
+
+    USED_DEPOSIT_TX[tx_number] = phone_number
+    for link in links:
+        USED_RECEIPT_LINKS[link.strip().lower()] = phone_number
+    persist_receipt_cache()
+
+
+def create_session(phone_number: str) -> str:
+    token = secrets.token_urlsafe(32)
+    SESSIONS[token] = create_session_record(phone_number)
+    persist_sessions()
+    return token
+
+
+def get_auth_token(authorization: str | None) -> str:
+    if not authorization:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    prefix = "Bearer "
+    if not authorization.startswith(prefix):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid auth header")
+    return authorization[len(prefix) :].strip()
+
+
+def get_current_user(authorization: str | None = Header(default=None)) -> UserStore:
+    token = get_auth_token(authorization)
+    record = normalize_session_record(SESSIONS.get(token))
+    if not record:
+        SESSIONS.pop(token, None)
+        persist_sessions()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+    expires_at = parse_iso_datetime(record.get("expires_at"))
+    if expires_at is None or utc_now() >= expires_at:
+        SESSIONS.pop(token, None)
+        persist_sessions()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+    phone_number = record["phone_number"]
+    SESSIONS[token] = record
+    user = USERS.get(phone_number)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    return user
+
+
+def create_bingo_card(cartella_no: int) -> BingoCardResponse:
+    rng = Random(cartella_no * 97 + 13)
+    b_col = rng.sample(range(1, 16), 5)
+    i_col = rng.sample(range(16, 31), 5)
+    n_col = rng.sample(range(31, 46), 5)
+    g_col = rng.sample(range(46, 61), 5)
+    o_col = rng.sample(range(61, 76), 5)
+
+    grid: list[list[int | str]] = []
+    for row_index in range(5):
+        row: list[int | str] = [
+            b_col[row_index],
+            i_col[row_index],
+            n_col[row_index],
+            g_col[row_index],
+            o_col[row_index],
+        ]
+        grid.append(row)
+
+    grid[2][2] = "FREE"
+    return BingoCardResponse(card_no=cartella_no, grid=grid)
+
+
+def find_stake(stake_id: str) -> StakeOption:
+    stake = next((option for option in STAKE_OPTIONS if option.id == stake_id), None)
+    if not stake:
+        raise HTTPException(status_code=404, detail="Stake option not found")
+    if stake.status == "none":
+        raise HTTPException(status_code=400, detail="Stake room is not active yet")
+    return stake
+
+
+def create_room(stake: StakeOption) -> RoomStore:
+    return RoomStore(
+        id=f"room-{stake.id}",
+        stake_id=stake.id,
+        stake=stake.stake,
+        card_price=stake.stake,
+        players_seed=randint(36, 120),
+        started_at=utc_now(),
+        called_sequence=generate_called_sequence(),
+    )
+
+
+def get_or_create_room(stake: StakeOption) -> RoomStore:
+    room = ROOMS.get(stake.id)
+    if room is None:
+        room = create_room(stake)
+        ROOMS[stake.id] = room
+        persist_rooms()
+    return room
+
+
+def build_dynamic_stake_option(stake: StakeOption, user_phone: str) -> StakeOption:
+    if stake.status == "none":
+        return StakeOption(
+            id=stake.id,
+            stake=stake.stake,
+            status="none",
+            countdown_seconds=None,
+            possible_win=None,
+            bonus=stake.bonus,
+            room_phase=None,
+            my_cards_current=0,
+            my_cards_next=0,
+            open_available=False,
+        )
+
+    room = get_or_create_room(stake)
+    room_state = build_room_state(room, user_phone)
+    active_taken_map, _, _ = get_queue_maps(room, room_state.active_queue)
+    paid_count = len(active_taken_map)
+    possible_win = int(round((paid_count * stake.stake) * (1 - HOUSE_COMMISSION_RATE)))
+
+    if room_state.phase == "playing":
+        status: Literal["countdown", "playing", "none"] = "playing"
+        countdown_seconds: int | None = None
+    else:
+        status = "countdown"
+        countdown_seconds = room_state.countdown_seconds if room_state.phase == "selecting" else room_state.announcement_seconds
+
+    return StakeOption(
+        id=stake.id,
+        stake=stake.stake,
+        status=status,
+        countdown_seconds=countdown_seconds,
+        possible_win=possible_win,
+        bonus=stake.bonus,
+        room_phase=room_state.phase,
+        my_cards_current=len(room_state.my_cartellas),
+        my_cards_next=len(room_state.next_my_cartellas),
+        open_available=room_state.phase == "playing" and len(room_state.my_cartellas) > 0,
+    )
+
+
+def generate_called_sequence() -> list[int]:
+    sequence = sample(range(1, 76), 75)
+    shuffle(sequence)
+    return sequence
+
+
+def mark_key(phone_number: str, cartella_no: int) -> str:
+    return f"{phone_number}:{cartella_no}"
+
+
+def get_user_cartellas_from_map(cartella_map: dict[int, str], phone_number: str) -> list[int]:
+    return sorted([cartella_no for cartella_no, owner in cartella_map.items() if owner == phone_number])
+
+
+def get_user_cartella(room: RoomStore, phone_number: str) -> int | None:
+    cartellas = get_user_cartellas_from_map(room.taken_cartellas, phone_number)
+    return cartellas[0] if cartellas else None
+
+
+def get_user_held_cartella_from_map(held_map: dict[int, str], phone_number: str) -> int | None:
+    holds = sorted([cartella_no for cartella_no, owner in held_map.items() if owner == phone_number])
+    return holds[0] if holds else None
+
+
+def get_user_held_cartella(room: RoomStore, phone_number: str) -> int | None:
+    return get_user_held_cartella_from_map(room.held_cartellas, phone_number)
+
+
+def get_user_marked_numbers(room: RoomStore, phone_number: str, cartella_no: int) -> list[int]:
+    key = mark_key(phone_number, cartella_no)
+    raw = room.marked_by_user_card.get(key, [])
+    clean = sorted(set([value for value in raw if isinstance(value, int) and 1 <= value <= 75]))
+    room.marked_by_user_card[key] = clean
+    return clean
+
+
+def card_numbers_set(cartella_no: int) -> set[int]:
+    card = create_bingo_card(cartella_no)
+    values: set[int] = set()
+    for row in card.grid:
+        for value in row:
+            if isinstance(value, int):
+                values.add(value)
+    return values
+
+
+def has_bingo_for_marks(cartella_no: int, called_numbers: list[int], marked_numbers: list[int]) -> bool:
+    called_set = set(called_numbers)
+    marked_set = set(marked_numbers)
+    card = create_bingo_card(cartella_no)
+
+    def is_hit(value: int | str) -> bool:
+        if value == "FREE":
+            return True
+        return isinstance(value, int) and value in called_set and value in marked_set
+
+    rows = any(all(is_hit(value) for value in row) for row in card.grid)
+    cols = any(all(is_hit(card.grid[row_idx][col_idx]) for row_idx in range(5)) for col_idx in range(5))
+    d1 = all(is_hit(card.grid[idx][idx]) for idx in range(5))
+    d2 = all(is_hit(card.grid[idx][4 - idx]) for idx in range(5))
+    return rows or cols or d1 or d2
+
+
+def get_room_by_id(room_id: str) -> RoomStore:
+    room = next((candidate for candidate in ROOMS.values() if candidate.id == room_id), None)
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+    return room
+
+
+def prune_hold_map(held_map: dict[int, str], held_updated_at: dict[int, datetime], taken_map: dict[int, str]) -> bool:
+    now = utc_now()
+    remove_list: list[int] = []
+    for cartella_no, owner in held_map.items():
+        if cartella_no in taken_map:
+            remove_list.append(cartella_no)
+            continue
+        updated_at = held_updated_at.get(cartella_no)
+        if not updated_at:
+            remove_list.append(cartella_no)
+            continue
+        if (now - updated_at).total_seconds() > HOLD_TTL_SECONDS:
+            remove_list.append(cartella_no)
+            continue
+        if owner not in USERS:
+            remove_list.append(cartella_no)
+    for cartella_no in remove_list:
+        held_map.pop(cartella_no, None)
+        held_updated_at.pop(cartella_no, None)
+    return bool(remove_list)
+
+
+def prune_holds(room: RoomStore) -> bool:
+    changed_current = prune_hold_map(room.held_cartellas, room.held_updated_at, room.taken_cartellas)
+    changed_next = prune_hold_map(room.next_held_cartellas, room.next_held_updated_at, room.next_taken_cartellas)
+    return changed_current or changed_next
+
+
+def compute_called_numbers(room: RoomStore, reference_time: datetime) -> list[int]:
+    elapsed_seconds = int((reference_time - room.started_at).total_seconds())
+    if elapsed_seconds < SELECT_PHASE_SECONDS:
+        return []
+    play_elapsed = elapsed_seconds - SELECT_PHASE_SECONDS
+    call_count = int(play_elapsed // CALL_INTERVAL_SECONDS)
+    call_count = max(0, min(call_count, len(room.called_sequence)))
+    return room.called_sequence[:call_count]
+
+
+def start_next_round(room: RoomStore, now: datetime) -> None:
+    room.started_at = now
+    room.called_sequence = generate_called_sequence()
+    room.taken_cartellas = dict(room.next_taken_cartellas)
+    room.next_taken_cartellas = {}
+
+    room.held_cartellas = {cartella_no: owner for cartella_no, owner in room.next_held_cartellas.items() if cartella_no not in room.taken_cartellas}
+    room.held_updated_at = {
+        cartella_no: room.next_held_updated_at.get(cartella_no, now)
+        for cartella_no in room.held_cartellas.keys()
+    }
+    room.next_held_cartellas = {}
+    room.next_held_updated_at = {}
+
+    room.marked_by_user_card = {}
+    room.ended_at = None
+    room.winner_phone = None
+    room.winner_cartella = None
+    room.winner_payout = None
+    room.house_commission = None
+    room.pending_claims = []
+    room.claim_window_ends_at = None
+    room.claim_window_reference_time = None
+    room.winners = []
+    room.result_until = None
+    persist_rooms()
+
+
+def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
+    if room.claim_window_ends_at is None:
+        return
+    if now < room.claim_window_ends_at:
+        return
+
+    if not room.pending_claims:
+        room.claim_window_ends_at = None
+        room.claim_window_reference_time = None
+        persist_rooms()
+        return
+
+    valid_claims: list[ClaimEntry] = []
+    seen: set[tuple[str, int]] = set()
+    reference_time = room.claim_window_reference_time or room.claim_window_ends_at
+    called_numbers = compute_called_numbers(room, reference_time)
+
+    for claim in room.pending_claims:
+        key = (claim.phone_number, claim.cartella_no)
+        if key in seen:
+            continue
+        seen.add(key)
+        if claim.phone_number not in USERS:
+            continue
+        marks = get_user_marked_numbers(room, claim.phone_number, claim.cartella_no)
+        if has_bingo_for_marks(claim.cartella_no, called_numbers, marks):
+            valid_claims.append(claim)
+
+    if not valid_claims:
+        room.pending_claims = []
+        room.claim_window_ends_at = None
+        room.claim_window_reference_time = None
+        persist_rooms()
+        return
+
+    total_sales = round(float(len(room.taken_cartellas) * room.card_price), 2)
+    house_commission = round(total_sales * HOUSE_COMMISSION_RATE, 2)
+    distributable = round(total_sales - house_commission, 2)
+    split_count = len(valid_claims)
+    base_payout = round(distributable / split_count, 2) if split_count > 0 else 0.0
+
+    winners: list[WinnerEntry] = []
+    assigned = 0.0
+
+    for idx, claim in enumerate(valid_claims):
+        payout = base_payout
+        if idx == split_count - 1:
+            payout = round(distributable - assigned, 2)
+        assigned += payout
+
+        winner_user = USERS.get(claim.phone_number)
+        if not winner_user:
+            continue
+
+        winner_user.wallet.main_balance += payout
+        record_transaction(winner_user, "Win", payout, "Completed")
+        winners.append(
+            WinnerEntry(
+                phone_number=claim.phone_number,
+                user_name=winner_user.user_name,
+                cartella_no=claim.cartella_no,
+                payout=payout,
+                card=create_bingo_card(claim.cartella_no),
+            )
+        )
+
+    if not winners:
+        room.pending_claims = []
+        room.claim_window_ends_at = None
+        persist_rooms()
+        return
+
+    record_bet_history_for_round(
+        room=room,
+        now=now,
+        called_numbers=called_numbers,
+        winners=winners,
+        game_winning=distributable,
+    )
+
+    room.winners = winners
+    room.ended_at = now
+    room.winner_phone = winners[0].phone_number
+    room.winner_cartella = winners[0].cartella_no
+    room.winner_payout = winners[0].payout
+    room.house_commission = house_commission
+    room.result_until = now + timedelta(seconds=RESULT_ANNOUNCE_SECONDS)
+    room.pending_claims = []
+    room.claim_window_ends_at = None
+    room.claim_window_reference_time = None
+    persist_users()
+    persist_rooms()
+
+
+def end_room_if_calls_complete(room: RoomStore, now: datetime) -> None:
+    if room.ended_at is not None:
+        return
+    if room.claim_window_ends_at is not None:
+        return
+    elapsed_seconds = (now - room.started_at).total_seconds()
+    if elapsed_seconds < SELECT_PHASE_SECONDS:
+        return
+    total_round_seconds = SELECT_PHASE_SECONDS + (len(room.called_sequence) * CALL_INTERVAL_SECONDS)
+    if elapsed_seconds < total_round_seconds:
+        return
+    called_numbers = compute_called_numbers(room, now)
+    total_sales = round(float(len(room.taken_cartellas) * room.card_price), 2)
+    house_commission = round(total_sales * HOUSE_COMMISSION_RATE, 2)
+    distributable = round(total_sales - house_commission, 2)
+    record_bet_history_for_round(
+        room=room,
+        now=now,
+        called_numbers=called_numbers,
+        winners=[],
+        game_winning=distributable,
+    )
+    room.ended_at = now
+    room.winner_phone = None
+    room.winner_cartella = None
+    room.winner_payout = 0.0
+    room.house_commission = house_commission
+    room.winners = []
+    room.result_until = now + timedelta(seconds=RESULT_ANNOUNCE_SECONDS)
+    persist_users()
+    persist_rooms()
+
+
+def advance_room_if_needed(room: RoomStore) -> None:
+    now = utc_now()
+    finalize_claim_window_if_needed(room, now)
+    end_room_if_calls_complete(room, now)
+    if room.ended_at is not None and room.result_until is not None and now >= room.result_until:
+        start_next_round(room, now)
+
+
+def get_queue_maps(
+    room: RoomStore, queue: Literal["current", "next"]
+) -> tuple[dict[int, str], dict[int, str], dict[int, datetime]]:
+    if queue == "next":
+        return room.next_taken_cartellas, room.next_held_cartellas, room.next_held_updated_at
+    return room.taken_cartellas, room.held_cartellas, room.held_updated_at
+
+
+def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
+    advance_room_if_needed(room)
+    if prune_holds(room):
+        persist_rooms()
+    now = utc_now()
+    reference_time = room.ended_at or now
+    elapsed_seconds = int((reference_time - room.started_at).total_seconds())
+    if elapsed_seconds < 0:
+        elapsed_seconds = 0
+
+    if room.ended_at is not None:
+        phase: Literal["selecting", "playing", "finished"] = "finished"
+        countdown_seconds = 0
+        call_countdown_seconds = 0
+        called_numbers = compute_called_numbers(room, reference_time)
+    elif elapsed_seconds < SELECT_PHASE_SECONDS:
+        phase = "selecting"
+        countdown_seconds = SELECT_PHASE_SECONDS - elapsed_seconds
+        call_countdown_seconds = 0
+        called_numbers = []
+    else:
+        phase = "playing"
+        countdown_seconds = 0
+        play_elapsed_seconds = max(0.0, (now - room.started_at).total_seconds() - SELECT_PHASE_SECONDS)
+        remainder = play_elapsed_seconds % CALL_INTERVAL_SECONDS
+        seconds_left = CALL_INTERVAL_SECONDS - remainder
+        call_countdown_seconds = max(1, int(math.ceil(seconds_left - 1e-9)))
+        called_numbers = compute_called_numbers(room, now)
+
+    my_cartellas = get_user_cartellas_from_map(room.taken_cartellas, user_phone)
+    next_my_cartellas = get_user_cartellas_from_map(room.next_taken_cartellas, user_phone)
+    my_cartella = my_cartellas[0] if my_cartellas else None
+
+    my_marked_numbers_by_card: dict[str, list[int]] = {}
+    called_set = set(called_numbers)
+    for cartella_no in my_cartellas:
+        allowed_marks = called_set.intersection(card_numbers_set(cartella_no))
+        marks = [value for value in get_user_marked_numbers(room, user_phone, cartella_no) if value in allowed_marks]
+        room.marked_by_user_card[mark_key(user_phone, cartella_no)] = marks
+        my_marked_numbers_by_card[str(cartella_no)] = marks
+
+    my_marked_numbers = my_marked_numbers_by_card.get(str(my_cartella), []) if my_cartella is not None else []
+
+    active_queue: Literal["current", "next"] = "current" if phase == "selecting" else "next"
+    queue_taken, queue_held, _ = get_queue_maps(room, active_queue)
+    paid_cartellas = sorted(queue_taken.keys())
+    held_cartellas = sorted([cartella_no for cartella_no in queue_held.keys() if cartella_no not in queue_taken])
+    unavailable = sorted(
+        set(
+            [cartella_no for cartella_no, owner in queue_taken.items() if owner != user_phone]
+            + [cartella_no for cartella_no, owner in queue_held.items() if owner != user_phone]
+        )
+    )
+    my_held_cartella = get_user_held_cartella_from_map(queue_held, user_phone)
+    winner_entry = room.winners[0] if room.winners else None
+    winner_user = USERS.get(room.winner_phone) if room.winner_phone else None
+    claim_window_seconds = (
+        max(0, int(math.ceil((room.claim_window_ends_at - now).total_seconds())))
+        if room.claim_window_ends_at is not None and now < room.claim_window_ends_at
+        else 0
+    )
+    announcement_seconds = (
+        max(0, int((room.result_until - now).total_seconds()))
+        if room.result_until is not None and now < room.result_until
+        else 0
+    )
+
+    return RoomState(
+        id=room.id,
+        stake=room.stake,
+        card_price=room.card_price,
+        players=room.players_seed + len(room.taken_cartellas) + len(room.next_taken_cartellas),
+        phase=phase,
+        countdown_seconds=countdown_seconds,
+        call_countdown_seconds=call_countdown_seconds,
+        cartella_total=CARTELLA_TOTAL,
+        paid_cartellas=paid_cartellas,
+        held_cartellas=held_cartellas,
+        unavailable_cartellas=unavailable,
+        my_cartella=my_cartella,
+        my_cartellas=my_cartellas,
+        next_my_cartellas=next_my_cartellas,
+        my_held_cartella=my_held_cartella,
+        active_queue=active_queue,
+        called_numbers=called_numbers,
+        latest_number=called_numbers[-1] if called_numbers else None,
+        my_marked_numbers=my_marked_numbers,
+        my_marked_numbers_by_card=my_marked_numbers_by_card,
+        winner_name=winner_entry.user_name if winner_entry else (winner_user.user_name if winner_user else None),
+        winner_cartella=winner_entry.cartella_no if winner_entry else room.winner_cartella,
+        winner_payout=winner_entry.payout if winner_entry else room.winner_payout,
+        house_commission=room.house_commission,
+        winners=room.winners,
+        claim_window_seconds=claim_window_seconds,
+        announcement_seconds=announcement_seconds,
+    )
+
+
+def seed_demo_users() -> None:
+    demos = [
+        {
+            "user_name": "Fraol",
+            "phone_number": "0913885322",
+            "password": "123456",
+            "referral_code": "300021",
+            "is_admin": False,
+            "main_balance": DEMO_START_BALANCE,
+            "bonus_balance": 50.0,
+            "history": [
+                TransactionRecord(type="Deposit", amount=100, status="Completed", created_at="2026-02-20T19:02:13Z"),
+                TransactionRecord(type="Deposit", amount=200, status="Completed", created_at="2026-02-20T18:37:22Z"),
+                TransactionRecord(type="Deposit", amount=100, status="Completed", created_at="2026-02-20T18:20:33Z"),
+                TransactionRecord(type="Deposit", amount=200, status="Completed", created_at="2026-02-11T19:15:47Z"),
+                TransactionRecord(type="Deposit", amount=100, status="Completed", created_at="2026-02-05T18:49:48Z"),
+            ],
+        },
+        {
+            "user_name": "Getu",
+            "phone_number": "0912000001",
+            "password": "123456",
+            "referral_code": "332690",
+            "is_admin": False,
+            "main_balance": DEMO_START_BALANCE,
+            "bonus_balance": 35.0,
+            "history": [
+                TransactionRecord(type="Deposit", amount=150, status="Completed", created_at="2026-02-21T09:10:13Z"),
+                TransactionRecord(type="Deposit", amount=120, status="Completed", created_at="2026-02-20T16:37:22Z"),
+            ],
+        },
+        {
+            "user_name": "Ethio Admin",
+            "phone_number": "0969801746",
+            "password": "123456",
+            "referral_code": "680174",
+            "is_admin": True,
+            "main_balance": DEMO_START_BALANCE,
+            "bonus_balance": 0.0,
+            "history": [],
+        },
+    ]
+
+    for demo in demos:
+        demo_phone = demo["phone_number"]
+        if demo_phone in USERS:
+            continue
+        user = UserStore(
+            user_name=str(demo["user_name"]),
+            phone_number=demo_phone,
+            password_hash=hash_password(str(demo["password"])),
+            referral_code=str(demo["referral_code"]),
+            is_admin=bool(demo.get("is_admin", False)),
+            wallet=WalletState(main_balance=float(demo["main_balance"]), bonus_balance=float(demo["bonus_balance"])),
+        )
+        user.history.extend(demo["history"])
+        USERS[demo_phone] = user
+
+
+ensure_db_ready()
+load_persisted_state()
+apply_admin_bootstrap()
+if ENABLE_DEMO_SEED:
+    seed_demo_users()
+persist_users()
+persist_deposit_methods()
+persist_withdraw_tickets()
+persist_receipt_cache()
+persist_rooms()
+
+
+async def room_tick_loop() -> None:
+    while True:
+        for room in list(ROOMS.values()):
+            advance_room_if_needed(room)
+            if prune_holds(room):
+                persist_rooms()
+        await asyncio.sleep(1)
+
+
+@app.on_event("startup")
+async def start_room_ticker() -> None:
+    global GAME_TICKER_TASK
+    if GAME_TICKER_TASK is None or GAME_TICKER_TASK.done():
+        GAME_TICKER_TASK = asyncio.create_task(room_tick_loop())
+
+
+@app.on_event("shutdown")
+async def stop_room_ticker() -> None:
+    global GAME_TICKER_TASK
+    if GAME_TICKER_TASK is None:
+        return
+    GAME_TICKER_TASK.cancel()
+    try:
+        await GAME_TICKER_TASK
+    except asyncio.CancelledError:
+        pass
+    GAME_TICKER_TASK = None
+
+
+@app.get("/api/health")
+def health() -> dict:
+    return {"status": "ok", "service": "ethio-bingo-api", "time": utc_now().isoformat()}
+
+
+@app.post("/api/auth/signup")
+def signup(payload: SignupRequest) -> dict:
+    phone_number = normalize_phone(payload.phone_number)
+    if phone_number in USERS:
+        raise HTTPException(status_code=409, detail="Phone number already registered")
+
+    user = UserStore(
+        user_name=payload.user_name.strip(),
+        phone_number=phone_number,
+        password_hash=hash_password(payload.password),
+        referral_code=create_referral_code(),
+        is_admin=is_bootstrap_admin_phone(phone_number),
+        wallet=WalletState(main_balance=SIGNUP_INITIAL_MAIN_BALANCE, bonus_balance=SIGNUP_INITIAL_BONUS_BALANCE),
+    )
+    USERS[phone_number] = user
+    persist_users()
+    token = create_session(phone_number)
+    return {
+        "message": "Account created successfully.",
+        "token": token,
+        "user": make_public_user(user).model_dump(),
+        "wallet": user.wallet.model_dump(),
+    }
+
+
+@app.post("/api/auth/login")
+def login(payload: LoginRequest) -> dict:
+    phone_number = normalize_phone(payload.phone_number)
+    user = USERS.get(phone_number)
+    if not user or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid phone number or password")
+
+    token = create_session(phone_number)
+    return {
+        "message": "Login successful.",
+        "token": token,
+        "user": make_public_user(user).model_dump(),
+        "wallet": user.wallet.model_dump(),
+    }
+
+
+@app.post("/api/auth/telegram")
+def telegram_auth(payload: TelegramAuthRequest) -> dict:
+    telegram_user = verify_telegram_init_data(payload.init_data)
+    telegram_id = int(telegram_user["id"])
+    telegram_username = (telegram_user.get("username") or "").strip() or None
+    display_name = (
+        (telegram_user.get("first_name") or "").strip()
+        or telegram_username
+        or f"tg_{telegram_id}"
+    )
+
+    user = next((candidate for candidate in USERS.values() if candidate.telegram_id == telegram_id), None)
+    if user is None:
+        generated_phone = generate_phone_for_telegram_user(telegram_id)
+        user = UserStore(
+            user_name=display_name[:40],
+            phone_number=generated_phone,
+            password_hash=hash_password(secrets.token_urlsafe(24)),
+            referral_code=create_referral_code(),
+            is_admin=is_bootstrap_admin_phone(generated_phone),
+            telegram_id=telegram_id,
+            telegram_username=telegram_username,
+            wallet=WalletState(main_balance=SIGNUP_INITIAL_MAIN_BALANCE, bonus_balance=SIGNUP_INITIAL_BONUS_BALANCE),
+        )
+        USERS[user.phone_number] = user
+    else:
+        user.telegram_username = telegram_username
+        if display_name:
+            user.user_name = display_name[:40]
+
+    persist_users()
+    token = create_session(user.phone_number)
+    return {
+        "message": "Telegram authentication successful.",
+        "token": token,
+        "user": make_public_user(user).model_dump(),
+        "wallet": user.wallet.model_dump(),
+    }
+
+
+@app.post("/api/auth/logout")
+def logout(authorization: str | None = Header(default=None)) -> dict:
+    token = get_auth_token(authorization)
+    SESSIONS.pop(token, None)
+    persist_sessions()
+    return {"message": "Logged out"}
+
+
+@app.get("/api/auth/me")
+def auth_me(user: UserStore = Depends(get_current_user)) -> dict:
+    return {
+        "user": make_public_user(user).model_dump(),
+        "wallet": user.wallet.model_dump(),
+    }
+
+
+@app.get("/api/dashboard")
+def dashboard(user: UserStore = Depends(get_current_user)) -> dict:
+    stake_options = [build_dynamic_stake_option(stake, user.phone_number).model_dump() for stake in STAKE_OPTIONS]
+    return {
+        "brand": BRAND,
+        "user": make_public_user(user).model_dump(),
+        "is_admin": can_manage_deposit_accounts(user),
+        "wallet": user.wallet.model_dump(),
+        "deposit_methods": [method.model_dump() for method in DEPOSIT_METHODS],
+        "stake_options": stake_options,
+        "faq": FAQ_ITEMS,
+        "games": [
+            {"id": "bingo", "title": "Bingo Game", "description": "Classic live bingo room", "cta": "Play"},
+            {"id": "spin", "title": "Spin Game", "description": "Quick spin mini game", "cta": "Play"},
+        ],
+    }
+
+
+@app.get("/api/admin/deposit-methods")
+def admin_deposit_methods(user: UserStore = Depends(get_current_user)) -> dict:
+    require_admin_user(user)
+    return {"items": [method.model_dump() for method in DEPOSIT_METHODS]}
+
+
+@app.put("/api/admin/deposit-methods/{method_code}")
+def update_admin_deposit_method(
+    method_code: Literal["telebirr", "cbebirr"],
+    payload: AdminUpdateDepositAccountsRequest,
+    user: UserStore = Depends(get_current_user),
+) -> dict:
+    require_admin_user(user)
+    method = find_deposit_method(method_code)
+
+    normalized_accounts: list[DepositAccount] = []
+    seen_phones: set[str] = set()
+    for account in payload.transfer_accounts:
+        normalized_phone = normalize_phone(account.phone_number)
+        if not re.fullmatch(r"^(09\d{8}|\+2519\d{8})$", normalized_phone):
+            raise HTTPException(status_code=400, detail=f"Invalid phone number: {account.phone_number}")
+        if normalized_phone in seen_phones:
+            raise HTTPException(status_code=400, detail="Duplicate transfer account phone number in update payload.")
+        seen_phones.add(normalized_phone)
+        normalized_accounts.append(
+            DepositAccount(
+                phone_number=normalized_phone,
+                owner_name=account.owner_name.strip(),
+            )
+        )
+
+    method.transfer_accounts = normalized_accounts
+    persist_deposit_methods()
+    return {
+        "message": f"{method.label} accounts updated.",
+        "method": method.model_dump(),
+        "deposit_methods": [item.model_dump() for item in DEPOSIT_METHODS],
+    }
+
+
+@app.get("/api/admin/withdraw-requests")
+def admin_withdraw_requests(user: UserStore = Depends(get_current_user)) -> dict:
+    require_admin_user(user)
+    for ticket in WITHDRAW_TICKETS:
+        normalize_withdraw_ticket_status(ticket)
+    return {"items": [ticket.model_dump() for ticket in WITHDRAW_TICKETS[:200]]}
+
+
+@app.post("/api/admin/withdraw-requests/{ticket_id}/approve")
+def approve_withdraw_request(ticket_id: str, user: UserStore = Depends(get_current_user)) -> dict:
+    require_admin_user(user)
+    ticket = get_withdraw_ticket_or_404(ticket_id)
+    if ticket.status != "Pending":
+        raise HTTPException(status_code=400, detail=f"Request already {ticket.status.lower()}.")
+    ticket.status = "Processing"
+    ticket.processing_at = utc_now().replace(microsecond=0).isoformat()
+    ticket.processing_by = user.phone_number
+    ticket.reviewed_at = utc_now().replace(microsecond=0).isoformat()
+    ticket.reviewed_by = user.phone_number
+
+    persist_withdraw_tickets()
+
+    return {"message": "Withdraw request moved to processing. Send bank payout, then mark paid.", "item": ticket.model_dump()}
+
+
+@app.post("/api/admin/withdraw-requests/{ticket_id}/mark-paid")
+def mark_paid_withdraw_request(
+    ticket_id: str,
+    payload: AdminMarkPaidRequest,
+    user: UserStore = Depends(get_current_user),
+) -> dict:
+    require_admin_user(user)
+    ticket = get_withdraw_ticket_or_404(ticket_id)
+
+    if ticket.status == "Pending":
+        raise HTTPException(status_code=400, detail="Move request to processing before marking paid.")
+    if ticket.status != "Processing":
+        raise HTTPException(status_code=400, detail=f"Request already {ticket.status.lower()}.")
+
+    ticket.status = "Paid"
+    ticket.paid_at = utc_now().replace(microsecond=0).isoformat()
+    ticket.paid_by = user.phone_number
+    ticket.payout_reference = payload.payout_reference.strip()
+    ticket.admin_note = payload.admin_note.strip() if payload.admin_note else None
+    ticket.reviewed_at = ticket.paid_at
+    ticket.reviewed_by = user.phone_number
+
+    target_user = USERS.get(ticket.phone_number)
+    if target_user:
+        update_latest_pending_withdraw_status(target_user, ticket.amount, "Completed")
+        persist_users()
+
+    persist_withdraw_tickets()
+    return {"message": "Withdraw request marked as paid.", "item": ticket.model_dump()}
+
+
+@app.post("/api/admin/withdraw-requests/{ticket_id}/reject")
+def reject_withdraw_request(ticket_id: str, user: UserStore = Depends(get_current_user)) -> dict:
+    require_admin_user(user)
+    ticket = get_withdraw_ticket_or_404(ticket_id)
+    if ticket.status not in {"Pending", "Processing"}:
+        raise HTTPException(status_code=400, detail=f"Request already {ticket.status.lower()}.")
+    ticket.status = "Rejected"
+    ticket.reviewed_at = utc_now().replace(microsecond=0).isoformat()
+    ticket.reviewed_by = user.phone_number
+
+    target_user = USERS.get(ticket.phone_number)
+    if target_user:
+        target_user.wallet.main_balance += float(ticket.amount)
+        update_latest_pending_withdraw_status(target_user, ticket.amount, "Failed")
+        record_transaction(target_user, "Deposit", ticket.amount, "Completed")
+        persist_users()
+    persist_withdraw_tickets()
+
+    return {"message": "Withdraw request rejected and refunded.", "item": ticket.model_dump()}
+
+
+@app.get("/api/wallet/history")
+def wallet_history(user: UserStore = Depends(get_current_user)) -> dict:
+    return {"items": [entry.model_dump() for entry in user.history[:50]]}
+
+
+@app.get("/api/game/bet-history")
+def bet_history(user: UserStore = Depends(get_current_user)) -> dict:
+    return {"items": [entry.model_dump() for entry in user.bet_history[:100]]}
+
+
+@app.post("/api/wallet/deposit")
+def submit_deposit(payload: DepositRequest, user: UserStore = Depends(get_current_user)) -> dict:
+    tx_number = normalize_transaction_number(payload.transaction_number)
+    ensure_valid_transaction_number(tx_number)
+    links = validate_receipt_source_links(payload.method, payload.receipt_message)
+    reserve_deposit_receipt(tx_number, user.phone_number, links)
+
+    amount = round(float(payload.amount), 2)
+    user.wallet.main_balance += amount
+    record_transaction(user, "Deposit", amount, "Completed")
+    persist_users()
+    return {
+        "message": f"Deposit request accepted via {payload.method}.",
+        "wallet": user.wallet.model_dump(),
+    }
+
+
+@app.post("/api/wallet/transfer")
+def transfer_balance(payload: TransferRequest, user: UserStore = Depends(get_current_user)) -> dict:
+    if not ENABLE_INTERNAL_TRANSFER:
+        raise HTTPException(
+            status_code=503,
+            detail="Transfers are disabled in this environment until secure OTP verification is configured.",
+        )
+    if not verify_transfer_otp(user.phone_number, payload.otp):
+        raise HTTPException(status_code=401, detail="Invalid or expired OTP")
+
+    target_phone = normalize_phone(payload.phone_number)
+    if target_phone == user.phone_number:
+        raise HTTPException(status_code=400, detail="You cannot transfer to your own account")
+    target_user = USERS.get(target_phone)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Receiver account not found")
+    if user.wallet.main_balance < payload.amount:
+        raise HTTPException(status_code=400, detail="Insufficient balance")
+
+    user.wallet.main_balance -= float(payload.amount)
+    target_user.wallet.main_balance += float(payload.amount)
+    record_transaction(user, "Transfer", payload.amount, "Completed")
+    record_transaction(target_user, "Deposit", payload.amount, "Completed")
+    persist_users()
+    return {
+        "message": "Transfer completed successfully.",
+        "wallet": user.wallet.model_dump(),
+    }
+
+
+@app.post("/api/wallet/withdraw")
+def withdraw_balance(payload: WithdrawRequest, user: UserStore = Depends(get_current_user)) -> dict:
+    if payload.amount < 3:
+        raise HTTPException(status_code=400, detail="Minimum withdraw amount is 3 ETB")
+    if user.wallet.main_balance < payload.amount:
+        raise HTTPException(status_code=400, detail="Insufficient balance")
+
+    user.wallet.main_balance -= float(payload.amount)
+    record_transaction(user, "Withdraw", payload.amount, "Pending")
+    ticket = WithdrawTicket(
+        id=secrets.token_hex(8),
+        phone_number=user.phone_number,
+        user_name=user.user_name,
+        bank=payload.bank.strip(),
+        account_number=payload.account_number.strip(),
+        account_holder=payload.account_holder.strip(),
+        amount=float(payload.amount),
+        status="Pending",
+        created_at=utc_now().replace(microsecond=0).isoformat(),
+        processing_at=None,
+        processing_by=None,
+        paid_at=None,
+        paid_by=None,
+        payout_reference=None,
+        admin_note=None,
+    )
+    WITHDRAW_TICKETS.insert(0, ticket)
+    persist_users()
+    persist_withdraw_tickets()
+    email_notified = send_admin_withdraw_email(ticket)
+    message = "Withdraw request submitted to admin. It will be reviewed shortly."
+    if email_notified:
+        message = f"{message} Admin email alert sent."
+    return {
+        "message": message,
+        "wallet": user.wallet.model_dump(),
+        "request_id": ticket.id,
+        "email_notified": email_notified,
+    }
+
+
+@app.post("/api/game/preview")
+def preview_card(payload: PreviewCardRequest, user: UserStore = Depends(get_current_user)) -> dict:
+    stake = find_stake(payload.stake_id)
+    room = get_or_create_room(stake)
+    room_state = build_room_state(room, user.phone_number)
+    queue = room_state.active_queue
+    taken_map, held_map, held_updated_at = get_queue_maps(room, queue)
+
+    owner = taken_map.get(payload.cartella_no)
+    if owner and owner != user.phone_number:
+        raise HTTPException(status_code=409, detail="This cartella is already taken")
+
+    held_owner = held_map.get(payload.cartella_no)
+    if held_owner and held_owner != user.phone_number:
+        raise HTTPException(status_code=409, detail="This cartella is currently held by another player")
+
+    previous_hold = get_user_held_cartella_from_map(held_map, user.phone_number)
+    if previous_hold is not None and previous_hold != payload.cartella_no:
+        held_map.pop(previous_hold, None)
+        held_updated_at.pop(previous_hold, None)
+
+    held_map[payload.cartella_no] = user.phone_number
+    held_updated_at[payload.cartella_no] = utc_now()
+    persist_rooms()
+
+    card = create_bingo_card(payload.cartella_no)
+    return {
+        "stake": stake.model_dump(),
+        "card": card.model_dump(),
+        "room": build_room_state(room, user.phone_number).model_dump(),
+        "queue": queue,
+    }
+
+
+@app.post("/api/game/join")
+def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_user)) -> dict:
+    stake = find_stake(payload.stake_id)
+    room = get_or_create_room(stake)
+    room_state = build_room_state(room, user.phone_number)
+    queue = room_state.active_queue
+    taken_map, held_map, held_updated_at = get_queue_maps(room, queue)
+
+    owner = taken_map.get(payload.cartella_no)
+    if owner and owner != user.phone_number:
+        raise HTTPException(status_code=409, detail="This cartella is already taken")
+
+    held_owner = held_map.get(payload.cartella_no)
+    if held_owner and held_owner != user.phone_number:
+        raise HTTPException(status_code=409, detail="This cartella is currently held by another player")
+
+    user_cards_in_queue = get_user_cartellas_from_map(taken_map, user.phone_number)
+    if payload.cartella_no in user_cards_in_queue:
+        current_cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in get_user_cartellas_from_map(room.taken_cartellas, user.phone_number)]
+        return {
+            "message": "You already own this cartella.",
+            "stake": stake.model_dump(),
+            "wallet": user.wallet.model_dump(),
+            "card": create_bingo_card(payload.cartella_no).model_dump(),
+            "cards": current_cards,
+            "room": build_room_state(room, user.phone_number).model_dump(),
+            "queue": queue,
+        }
+
+    if len(user_cards_in_queue) >= MAX_CARDS_PER_USER:
+        raise HTTPException(status_code=400, detail=f"Maximum {MAX_CARDS_PER_USER} cards per user in one game queue")
+
+    if user.wallet.main_balance < stake.stake:
+        raise HTTPException(status_code=400, detail="Insufficient balance")
+
+    previous_hold = get_user_held_cartella_from_map(held_map, user.phone_number)
+    if previous_hold is not None and previous_hold != payload.cartella_no:
+        held_map.pop(previous_hold, None)
+        held_updated_at.pop(previous_hold, None)
+
+    taken_map[payload.cartella_no] = user.phone_number
+    held_map.pop(payload.cartella_no, None)
+    held_updated_at.pop(payload.cartella_no, None)
+    user.wallet.main_balance -= float(stake.stake)
+    record_transaction(user, "Bet", stake.stake, "Completed")
+    room.marked_by_user_card[mark_key(user.phone_number, payload.cartella_no)] = []
+    persist_users()
+    persist_rooms()
+
+    card = create_bingo_card(payload.cartella_no)
+    current_cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in get_user_cartellas_from_map(room.taken_cartellas, user.phone_number)]
+    return {
+        "message": "Card purchased for current game." if queue == "current" else "Card booked for next game.",
+        "stake": stake.model_dump(),
+        "wallet": user.wallet.model_dump(),
+        "card": card.model_dump(),
+        "cards": current_cards,
+        "room": build_room_state(room, user.phone_number).model_dump(),
+        "queue": queue,
+    }
+
+
+@app.get("/api/game/room-by-stake/{stake_id}")
+def get_room_by_stake(stake_id: str, user: UserStore = Depends(get_current_user)) -> dict:
+    stake = find_stake(stake_id)
+    room = get_or_create_room(stake)
+    cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in get_user_cartellas_from_map(room.taken_cartellas, user.phone_number)]
+    card = cards[0] if cards else None
+    return {
+        "room": build_room_state(room, user.phone_number).model_dump(),
+        "card": card,
+        "cards": cards,
+    }
+
+
+@app.get("/api/game/room/{room_id}")
+def get_room(room_id: str, user: UserStore = Depends(get_current_user)) -> dict:
+    room = get_room_by_id(room_id)
+
+    cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in get_user_cartellas_from_map(room.taken_cartellas, user.phone_number)]
+    card = cards[0] if cards else None
+    return {
+        "room": build_room_state(room, user.phone_number).model_dump(),
+        "card": card,
+        "cards": cards,
+    }
+
+
+@app.post("/api/game/mark-number")
+def mark_number(payload: MarkNumberRequest, user: UserStore = Depends(get_current_user)) -> dict:
+    room = get_room_by_id(payload.room_id)
+    room_state = build_room_state(room, user.phone_number)
+
+    if room_state.phase != "playing":
+        raise HTTPException(status_code=400, detail="Game is not in playing phase")
+
+    my_cartella = payload.cartella_no or room_state.my_cartella
+    if my_cartella is None:
+        raise HTTPException(status_code=400, detail="Join a cartella before marking numbers")
+    if my_cartella not in room_state.my_cartellas:
+        raise HTTPException(status_code=400, detail="You do not own this card")
+
+    if payload.number not in room_state.called_numbers:
+        raise HTTPException(status_code=400, detail="This number has not been called yet")
+
+    card_values = card_numbers_set(my_cartella)
+    if payload.number not in card_values:
+        raise HTTPException(status_code=400, detail="This number is not on your card")
+
+    marks = set(get_user_marked_numbers(room, user.phone_number, my_cartella))
+    if payload.marked:
+        marks.add(payload.number)
+    else:
+        marks.discard(payload.number)
+    room.marked_by_user_card[mark_key(user.phone_number, my_cartella)] = sorted(marks)
+    persist_rooms()
+
+    return {
+        "message": "Mark updated",
+        "room": build_room_state(room, user.phone_number).model_dump(),
+    }
+
+
+@app.post("/api/game/claim-bingo")
+def claim_bingo(payload: ClaimBingoRequest, user: UserStore = Depends(get_current_user)) -> dict:
+    room = get_room_by_id(payload.room_id)
+    room_state = build_room_state(room, user.phone_number)
+
+    if room_state.phase == "selecting":
+        raise HTTPException(status_code=400, detail="Game has not started yet")
+
+    if room_state.phase == "finished":
+        if room_state.winners:
+            winners = ", ".join([f"{entry.user_name} (#{entry.cartella_no})" for entry in room_state.winners])
+            winner = winners
+        else:
+            winner = room_state.winner_name or "Unknown"
+        return {
+            "message": f"Game already finished. Winner: {winner}",
+            "wallet": user.wallet.model_dump(),
+            "room": room_state.model_dump(),
+        }
+
+    my_cartella = payload.cartella_no or room_state.my_cartella
+    if my_cartella is None:
+        raise HTTPException(status_code=400, detail="Join a cartella before claiming bingo")
+    if my_cartella not in room_state.my_cartellas:
+        raise HTTPException(status_code=400, detail="You do not own this card")
+
+    if room.claim_window_reference_time is not None:
+        called_numbers_for_claim = compute_called_numbers(room, room.claim_window_reference_time)
+    else:
+        called_numbers_for_claim = room_state.called_numbers
+
+    marks_for_card = room_state.my_marked_numbers_by_card.get(str(my_cartella), [])
+    if not has_bingo_for_marks(my_cartella, called_numbers_for_claim, marks_for_card):
+        raise HTTPException(status_code=400, detail="No completed bingo line yet")
+
+    now = utc_now()
+
+    # Open a short grace window so multiple valid claims can split payout.
+    if room.claim_window_ends_at is None:
+        room.claim_window_ends_at = now + timedelta(seconds=CLAIM_GRACE_SECONDS)
+        room.claim_window_reference_time = now
+
+    claim_key = (user.phone_number, my_cartella)
+    exists = any((entry.phone_number, entry.cartella_no) == claim_key for entry in room.pending_claims)
+    if not exists:
+        room.pending_claims.append(ClaimEntry(phone_number=user.phone_number, cartella_no=my_cartella, claimed_at=now))
+
+    finalize_claim_window_if_needed(room, now)
+    persist_rooms()
+    persist_users()
+    next_state = build_room_state(room, user.phone_number)
+
+    if next_state.phase == "finished":
+        winner_count = len(next_state.winners)
+        split_note = f"split between {winner_count} winner(s)" if winner_count > 1 else "single winner payout"
+        return {
+            "message": f"Bingo finalized: {split_note}. House commission is 15%.",
+            "wallet": user.wallet.model_dump(),
+            "room": next_state.model_dump(),
+        }
+
+    return {
+        "message": f"Claim received. Waiting {next_state.claim_window_seconds}s for final winner split.",
+        "wallet": user.wallet.model_dump(),
+        "room": next_state.model_dump(),
+    }
