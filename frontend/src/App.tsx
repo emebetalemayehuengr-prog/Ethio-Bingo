@@ -1168,8 +1168,8 @@ export default function App() {
                         <strong>{room.called_numbers.length}</strong>
                       </div>
                       <div className="stat-box">
-                        <small>Player</small>
-                        <strong>{room.players}</strong>
+                        <small>Bought</small>
+                        <strong>{currentPaidCount}</strong>
                       </div>
                       <button type="button" className="stat-box stat-sound" aria-label="sound">
                         (( ))
