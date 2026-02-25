@@ -40,6 +40,7 @@ Copy `backend/.env.example` into your runtime environment and set at minimum:
 - `CORS_ALLOWED_ORIGINS=https://your-frontend-domain`
 - `SIGNUP_INITIAL_MAIN_BALANCE=0` and `SIGNUP_INITIAL_BONUS_BALANCE=0`
 - SMTP vars (`SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `ADMIN_ALERT_EMAILS`) for withdraw email alerts
+- Optional simulated traffic (visual only): `ENABLE_SIMULATED_ACTIVITY=true`
 
 ### Render env values for your setup
 

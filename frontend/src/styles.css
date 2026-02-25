@@ -1861,6 +1861,11 @@ body {
   color: #fff;
 }
 
+.cartella-cell.simulated {
+  background: linear-gradient(180deg, #f2ce64, #e4b93f);
+  color: #1f1c14;
+}
+
 .cartella-legend {
   margin: 8px 0 0;
   color: #f7ec9a;
@@ -2634,6 +2639,12 @@ body {
   background: linear-gradient(180deg, #3f9df6, #1f71df);
   color: #fff;
   border-color: rgba(16, 59, 126, 0.58);
+}
+
+.cartella-cell.simulated {
+  background: linear-gradient(180deg, #f4d576, #dcb347);
+  color: #272012;
+  border-color: rgba(120, 90, 26, 0.5);
 }
 
 .cartella-cell.selected:not(.paid):not(.processing):not(.held-other):not(.held-mine) {

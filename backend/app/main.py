@@ -49,6 +49,16 @@ def env_list(name: str, default: str = "") -> list[str]:
     return [item.strip() for item in re.split(r"[,\n;]+", raw) if item.strip()]
 
 
+def env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return default
+
+
 APP_ENV = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).strip().lower()
 
 DEV_CORS_ORIGINS = [
@@ -239,6 +249,8 @@ class RoomState(BaseModel):
     call_countdown_seconds: int = 0
     cartella_total: int
     paid_cartellas: list[int]
+    simulated_paid_cartellas: list[int] = Field(default_factory=list)
+    display_paid_count: int = 0
     held_cartellas: list[int]
     unavailable_cartellas: list[int]
     my_cartella: int | None = None
@@ -402,6 +414,13 @@ RESULT_ANNOUNCE_SECONDS = 5
 MAX_CARDS_PER_USER = 10
 CLAIM_GRACE_SECONDS = 2
 ENABLE_DEMO_SEED = env_flag("ENABLE_DEMO_SEED", False)
+ENABLE_SIMULATED_ACTIVITY = env_flag("ENABLE_SIMULATED_ACTIVITY", True)
+SIMULATED_SELECTING_MAX_PAID = max(0, env_int("SIMULATED_SELECTING_MAX_PAID", 60))
+SIMULATED_PLAYING_MAX_PAID = max(SIMULATED_SELECTING_MAX_PAID, env_int("SIMULATED_PLAYING_MAX_PAID", 120))
+SIMULATED_SELECTING_STEP_SECONDS = max(1, env_int("SIMULATED_SELECTING_STEP_SECONDS", 3))
+SIMULATED_SELECTING_CARDS_PER_STEP = max(1, env_int("SIMULATED_SELECTING_CARDS_PER_STEP", 2))
+SIMULATED_PLAYING_CARDS_PER_CALL = max(1, env_int("SIMULATED_PLAYING_CARDS_PER_CALL", 1))
+SIMULATED_EXTRA_PLAYERS_MAX = max(0, env_int("SIMULATED_EXTRA_PLAYERS_MAX", 120))
 ADMIN_BOOTSTRAP_PHONES = env_list("ADMIN_BOOTSTRAP_PHONES", os.getenv("ADMIN_PHONE_NUMBERS", ""))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 DEFAULT_ADMIN_ALERT_EMAIL = "embetalemayehuengr@gmail.com"
@@ -1163,8 +1182,7 @@ def build_dynamic_stake_option(stake: StakeOption, user_phone: str) -> StakeOpti
 
     room = get_or_create_room(stake)
     room_state = build_room_state(room, user_phone)
-    active_taken_map, _, _ = get_queue_maps(room, room_state.active_queue)
-    paid_count = len(active_taken_map)
+    paid_count = room_state.display_paid_count if ENABLE_SIMULATED_ACTIVITY else len(room_state.paid_cartellas)
     possible_win = int(round((paid_count * stake.stake) * (1 - HOUSE_COMMISSION_RATE)))
 
     if room_state.phase == "playing":
@@ -1467,6 +1485,43 @@ def get_queue_maps(
     return room.taken_cartellas, room.held_cartellas, room.held_updated_at
 
 
+def compute_simulated_paid_cartellas(
+    room: RoomStore,
+    phase: Literal["selecting", "playing", "finished"],
+    active_queue: Literal["current", "next"],
+    called_numbers: list[int],
+    countdown_seconds: int,
+) -> list[int]:
+    if not ENABLE_SIMULATED_ACTIVITY or phase == "finished":
+        return []
+
+    taken_map, held_map, _ = get_queue_maps(room, active_queue)
+    blocked = set(taken_map.keys()) | set(held_map.keys())
+    available = [cartella_no for cartella_no in range(1, CARTELLA_TOTAL + 1) if cartella_no not in blocked]
+    if not available:
+        return []
+
+    if phase == "selecting":
+        elapsed_select = max(0, SELECT_PHASE_SECONDS - max(0, countdown_seconds))
+        step_index = elapsed_select // SIMULATED_SELECTING_STEP_SECONDS
+        target = min(SIMULATED_SELECTING_MAX_PAID, step_index * SIMULATED_SELECTING_CARDS_PER_STEP)
+        seed_bucket = step_index
+    else:
+        step_index = len(called_numbers)
+        target = max(SIMULATED_SELECTING_MAX_PAID, step_index * SIMULATED_PLAYING_CARDS_PER_CALL)
+        target = min(SIMULATED_PLAYING_MAX_PAID, target)
+        seed_bucket = step_index
+
+    target = min(target, len(available))
+    if target <= 0:
+        return []
+
+    seed_source = f"{room.id}:{room.started_at.isoformat()}:{active_queue}:{phase}:{seed_bucket}:{target}"
+    seed_value = int(hashlib.sha256(seed_source.encode("utf-8")).hexdigest()[:16], 16)
+    rng = Random(seed_value)
+    return sorted(rng.sample(available, target))
+
+
 def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
     advance_room_if_needed(room)
     if prune_holds(room):
@@ -1513,6 +1568,15 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
     active_queue: Literal["current", "next"] = "current" if phase == "selecting" else "next"
     queue_taken, queue_held, _ = get_queue_maps(room, active_queue)
     paid_cartellas = sorted(queue_taken.keys())
+    simulated_paid_cartellas = compute_simulated_paid_cartellas(
+        room=room,
+        phase=phase,
+        active_queue=active_queue,
+        called_numbers=called_numbers,
+        countdown_seconds=countdown_seconds,
+    )
+    display_paid_count = len(paid_cartellas) + len(simulated_paid_cartellas)
+    simulated_players = min(SIMULATED_EXTRA_PLAYERS_MAX, len(simulated_paid_cartellas) // 2)
     held_cartellas = sorted([cartella_no for cartella_no in queue_held.keys() if cartella_no not in queue_taken])
     unavailable = sorted(
         set(
@@ -1538,12 +1602,14 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
         id=room.id,
         stake=room.stake,
         card_price=room.card_price,
-        players=room.players_seed + len(room.taken_cartellas) + len(room.next_taken_cartellas),
+        players=room.players_seed + len(room.taken_cartellas) + len(room.next_taken_cartellas) + simulated_players,
         phase=phase,
         countdown_seconds=countdown_seconds,
         call_countdown_seconds=call_countdown_seconds,
         cartella_total=CARTELLA_TOTAL,
         paid_cartellas=paid_cartellas,
+        simulated_paid_cartellas=simulated_paid_cartellas,
+        display_paid_count=display_paid_count,
         held_cartellas=held_cartellas,
         unavailable_cartellas=unavailable,
         my_cartella=my_cartella,

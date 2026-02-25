@@ -302,6 +302,7 @@ export default function App() {
     [dashboard, methodCode],
   );
   const paidSet = useMemo(() => new Set(pickerRoom?.paid_cartellas ?? []), [pickerRoom]);
+  const simulatedPaidSet = useMemo(() => new Set(pickerRoom?.simulated_paid_cartellas ?? []), [pickerRoom]);
   const heldSet = useMemo(() => new Set(pickerRoom?.held_cartellas ?? []), [pickerRoom]);
   const calledSet = useMemo(() => new Set(room?.called_numbers ?? []), [room?.called_numbers]);
 
@@ -955,7 +956,8 @@ export default function App() {
         : room?.announcement_seconds
           ? `Next game in ${room.announcement_seconds}s`
           : "Round Complete";
-  const potEstimate = room ? Math.max(0, Math.floor(room.paid_cartellas.length * room.card_price * 0.85)) : 0;
+  const paidCountForDisplay = room?.display_paid_count ?? room?.paid_cartellas.length ?? 0;
+  const potEstimate = room ? Math.max(0, Math.floor(paidCountForDisplay * room.card_price * 0.85)) : 0;
   const winnerEntries = room?.winners ?? [];
   const myWinnerEntry = winnerEntries.find((entry) => entry.phone_number === profile.phone_number) ?? null;
   const resultAmount = myWinnerEntry?.payout ?? winnerEntries[0]?.payout ?? 0;
@@ -966,6 +968,7 @@ export default function App() {
       : pickerRoom?.phase === "playing"
         ? pickerRoom.call_countdown_seconds
         : pickerRoom?.announcement_seconds ?? 0;
+  const pickerPaidCount = pickerRoom?.display_paid_count ?? pickerRoom?.paid_cartellas.length ?? 0;
   const renderBoughtCard = (ownedCard: BingoCard, rail: "desktop" | "panel" = "desktop") => {
     const isActive = selectedCardNo === ownedCard.card_no;
     const marksForOwnedCard = marksForCard(room, ownedCard.card_no);
@@ -1729,7 +1732,7 @@ export default function App() {
                         <strong>{pickerRoom?.held_cartellas.length ?? 0}</strong> Held
                       </span>
                       <span>
-                        <strong>{pickerRoom?.paid_cartellas.length ?? 0}</strong> Paid
+                        <strong>{pickerPaidCount}</strong> Paid
                       </span>
                       <span>
                         <strong>200</strong> Total
@@ -1741,7 +1744,7 @@ export default function App() {
                         <strong>{pickerRoom?.next_my_cartellas.length ?? 0}</strong> My Next
                       </span>
                     </div>
-                    <p className="cartella-legend">White = available, Red = held, Blue = paid.</p>
+                    <p className="cartella-legend">White = available, Red = held, Blue = paid, Gold = activity preview (still available).</p>
                     <div className="cartella-surface">
                       <div className="cartella-grid">
                         {cartellaList.map((num) => {
@@ -1749,13 +1752,14 @@ export default function App() {
                           const mineHeld = pickerRoom?.my_held_cartella === num;
                           const held = heldSet.has(num);
                           const heldByOther = held && !mineHeld;
+                          const simulated = simulatedPaidSet.has(num) && !paid && !held;
                           const red = processingCartella === num || held;
                           const selected = selectedCartella === num;
                           return (
                             <button
                               key={`c-${num}`}
                               type="button"
-                              className={`cartella-cell ${paid ? "paid" : ""} ${red ? "processing" : ""} ${selected ? "selected" : ""} ${heldByOther ? "held-other" : ""} ${mineHeld ? "held-mine" : ""}`}
+                              className={`cartella-cell ${paid ? "paid" : ""} ${simulated ? "simulated" : ""} ${red ? "processing" : ""} ${selected ? "selected" : ""} ${heldByOther ? "held-other" : ""} ${mineHeld ? "held-mine" : ""}`}
                               onClick={() => {
                                 if (!paid && !heldByOther) setSelectedCartella(num);
                               }}

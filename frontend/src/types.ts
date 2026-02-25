@@ -120,6 +120,8 @@ export type RoomState = {
   call_countdown_seconds: number;
   cartella_total: number;
   paid_cartellas: number[];
+  simulated_paid_cartellas?: number[];
+  display_paid_count?: number;
   held_cartellas: number[];
   unavailable_cartellas: number[];
   my_cartella: number | null;
