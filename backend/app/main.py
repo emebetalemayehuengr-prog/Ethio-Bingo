@@ -60,6 +60,7 @@ def env_int(name: str, default: int) -> int:
 
 
 APP_ENV = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).strip().lower()
+IS_PRODUCTION_ENV = APP_ENV in {"prod", "production", "live"}
 
 DEV_CORS_ORIGINS = [
     "http://localhost:5173",
@@ -528,15 +529,29 @@ DEPOSIT_SOURCE_DOMAINS: dict[str, set[str]] = {
     "cbebirr": {"cbebirr.com.et", "commercialbankofethiopia.com", "cbe.com.et"},
 }
 
+DEFAULT_SQLITE_PATH = (
+    Path("/var/data/ethio_bingo.db")
+    if IS_PRODUCTION_ENV
+    else (Path(__file__).resolve().parent.parent / "data" / "ethio_bingo.db")
+)
 DB_PATH = Path(
     os.getenv(
         "ETHIO_BINGO_DB_PATH",
-        str((Path(__file__).resolve().parent.parent / "data" / "ethio_bingo.db")),
+        str(DEFAULT_SQLITE_PATH),
     )
 ).expanduser()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 PG_STORE = PostgresStateStore(DATABASE_URL)
 DB_LOCK = threading.Lock()
+ALLOW_EPHEMERAL_DB = env_flag("ALLOW_EPHEMERAL_DB", False)
+
+
+def sqlite_path_looks_persistent(path: Path) -> bool:
+    if os.name == "nt":
+        # Render-style mount path checks are Linux-specific.
+        return True
+    normalized = path.expanduser().resolve().as_posix().lower()
+    return normalized == "/var/data" or normalized.startswith("/var/data/")
 
 
 def ensure_db_ready() -> None:
@@ -544,6 +559,11 @@ def ensure_db_ready() -> None:
     if PG_STORE.enabled():
         PG_STORE.ensure_schema()
         return
+    if IS_PRODUCTION_ENV and not ALLOW_EPHEMERAL_DB and not sqlite_path_looks_persistent(DB_PATH):
+        raise RuntimeError(
+            f"APP_ENV=production requires persistent storage. Current ETHIO_BINGO_DB_PATH '{DB_PATH}' is not under "
+            "/var/data. Attach a Render persistent disk at /var/data or set DATABASE_URL."
+        )
     try:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     except PermissionError:
@@ -554,6 +574,11 @@ def ensure_db_ready() -> None:
                 "or set ETHIO_BINGO_FALLBACK_DB_PATH explicitly."
             ) from None
         fallback_path = Path(fallback_raw).expanduser()
+        if IS_PRODUCTION_ENV and not ALLOW_EPHEMERAL_DB and not sqlite_path_looks_persistent(fallback_path):
+            raise RuntimeError(
+                f"Fallback DB path '{fallback_path}' is not persistent for production. Use /var/data/ethio_bingo.db "
+                "with an attached Render disk or set DATABASE_URL."
+            ) from None
         print(
             f"DB path '{DB_PATH}' is not writable. Falling back to '{fallback_path}'."
         )
@@ -2020,7 +2045,12 @@ async def stop_room_ticker() -> None:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "service": "ethio-bingo-api", "time": utc_now().isoformat()}
+    return {
+        "status": "ok",
+        "service": "ethio-bingo-api",
+        "time": utc_now().isoformat(),
+        "storage": "postgres" if PG_STORE.enabled() else "sqlite",
+    }
 
 
 @app.post("/api/auth/signup")
