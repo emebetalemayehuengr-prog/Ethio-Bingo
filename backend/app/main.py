@@ -1645,7 +1645,24 @@ def compute_simulated_target(
         return min(SIMULATED_SELECTING_MAX_PAID, step_index * SIMULATED_SELECTING_CARDS_PER_STEP)
 
     step_index = len(called_numbers)
-    return min(SIMULATED_PLAYING_MAX_PAID, step_index * SIMULATED_PLAYING_CARDS_PER_CALL)
+    target = max(SIMULATED_SELECTING_MAX_PAID, step_index * SIMULATED_PLAYING_CARDS_PER_CALL)
+    return min(SIMULATED_PLAYING_MAX_PAID, target)
+
+
+def carry_simulated_cards_to_next_queue(room: RoomStore) -> bool:
+    next_taken, next_held, _ = get_queue_maps(room, "next")
+    blocked = set(next_taken.keys()) | set(next_held.keys())
+    changed = False
+    for cartella_no, owner in sorted(room.taken_cartellas.items()):
+        if not is_simulated_phone(owner):
+            continue
+        if cartella_no in blocked:
+            continue
+        next_taken[cartella_no] = owner
+        room.marked_by_user_card.setdefault(mark_key(owner, cartella_no), [])
+        blocked.add(cartella_no)
+        changed = True
+    return changed
 
 
 def ensure_simulated_cards_for_queue(
@@ -1705,6 +1722,8 @@ def ensure_simulated_activity(room: RoomStore, now: datetime) -> None:
         queue = "next"
         countdown_seconds = 0
         called_numbers = compute_called_numbers(room, now)
+        if carry_simulated_cards_to_next_queue(room):
+            persist_rooms()
 
     target = compute_simulated_target(phase, countdown_seconds, called_numbers)
     changed_room, changed_users = ensure_simulated_cards_for_queue(room, queue, target)
@@ -1770,11 +1789,12 @@ def advance_room_if_needed(room: RoomStore) -> None:
 
 def compute_simulated_paid_cartellas(
     room: RoomStore,
-    _phase: Literal["selecting", "playing", "finished"],
+    phase: Literal["selecting", "playing", "finished"],
     active_queue: Literal["current", "next"],
-    _called_numbers: list[int],
-    _countdown_seconds: int,
+    called_numbers: list[int],
+    countdown_seconds: int,
 ) -> list[int]:
+    _ = (phase, called_numbers, countdown_seconds)
     taken_map, _, _ = get_queue_maps(room, active_queue)
     return sorted([cartella_no for cartella_no, owner in taken_map.items() if is_simulated_phone(owner)])
 
