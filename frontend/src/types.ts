@@ -122,6 +122,10 @@ export type RoomState = {
   paid_cartellas: number[];
   simulated_paid_cartellas?: number[];
   display_paid_count?: number;
+  current_paid_count?: number;
+  current_total_sales?: number;
+  current_house_commission?: number;
+  current_distributable?: number;
   held_cartellas: number[];
   unavailable_cartellas: number[];
   my_cartella: number | null;

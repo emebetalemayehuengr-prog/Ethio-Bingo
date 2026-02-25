@@ -251,6 +251,10 @@ class RoomState(BaseModel):
     paid_cartellas: list[int]
     simulated_paid_cartellas: list[int] = Field(default_factory=list)
     display_paid_count: int = 0
+    current_paid_count: int = 0
+    current_total_sales: float = 0.0
+    current_house_commission: float = 0.0
+    current_distributable: float = 0.0
     held_cartellas: list[int]
     unavailable_cartellas: list[int]
     my_cartella: int | None = None
@@ -1329,7 +1333,7 @@ def build_dynamic_stake_option(stake: StakeOption, user_phone: str) -> StakeOpti
 
     room = get_or_create_room(stake)
     room_state = build_room_state(room, user_phone)
-    paid_count = room_state.display_paid_count if ENABLE_SIMULATED_ACTIVITY else len(room_state.paid_cartellas)
+    paid_count = room_state.current_paid_count if room_state.phase == "playing" else room_state.display_paid_count
     possible_win = int(round((paid_count * stake.stake) * (1 - HOUSE_COMMISSION_RATE)))
 
     if room_state.phase == "playing":
@@ -1833,6 +1837,10 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
         countdown_seconds=countdown_seconds,
     )
     display_paid_count = len(paid_cartellas)
+    current_paid_count = len(room.taken_cartellas)
+    current_total_sales = round(float(current_paid_count * room.card_price), 2)
+    current_house_commission = round(current_total_sales * HOUSE_COMMISSION_RATE, 2)
+    current_distributable = round(current_total_sales - current_house_commission, 2)
     held_cartellas = sorted([cartella_no for cartella_no in queue_held.keys() if cartella_no not in queue_taken])
     unavailable = sorted(
         set(
@@ -1866,6 +1874,10 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
         paid_cartellas=paid_cartellas,
         simulated_paid_cartellas=simulated_paid_cartellas,
         display_paid_count=display_paid_count,
+        current_paid_count=current_paid_count,
+        current_total_sales=current_total_sales,
+        current_house_commission=current_house_commission,
+        current_distributable=current_distributable,
         held_cartellas=held_cartellas,
         unavailable_cartellas=unavailable,
         my_cartella=my_cartella,

@@ -2130,6 +2130,13 @@ body {
   cursor: pointer;
 }
 
+.pot-formula {
+  margin: 2px 0 10px;
+  font-size: 0.92rem;
+  color: #e8ebff;
+  letter-spacing: 0.01em;
+}
+
 .caller-layout {
   margin-top: 8px;
   display: grid;
@@ -2716,6 +2723,10 @@ body {
 
   .stat-box strong {
     font-size: 1.6rem;
+  }
+
+  .pot-formula {
+    font-size: 0.84rem;
   }
 
   .game-actions {

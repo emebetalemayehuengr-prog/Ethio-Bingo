@@ -956,8 +956,10 @@ export default function App() {
         : room?.announcement_seconds
           ? `Next game in ${room.announcement_seconds}s`
           : "Round Complete";
-  const paidCountForDisplay = room?.display_paid_count ?? room?.paid_cartellas.length ?? 0;
-  const potEstimate = room ? Math.max(0, Math.floor(paidCountForDisplay * room.card_price * 0.85)) : 0;
+  const currentPaidCount = room?.current_paid_count ?? room?.display_paid_count ?? room?.paid_cartellas.length ?? 0;
+  const currentTotalSales = room ? room.current_total_sales ?? currentPaidCount * room.card_price : 0;
+  const currentHouseCommission = room ? room.current_house_commission ?? currentTotalSales * 0.15 : 0;
+  const realWinnerPool = room ? room.current_distributable ?? Math.max(0, currentTotalSales - currentHouseCommission) : 0;
   const winnerEntries = room?.winners ?? [];
   const myWinnerEntry = winnerEntries.find((entry) => entry.phone_number === profile.phone_number) ?? null;
   const resultAmount = myWinnerEntry?.payout ?? winnerEntries[0]?.payout ?? 0;
@@ -1149,7 +1151,7 @@ export default function App() {
                     <div className="game-stat-grid">
                       <div className="stat-box">
                         <small>Win</small>
-                        <strong>{potEstimate}</strong>
+                        <strong>{realWinnerPool.toFixed(2)}</strong>
                       </div>
                       <div className="stat-box">
                         <small>Stake</small>
@@ -1167,6 +1169,10 @@ export default function App() {
                         (( ))
                       </button>
                     </div>
+                    <p className="pot-formula">
+                      {currentPaidCount} cards x {room.card_price} Birr = {currentTotalSales.toFixed(2)} Birr | House 15% ={" "}
+                      {currentHouseCommission.toFixed(2)} Birr | Winner Pool = {realWinnerPool.toFixed(2)} Birr
+                    </p>
                     <div className="caller-layout">
                       <aside className="caller-side-card">
                         <div className="caller-ball-shell">
