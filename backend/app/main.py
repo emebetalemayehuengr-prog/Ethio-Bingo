@@ -978,6 +978,45 @@ def send_admin_withdraw_email(ticket: WithdrawTicket) -> bool:
         return False
 
 
+def send_admin_withdraw_paid_email(ticket: WithdrawTicket) -> bool:
+    if not ADMIN_ALERT_EMAILS or not SMTP_HOST:
+        return False
+
+    subject = f"[Ethio Bingo] Withdraw payout completed: {ticket.id}"
+    body = (
+        "A withdraw request has been marked as PAID.\n\n"
+        f"Request ID: {ticket.id}\n"
+        f"User: {ticket.user_name}\n"
+        f"Phone: {ticket.phone_number}\n"
+        f"Bank: {ticket.bank}\n"
+        f"Account Number: {ticket.account_number}\n"
+        f"Account Holder: {ticket.account_holder}\n"
+        f"Amount: ETB {ticket.amount:.2f}\n"
+        f"Paid At: {ticket.paid_at or '-'}\n"
+        f"Paid By: {ticket.paid_by or '-'}\n"
+        f"Payout Reference: {ticket.payout_reference or '-'}\n"
+        f"Admin Note: {ticket.admin_note or '-'}\n"
+    )
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = ", ".join(ADMIN_ALERT_EMAILS)
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
+            if SMTP_USE_TLS:
+                smtp.starttls()
+            if SMTP_USERNAME:
+                smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.send_message(msg)
+        return True
+    except Exception as exc:
+        print(f"Failed to send withdraw paid email for ticket {ticket.id}: {exc}")
+        return False
+
+
 def hash_password(raw_password: str) -> str:
     salt = secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac("sha256", raw_password.encode("utf-8"), salt.encode("utf-8"), 150000)
@@ -2261,7 +2300,11 @@ def mark_paid_withdraw_request(
         persist_users()
 
     persist_withdraw_tickets()
-    return {"message": "Withdraw request marked as paid.", "item": ticket.model_dump()}
+    email_notified = send_admin_withdraw_paid_email(ticket)
+    message = "Withdraw request marked as paid."
+    if email_notified:
+        message = f"{message} Admin payout email sent."
+    return {"message": message, "item": ticket.model_dump(), "email_notified": email_notified}
 
 
 @app.post("/api/admin/withdraw-requests/{ticket_id}/reject")
