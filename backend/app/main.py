@@ -466,10 +466,21 @@ DB_LOCK = threading.Lock()
 
 
 def ensure_db_ready() -> None:
+    global DB_PATH
     if PG_STORE.enabled():
         PG_STORE.ensure_schema()
         return
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        fallback_path = Path(
+            os.getenv("ETHIO_BINGO_FALLBACK_DB_PATH", "/tmp/ethio_bingo.db")
+        ).expanduser()
+        print(
+            f"DB path '{DB_PATH}' is not writable. Falling back to '{fallback_path}'."
+        )
+        DB_PATH = fallback_path
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with DB_LOCK:
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute(
