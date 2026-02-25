@@ -1795,8 +1795,10 @@ def compute_simulated_paid_cartellas(
     countdown_seconds: int,
 ) -> list[int]:
     _ = (phase, called_numbers, countdown_seconds)
-    taken_map, _, _ = get_queue_maps(room, active_queue)
-    return sorted([cartella_no for cartella_no, owner in taken_map.items() if is_simulated_phone(owner)])
+    _ = active_queue
+    all_taken = dict(room.taken_cartellas)
+    all_taken.update(room.next_taken_cartellas)
+    return sorted([cartella_no for cartella_no, owner in all_taken.items() if is_simulated_phone(owner)])
 
 
 def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
