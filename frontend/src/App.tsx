@@ -1489,7 +1489,7 @@ export default function App() {
                         <tr>
                           <th>User</th>
                           <th>Amount</th>
-                          <th>Bank</th>
+                          <th>Bank Account</th>
                           <th>Status</th>
                           <th>Action</th>
                         </tr>
@@ -1507,7 +1507,13 @@ export default function App() {
                                 <small>{item.phone_number}</small>
                               </td>
                               <td>ETB {item.amount.toFixed(2)}</td>
-                              <td>{item.bank}</td>
+                              <td>
+                                <strong>{item.bank}</strong>
+                                <br />
+                                <small>{item.account_holder}</small>
+                                <br />
+                                <small>{item.account_number}</small>
+                              </td>
                               <td>{normalizedStatus}</td>
                               <td>
                                 {normalizedStatus === "Pending" ? (
