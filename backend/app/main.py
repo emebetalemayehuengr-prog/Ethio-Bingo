@@ -818,10 +818,50 @@ def utc_now() -> datetime:
 
 
 def normalize_phone(phone_number: str) -> str:
-    value = phone_number.strip()
+    value = re.sub(r"[\s\-\(\)]", "", phone_number.strip())
+    if value.startswith("2519") and len(value) == 12:
+        return "0" + value[3:]
+    if value.startswith("9") and len(value) == 9:
+        return "0" + value
     if value.startswith("+2519") and len(value) == 13:
         return "0" + value[4:]
     return value
+
+
+def phone_variants(phone_number: str) -> list[str]:
+    cleaned = re.sub(r"[\s\-\(\)]", "", phone_number.strip())
+    variants: list[str] = []
+
+    def add(value: str) -> None:
+        if value and value not in variants:
+            variants.append(value)
+
+    add(cleaned)
+    add(normalize_phone(cleaned))
+
+    normalized = normalize_phone(cleaned)
+    if normalized.startswith("09") and len(normalized) == 10:
+        add("+251" + normalized[1:])
+    if cleaned.startswith("+2519") and len(cleaned) == 13:
+        add(cleaned[1:])  # 2519...
+    if cleaned.startswith("2519") and len(cleaned) == 12:
+        add("+2519" + cleaned[4:])
+    if cleaned.startswith("9") and len(cleaned) == 9:
+        add("+251" + cleaned)
+    return variants
+
+
+def find_user_by_phone(phone_number: str) -> UserStore | None:
+    for candidate in phone_variants(phone_number):
+        user = USERS.get(candidate)
+        if user is not None:
+            return user
+
+    normalized = normalize_phone(phone_number)
+    for user in USERS.values():
+        if normalize_phone(user.phone_number) == normalized:
+            return user
+    return None
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
@@ -1051,7 +1091,8 @@ def verify_password(raw_password: str, stored_hash: str) -> bool:
     try:
         salt, digest_hex = stored_hash.split("$", maxsplit=1)
     except ValueError:
-        return False
+        # Legacy support for older snapshots that stored plaintext passwords.
+        return hmac.compare_digest(raw_password, stored_hash)
     check = hashlib.pbkdf2_hmac("sha256", raw_password.encode("utf-8"), salt.encode("utf-8"), 150000).hex()
     return hmac.compare_digest(check, digest_hex)
 
@@ -2121,7 +2162,7 @@ def health() -> dict:
 @app.post("/api/auth/signup")
 def signup(payload: SignupRequest) -> dict:
     phone_number = normalize_phone(payload.phone_number)
-    if phone_number in USERS:
+    if find_user_by_phone(phone_number):
         raise HTTPException(status_code=409, detail="Phone number already registered")
 
     user = UserStore(
@@ -2145,12 +2186,11 @@ def signup(payload: SignupRequest) -> dict:
 
 @app.post("/api/auth/login")
 def login(payload: LoginRequest) -> dict:
-    phone_number = normalize_phone(payload.phone_number)
-    user = USERS.get(phone_number)
+    user = find_user_by_phone(payload.phone_number)
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid phone number or password")
 
-    token = create_session(phone_number)
+    token = create_session(user.phone_number)
     return {
         "message": "Login successful.",
         "token": token,
@@ -2175,8 +2215,7 @@ def telegram_auth(payload: TelegramAuthRequest) -> dict:
         phone_for_link = (payload.phone_number or "").strip()
         password_for_link = payload.password or ""
         if phone_for_link and password_for_link:
-            normalized_phone = normalize_phone(phone_for_link)
-            existing = USERS.get(normalized_phone)
+            existing = find_user_by_phone(phone_for_link)
             if existing is None or not verify_password(password_for_link, existing.password_hash):
                 raise HTTPException(status_code=401, detail="Invalid phone number or password for Telegram link.")
             if existing.telegram_id is not None and existing.telegram_id != telegram_id:
