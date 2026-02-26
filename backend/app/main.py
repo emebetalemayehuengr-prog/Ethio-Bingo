@@ -176,6 +176,8 @@ class LoginRequest(BaseModel):
 
 class TelegramAuthRequest(BaseModel):
     init_data: str = Field(min_length=10, max_length=5000)
+    phone_number: str | None = Field(default=None, pattern=r"^(09\d{8}|\+2519\d{8})$")
+    password: str | None = Field(default=None, min_length=6, max_length=64)
 
 
 class DepositRequest(BaseModel):
@@ -2170,18 +2172,31 @@ def telegram_auth(payload: TelegramAuthRequest) -> dict:
 
     user = next((candidate for candidate in USERS.values() if candidate.telegram_id == telegram_id), None)
     if user is None:
-        generated_phone = generate_phone_for_telegram_user(telegram_id)
-        user = UserStore(
-            user_name=display_name[:40],
-            phone_number=generated_phone,
-            password_hash=hash_password(secrets.token_urlsafe(24)),
-            referral_code=create_referral_code(),
-            is_admin=is_bootstrap_admin_phone(generated_phone),
-            telegram_id=telegram_id,
-            telegram_username=telegram_username,
-            wallet=WalletState(main_balance=SIGNUP_INITIAL_MAIN_BALANCE, bonus_balance=SIGNUP_INITIAL_BONUS_BALANCE),
-        )
-        USERS[user.phone_number] = user
+        phone_for_link = (payload.phone_number or "").strip()
+        password_for_link = payload.password or ""
+        if phone_for_link and password_for_link:
+            normalized_phone = normalize_phone(phone_for_link)
+            existing = USERS.get(normalized_phone)
+            if existing is None or not verify_password(password_for_link, existing.password_hash):
+                raise HTTPException(status_code=401, detail="Invalid phone number or password for Telegram link.")
+            if existing.telegram_id is not None and existing.telegram_id != telegram_id:
+                raise HTTPException(status_code=409, detail="This account is already linked to another Telegram profile.")
+            existing.telegram_id = telegram_id
+            existing.telegram_username = telegram_username
+            user = existing
+        else:
+            generated_phone = generate_phone_for_telegram_user(telegram_id)
+            user = UserStore(
+                user_name=display_name[:40],
+                phone_number=generated_phone,
+                password_hash=hash_password(secrets.token_urlsafe(24)),
+                referral_code=create_referral_code(),
+                is_admin=is_bootstrap_admin_phone(generated_phone),
+                telegram_id=telegram_id,
+                telegram_username=telegram_username,
+                wallet=WalletState(main_balance=SIGNUP_INITIAL_MAIN_BALANCE, bonus_balance=SIGNUP_INITIAL_BONUS_BALANCE),
+            )
+            USERS[user.phone_number] = user
     else:
         user.telegram_username = telegram_username
         if display_name:

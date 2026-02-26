@@ -601,7 +601,12 @@ export default function App() {
       if (!tgInitData) {
         throw new Error("Open this app inside Telegram to use Telegram authentication.");
       }
-      const res = await loginWithTelegram({ init_data: tgInitData });
+      const phoneForLink = authPhone.trim();
+      const canLinkExisting = phoneForLink.length > 0 && authPassword.trim().length >= 6;
+      const res = await loginWithTelegram({
+        init_data: tgInitData,
+        ...(canLinkExisting ? { phone_number: phoneForLink, password: authPassword } : {}),
+      });
       setAuthToken(res.token);
       await loadData();
     } catch (err) {

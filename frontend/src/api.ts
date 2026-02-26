@@ -89,7 +89,7 @@ export function login(payload: { phone_number: string; password: string }) {
   });
 }
 
-export function loginWithTelegram(payload: { init_data: string }) {
+export function loginWithTelegram(payload: { init_data: string; phone_number?: string; password?: string }) {
   return request<AuthResponse>("/api/auth/telegram", {
     method: "POST",
     body: JSON.stringify(payload),
