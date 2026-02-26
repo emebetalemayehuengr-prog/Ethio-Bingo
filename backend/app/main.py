@@ -2295,11 +2295,24 @@ def mark_paid_withdraw_request(
     ticket.reviewed_by = user.phone_number
 
     target_user = USERS.get(ticket.phone_number)
-    if target_user:
-        update_latest_pending_withdraw_status(target_user, ticket.amount, "Completed")
-        persist_users()
+    if not target_user:
+        raise HTTPException(
+            status_code=409,
+            detail="Request owner account is missing. Cannot mark this request as paid.",
+        )
 
-    persist_withdraw_tickets()
+    update_latest_pending_withdraw_status(target_user, ticket.amount, "Completed")
+
+    try:
+        persist_users()
+        persist_withdraw_tickets()
+    except Exception as exc:
+        print(f"Failed to persist mark-paid update for ticket {ticket.id}: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to persist payout update. Check backend logs for details.",
+        ) from None
+
     email_notified = send_admin_withdraw_paid_email(ticket)
     message = "Withdraw request marked as paid."
     if email_notified:
