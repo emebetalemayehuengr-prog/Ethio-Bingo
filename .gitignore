@@ -10,3 +10,6 @@ node-platform/db/*.sqlite
 *.tsbuildinfo
 __pycache__/
 *.pyc
+**/.env
+**/.env.*
+!**/.env.example

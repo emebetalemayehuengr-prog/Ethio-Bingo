@@ -34,6 +34,15 @@ from pydantic import BaseModel, Field
 
 from .postgres_store import PostgresStateStore, read_sqlite_state
 
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - optional in constrained environments
+    def load_dotenv(*args, **kwargs) -> bool:
+        return False
+
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
 
 def env_flag(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
