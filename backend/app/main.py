@@ -2478,8 +2478,8 @@ def transfer_balance(payload: TransferRequest, user: UserStore = Depends(get_cur
 
 @app.post("/api/wallet/withdraw")
 def withdraw_balance(payload: WithdrawRequest, user: UserStore = Depends(get_current_user)) -> dict:
-    if payload.amount < 3:
-        raise HTTPException(status_code=400, detail="Minimum withdraw amount is 3 ETB")
+    if payload.amount < 100:
+        raise HTTPException(status_code=400, detail="Minimum withdraw amount is 100 ETB")
     if user.wallet.main_balance < payload.amount:
         raise HTTPException(status_code=400, detail="Insufficient balance")
 
