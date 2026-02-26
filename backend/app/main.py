@@ -563,6 +563,19 @@ def sqlite_path_looks_persistent(path: Path) -> bool:
     return normalized == "/var/data" or normalized.startswith("/var/data/")
 
 
+def is_email_alerts_configured() -> bool:
+    return bool(ADMIN_ALERT_EMAILS and SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM)
+
+
+def ensure_runtime_config_ready() -> None:
+    # In production we fail fast on partial/missing SMTP setup because withdraw alerts are operationally required.
+    if IS_PRODUCTION_ENV and not is_email_alerts_configured():
+        raise RuntimeError(
+            "Email alert config is incomplete. Set ADMIN_ALERT_EMAILS, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, "
+            "and SMTP_FROM."
+        )
+
+
 def ensure_db_ready() -> None:
     global DB_PATH
     if PG_STORE.enabled():
@@ -2049,6 +2062,7 @@ def seed_demo_users() -> None:
         USERS[demo_phone] = user
 
 
+ensure_runtime_config_ready()
 ensure_db_ready()
 load_persisted_state()
 apply_default_deposit_logos()
@@ -2098,6 +2112,7 @@ def health() -> dict:
         "service": "ethio-bingo-api",
         "time": utc_now().isoformat(),
         "storage": "postgres" if PG_STORE.enabled() else "sqlite",
+        "email_alerts_ready": is_email_alerts_configured(),
     }
 
 
