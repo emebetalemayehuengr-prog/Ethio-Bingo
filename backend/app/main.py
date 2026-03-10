@@ -16,7 +16,7 @@ from email.message import EmailMessage
 from pathlib import Path
 from random import Random, randint, sample, shuffle
 from typing import Literal
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, unquote, unquote_plus, urlparse
 from urllib.request import Request, urlopen
 
 try:
@@ -1370,11 +1370,83 @@ def normalize_phone_for_match(value: str) -> str:
     return digits
 
 
+def normalize_owner_for_match(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def _safe_unquote(value: str) -> str:
+    try:
+        return unquote(value)
+    except Exception:
+        return value
+
+
+def _safe_unquote_plus(value: str) -> str:
+    try:
+        return unquote_plus(value)
+    except Exception:
+        return value
+
+
+def iter_receipt_search_spaces(message: str | None) -> set[str]:
+    spaces: set[str] = set()
+
+    def add_space(value: str | None) -> None:
+        if not value:
+            return
+        trimmed = value.strip()
+        if trimmed:
+            spaces.add(trimmed)
+
+    add_space(message or "")
+    for link in extract_receipt_links(message):
+        add_space(link)
+        add_space(_safe_unquote(link))
+        add_space(_safe_unquote_plus(link))
+        try:
+            parsed = urlparse(link)
+        except Exception:
+            continue
+        add_space(parsed.path)
+        add_space(parsed.query)
+        add_space(parsed.fragment)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+            decoded_value = _safe_unquote(value)
+            plus_decoded_value = _safe_unquote_plus(value)
+            add_space(value)
+            add_space(decoded_value)
+            add_space(plus_decoded_value)
+            add_space(f"{key} {decoded_value}")
+
+    return spaces
+
+
 def extract_phone_matches(value: str | None) -> set[str]:
     if not value:
         return set()
-    matches = re.findall(r"(?:\+?251|0)?9\d{8}", value)
-    return {normalize_phone_for_match(item) for item in matches if normalize_phone_for_match(item)}
+    matches: set[str] = set()
+    phone_pattern = re.compile(r"(?:\+?251|0)?9(?:[\s().-]*\d){8}")
+    for segment in iter_receipt_search_spaces(value):
+        for matched in phone_pattern.findall(segment):
+            normalized = normalize_phone_for_match(matched)
+            if normalized:
+                matches.add(normalized)
+    return matches
+
+
+def has_assigned_owner_name_in_receipt(method: DepositMethod, message: str | None) -> bool:
+    receipt_owner_hints = [normalize_owner_for_match(item) for item in iter_receipt_search_spaces(message)]
+    receipt_owner_hints = [hint for hint in receipt_owner_hints if hint]
+    if not receipt_owner_hints:
+        return False
+
+    for account in method.transfer_accounts:
+        owner_token = normalize_owner_for_match(account.owner_name)
+        if not owner_token:
+            continue
+        if any(owner_token in hint for hint in receipt_owner_hints):
+            return True
+    return False
 
 
 def validate_receipt_recipient(method: DepositMethod, message: str | None) -> None:
@@ -1388,11 +1460,13 @@ def validate_receipt_recipient(method: DepositMethod, message: str | None) -> No
     mentioned_numbers = extract_phone_matches(message)
     if assigned_numbers.intersection(mentioned_numbers):
         return
+    if has_assigned_owner_name_in_receipt(method, message):
+        return
 
     assigned_display = ", ".join(account.phone_number for account in method.transfer_accounts)
     raise HTTPException(
         status_code=400,
-        detail=f"Receipt must show transfer to assigned account ({assigned_display}).",
+        detail=f"Receipt must show transfer to assigned account ({assigned_display}) or assigned recipient name.",
     )
 
 

@@ -99,9 +99,62 @@ const normalizePhoneForMatch = (value: string) => {
   if (digits.startsWith("09") && digits.length === 10) return digits;
   return digits;
 };
+const normalizeOwnerForMatch = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+const safeDecodeUriComponent = (value: string) => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+const extractReceiptLinks = (rawText: string) => rawText.match(/https?:\/\/[^\s]+/gi) ?? [];
+const collectReceiptSearchSpaces = (rawText: string) => {
+  const spaces = new Set<string>();
+  const addSpace = (value: string | null | undefined) => {
+    if (!value) return;
+    const trimmed = value.trim();
+    if (trimmed) spaces.add(trimmed);
+  };
+
+  addSpace(rawText);
+  for (const link of extractReceiptLinks(rawText)) {
+    addSpace(link);
+    const decodedLink = safeDecodeUriComponent(link);
+    addSpace(decodedLink);
+    addSpace(decodedLink.replace(/\+/g, " "));
+
+    try {
+      const parsed = new URL(link);
+      addSpace(parsed.pathname);
+      addSpace(parsed.search);
+      addSpace(parsed.hash);
+      parsed.searchParams.forEach((value, key) => {
+        const decodedValue = safeDecodeUriComponent(value);
+        addSpace(value);
+        addSpace(decodedValue);
+        addSpace(decodedValue.replace(/\+/g, " "));
+        addSpace(`${key} ${decodedValue}`);
+      });
+    } catch {
+      // Ignore malformed links in pasted text.
+    }
+  }
+
+  return Array.from(spaces);
+};
 const extractPhoneMatches = (rawText: string) => {
-  const matches = rawText.match(/(?:\+?251|0)?9\d{8}/g) ?? [];
-  return new Set(matches.map((value) => normalizePhoneForMatch(value)).filter((value) => value.length > 0));
+  const phonePattern = /(?:\+?251|0)?9(?:[\s().-]*\d){8}/g;
+  const matches = new Set<string>();
+  for (const segment of collectReceiptSearchSpaces(rawText)) {
+    const found = segment.match(phonePattern) ?? [];
+    for (const candidate of found) {
+      const normalized = normalizePhoneForMatch(candidate);
+      if (normalized.length > 0) {
+        matches.add(normalized);
+      }
+    }
+  }
+  return matches;
 };
 const hasAssignedRecipientInReceipt = (
   message: string,
@@ -112,6 +165,16 @@ const hasAssignedRecipientInReceipt = (
   const assignedPhones = new Set(accounts.map((account) => normalizePhoneForMatch(account.phone_number)));
   for (const phone of receiptPhones) {
     if (assignedPhones.has(phone)) return true;
+  }
+  const receiptOwnerHints = collectReceiptSearchSpaces(message)
+    .map((value) => normalizeOwnerForMatch(value))
+    .filter((value) => value.length > 0);
+  for (const account of accounts) {
+    const ownerToken = normalizeOwnerForMatch(account.owner_name);
+    if (!ownerToken) continue;
+    if (receiptOwnerHints.some((hint) => hint.includes(ownerToken))) {
+      return true;
+    }
   }
   return false;
 };
@@ -955,7 +1018,7 @@ export default function App() {
       if (!amount || amount <= 0) throw new Error("Enter valid amount.");
       if (!receiptText) throw new Error("Paste receipt message so recipient account can be verified.");
       if (!hasAssignedRecipientInReceipt(receiptText, selectedMethod.transfer_accounts)) {
-        throw new Error("Receipt must show transfer to one of the assigned account numbers.");
+        throw new Error("Receipt must show one assigned receiver number or name.");
       }
       if (transactionNumber.length < 3) throw new Error("Enter valid transaction number or paste the receipt message.");
       const res = await submitDeposit({
@@ -2194,7 +2257,7 @@ export default function App() {
                       }}
                     />
                   </label>
-                  <small>Receipt message must include one of the assigned receiver phone numbers above.</small>
+                  <small>Receipt message must include one assigned receiver phone number or owner name.</small>
                   <button className="primary-btn" type="submit" disabled={working}>
                     {working ? "Submitting..." : "Submit Deposit"}
                   </button>
