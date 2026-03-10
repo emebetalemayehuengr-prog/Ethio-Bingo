@@ -1359,6 +1359,43 @@ def validate_receipt_source_links(method: Literal["telebirr", "cbebirr"], messag
     return links
 
 
+def normalize_phone_for_match(value: str) -> str:
+    digits = re.sub(r"\D", "", value)
+    if digits.startswith("251") and len(digits) == 12:
+        return f"0{digits[3:]}"
+    if digits.startswith("9") and len(digits) == 9:
+        return f"0{digits}"
+    if digits.startswith("09") and len(digits) == 10:
+        return digits
+    return digits
+
+
+def extract_phone_matches(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    matches = re.findall(r"(?:\+?251|0)?9\d{8}", value)
+    return {normalize_phone_for_match(item) for item in matches if normalize_phone_for_match(item)}
+
+
+def validate_receipt_recipient(method: DepositMethod, message: str | None) -> None:
+    if not message or not message.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Receipt message is required and must show the recipient account number.",
+        )
+
+    assigned_numbers = {normalize_phone_for_match(account.phone_number) for account in method.transfer_accounts}
+    mentioned_numbers = extract_phone_matches(message)
+    if assigned_numbers.intersection(mentioned_numbers):
+        return
+
+    assigned_display = ", ".join(account.phone_number for account in method.transfer_accounts)
+    raise HTTPException(
+        status_code=400,
+        detail=f"Receipt must show transfer to assigned account ({assigned_display}).",
+    )
+
+
 def reserve_deposit_receipt(tx_number: str, phone_number: str, links: list[str]) -> None:
     existing_owner = USED_DEPOSIT_TX.get(tx_number)
     if existing_owner:
@@ -2505,8 +2542,10 @@ def submit_deposit(payload: DepositRequest, user: UserStore = Depends(get_curren
             status_code=400,
             detail="Transaction number is required. Paste your receipt message to auto-detect it.",
         )
+    method = find_deposit_method(payload.method)
+    validate_receipt_recipient(method, payload.receipt_message)
     ensure_valid_transaction_number(tx_number)
-    links = validate_receipt_source_links(payload.method, payload.receipt_message)
+    links = validate_receipt_source_links(method.code, payload.receipt_message)
     reserve_deposit_receipt(tx_number, user.phone_number, links)
 
     amount = round(float(payload.amount), 2)

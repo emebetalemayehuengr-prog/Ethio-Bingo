@@ -43,6 +43,11 @@ type ServiceView = "home" | "stakes" | "game" | "wallet" | "history" | "how" | "
 type CartellaStep = "pick" | "preview";
 type WalletTab = "deposit" | "withdraw" | "transfer" | "history" | "admin";
 
+const AUTH_PHONE_STORAGE_KEY = "ethio_bingo_auth_phone";
+const AUTH_PASSWORD_STORAGE_KEY = "ethio_bingo_auth_password";
+const AUTH_REMEMBER_STORAGE_KEY = "ethio_bingo_auth_remember_password";
+const THEME_STORAGE_KEY = "ethio_bingo_theme_mode";
+
 const services: Array<{ view: ServiceView; label: string }> = [
   { view: "home", label: "Home" },
   { view: "stakes", label: "Bingo Game" },
@@ -87,6 +92,29 @@ const txStopWords = new Set([
   "NO",
 ]);
 const normalizeTransactionNumberInput = (value: string) => value.trim().replace(/\s+/g, "").toUpperCase();
+const normalizePhoneForMatch = (value: string) => {
+  const digits = value.replace(/\D/g, "");
+  if (digits.startsWith("251") && digits.length === 12) return `0${digits.slice(3)}`;
+  if (digits.startsWith("9") && digits.length === 9) return `0${digits}`;
+  if (digits.startsWith("09") && digits.length === 10) return digits;
+  return digits;
+};
+const extractPhoneMatches = (rawText: string) => {
+  const matches = rawText.match(/(?:\+?251|0)?9\d{8}/g) ?? [];
+  return new Set(matches.map((value) => normalizePhoneForMatch(value)).filter((value) => value.length > 0));
+};
+const hasAssignedRecipientInReceipt = (
+  message: string,
+  accounts: Array<{ phone_number: string; owner_name: string }> | undefined,
+) => {
+  if (!accounts?.length) return true;
+  const receiptPhones = extractPhoneMatches(message);
+  const assignedPhones = new Set(accounts.map((account) => normalizePhoneForMatch(account.phone_number)));
+  for (const phone of receiptPhones) {
+    if (assignedPhones.has(phone)) return true;
+  }
+  return false;
+};
 const isLikelyTransactionToken = (token: string) => {
   if (!/^[A-Z0-9-]{3,120}$/.test(token)) return false;
   if (txStopWords.has(token)) return false;
@@ -227,7 +255,10 @@ function AuthScreen({
   password,
   setPassword,
   busy,
+  notice,
   error,
+  rememberPassword,
+  setRememberPassword,
   onSubmit,
   onTelegramLogin,
   telegramAvailable,
@@ -241,7 +272,10 @@ function AuthScreen({
   password: string;
   setPassword: (value: string) => void;
   busy: boolean;
+  notice: string;
   error: string;
+  rememberPassword: boolean;
+  setRememberPassword: (value: boolean) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onTelegramLogin: () => void;
   telegramAvailable: boolean;
@@ -277,6 +311,11 @@ function AuthScreen({
             Password
             <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
           </label>
+          <label className="auth-inline-check">
+            <input type="checkbox" checked={rememberPassword} onChange={(event) => setRememberPassword(event.target.checked)} />
+            <span>Remember password on this device</span>
+          </label>
+          {notice && <p className="auth-notice">{notice}</p>}
           {error && <p className="auth-error">{error}</p>}
           <button className="primary-btn" type="submit" disabled={busy}>
             {busy ? "Please wait..." : mode === "login" ? "Log in" : "Create account"}
@@ -294,6 +333,7 @@ function AuthScreen({
 
 export default function App() {
   const [ready, setReady] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(true);
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState(false);
   const [notice, setNotice] = useState("");
@@ -301,10 +341,12 @@ export default function App() {
 
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [authBusy, setAuthBusy] = useState(false);
+  const [authNotice, setAuthNotice] = useState("");
   const [authError, setAuthError] = useState("");
   const [authName, setAuthName] = useState("");
   const [authPhone, setAuthPhone] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [rememberPassword, setRememberPassword] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
 
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
@@ -338,6 +380,7 @@ export default function App() {
 
   const [selectedStake, setSelectedStake] = useState<StakeOption | null>(null);
   const [cartellaOpen, setCartellaOpen] = useState(false);
+  const [cartellaRelaxedView, setCartellaRelaxedView] = useState(true);
   const [cartellaStep, setCartellaStep] = useState<CartellaStep>("pick");
   const [pickerRoom, setPickerRoom] = useState<RoomState | null>(null);
   const [selectedCartella, setSelectedCartella] = useState<number | null>(null);
@@ -361,6 +404,61 @@ export default function App() {
   const simulatedPaidSet = useMemo(() => new Set(pickerRoom?.simulated_paid_cartellas ?? []), [pickerRoom]);
   const heldSet = useMemo(() => new Set(pickerRoom?.held_cartellas ?? []), [pickerRoom]);
   const calledSet = useMemo(() => new Set(room?.called_numbers ?? []), [room?.called_numbers]);
+
+  useEffect(() => {
+    try {
+      const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+      if (storedTheme === "dark") {
+        setIsDarkMode(true);
+        return;
+      }
+      if (storedTheme === "light") {
+        setIsDarkMode(false);
+        return;
+      }
+      const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? true;
+      setIsDarkMode(prefersDark);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  useEffect(() => {
+    const mode = isDarkMode ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", mode);
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, mode);
+    } catch {
+      // ignore storage errors
+    }
+  }, [isDarkMode]);
+
+  useEffect(() => {
+    try {
+      const remembered = window.localStorage.getItem(AUTH_REMEMBER_STORAGE_KEY) === "1";
+      const savedPhone = window.localStorage.getItem(AUTH_PHONE_STORAGE_KEY) ?? "";
+      const savedPassword = window.localStorage.getItem(AUTH_PASSWORD_STORAGE_KEY) ?? "";
+      setRememberPassword(remembered);
+      if (savedPhone) setAuthPhone(savedPhone);
+      if (remembered && savedPassword) setAuthPassword(savedPassword);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(AUTH_REMEMBER_STORAGE_KEY, rememberPassword ? "1" : "0");
+      window.localStorage.setItem(AUTH_PHONE_STORAGE_KEY, authPhone);
+      if (rememberPassword) {
+        window.localStorage.setItem(AUTH_PASSWORD_STORAGE_KEY, authPassword);
+      } else {
+        window.localStorage.removeItem(AUTH_PASSWORD_STORAGE_KEY);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, [authPhone, authPassword, rememberPassword]);
 
   useEffect(() => {
     if (!dashboard?.deposit_methods?.length) return;
@@ -615,31 +713,55 @@ export default function App() {
     }
   }, [cartellaOpen, pickerRoom?.phase, pickerRoom?.id, pickerRoom?.my_cartellas, room?.id, cards.length]);
 
+  useEffect(() => {
+    if (service !== "game" || room?.phase !== "finished") return;
+    const timer = window.setTimeout(() => {
+      setService("home");
+      setNotice("Round finished. Returning to Home.");
+    }, 2400);
+    return () => window.clearTimeout(timer);
+  }, [service, room?.phase, room?.id]);
+
   const onAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setAuthBusy(true);
+    setAuthNotice("");
     setAuthError("");
     try {
+      const normalizedPhone = authPhone.trim();
       if (authMode === "signup") {
-        const res = await signupRequest({
+        await signupRequest({
           user_name: authName.trim(),
-          phone_number: authPhone.trim(),
+          phone_number: normalizedPhone,
           password: authPassword,
         });
-        setAuthToken(res.token);
+        setAuthMode("login");
+        setAuthName("");
+        setAuthPhone(normalizedPhone);
+        if (!rememberPassword) {
+          setAuthPassword("");
+        }
+        setAuthNotice("Registration successful. Please sign in.");
       } else {
         const res = await loginRequest({
-          phone_number: authPhone.trim(),
+          phone_number: normalizedPhone,
           password: authPassword,
         });
         setAuthToken(res.token);
+        setAuthName("");
+        setAuthPhone(normalizedPhone);
+        if (!rememberPassword) {
+          setAuthPassword("");
+        }
+        await loadData();
       }
-      setAuthName("");
-      setAuthPhone("");
-      setAuthPassword("");
-      await loadData();
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : "Login failed");
+      const message = err instanceof Error ? err.message : "Login failed";
+      if (authMode === "signup" && message.toLowerCase().includes("already registered")) {
+        setAuthMode("login");
+        setAuthNotice("This phone is already registered. Please sign in.");
+      }
+      setAuthError(message);
     } finally {
       setAuthBusy(false);
     }
@@ -647,6 +769,7 @@ export default function App() {
 
   const onTelegramLogin = async () => {
     setAuthBusy(true);
+    setAuthNotice("");
     setAuthError("");
     try {
       const tgInitData = (
@@ -800,16 +923,22 @@ export default function App() {
     setError("");
     try {
       const amount = Number(depositAmount);
+      const receiptText = receiptMessage.trim();
       const directTxNo = normalizeTransactionNumberInput(txNo);
-      const inferredTxNo = extractTransactionNumber(receiptMessage);
+      const inferredTxNo = extractTransactionNumber(receiptText);
       const transactionNumber = directTxNo || inferredTxNo;
+      if (!selectedMethod) throw new Error("Select a deposit method first.");
       if (!amount || amount <= 0) throw new Error("Enter valid amount.");
+      if (!receiptText) throw new Error("Paste receipt message so recipient account can be verified.");
+      if (!hasAssignedRecipientInReceipt(receiptText, selectedMethod.transfer_accounts)) {
+        throw new Error("Receipt must show transfer to one of the assigned account numbers.");
+      }
       if (transactionNumber.length < 3) throw new Error("Enter valid transaction number or paste the receipt message.");
       const res = await submitDeposit({
         method: methodCode,
         amount,
         transaction_number: transactionNumber,
-        receipt_message: receiptMessage.trim() || undefined,
+        receipt_message: receiptText,
       });
       setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
       setNotice(res.message);
@@ -986,7 +1115,11 @@ export default function App() {
     return (
       <AuthScreen
         mode={authMode}
-        setMode={setAuthMode}
+        setMode={(mode) => {
+          setAuthMode(mode);
+          setAuthError("");
+          setAuthNotice("");
+        }}
         name={authName}
         setName={setAuthName}
         phone={authPhone}
@@ -994,7 +1127,10 @@ export default function App() {
         password={authPassword}
         setPassword={setAuthPassword}
         busy={authBusy}
+        notice={authNotice}
         error={authError}
+        rememberPassword={rememberPassword}
+        setRememberPassword={setRememberPassword}
         onSubmit={onAuthSubmit}
         onTelegramLogin={onTelegramLogin}
         telegramAvailable={Boolean((window as Window & { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData)}
@@ -1112,8 +1248,13 @@ export default function App() {
           <button className="menu-toggle" type="button" onClick={() => setDrawerOpen((state) => !state)}>
             =
           </button>
-          <button className="sound-toggle" type="button" aria-label="sound">
-            <span />
+          <button
+            className={`theme-toggle ${isDarkMode ? "dark" : "light"}`}
+            type="button"
+            aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+            onClick={() => setIsDarkMode((current) => !current)}
+          >
+            <span>{isDarkMode ? "Dark" : "Light"}</span>
           </button>
           <button className="refresh-btn" type="button" onClick={() => void loadData()}>
             Refresh
@@ -1820,8 +1961,14 @@ export default function App() {
                         <strong>{pickerRoom?.next_my_cartellas.length ?? 0}</strong> My Next
                       </span>
                     </div>
+                    <div className="cartella-view-controls">
+                      <button className="secondary-btn" type="button" onClick={() => setCartellaRelaxedView((current) => !current)}>
+                        {cartellaRelaxedView ? "Relaxed View: On" : "Relaxed View: Off"}
+                      </button>
+                      <small>Bigger spacing and larger card buttons for easier selection.</small>
+                    </div>
                     <p className="cartella-legend">White = available, Red = held, Blue = paid, Gold = simulated player card.</p>
-                    <div className="cartella-surface">
+                    <div className={`cartella-surface ${cartellaRelaxedView ? "relaxed" : ""}`}>
                       <div className="cartella-grid">
                         {cartellaList.map((num) => {
                           const paid = paidSet.has(num);
@@ -1928,7 +2075,7 @@ export default function App() {
                     }}
                   />
                 ) : null}
-                <p className="panel-subtitle">Follow steps below and submit your transaction checker info.</p>
+                <p className="panel-subtitle">Follow steps below and submit receipt info. Receiver account is verified against assigned personnel.</p>
                 <ol>
                   {selectedMethod.instruction_steps.map((step) => (
                     <li key={step}>{step}</li>
@@ -1971,6 +2118,7 @@ export default function App() {
                   <label>
                     Message
                     <input
+                      required
                       value={receiptMessage}
                       placeholder="Paste payment SMS/receipt message"
                       onChange={(event) => {
@@ -1986,6 +2134,7 @@ export default function App() {
                       }}
                     />
                   </label>
+                  <small>Receipt message must include one of the assigned receiver phone numbers above.</small>
                   <button className="primary-btn" type="submit" disabled={working}>
                     {working ? "Submitting..." : "Submit Deposit"}
                   </button>
