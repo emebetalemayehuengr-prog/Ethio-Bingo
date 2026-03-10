@@ -26,6 +26,7 @@ import {
   updateAdminDepositMethod,
 } from "./api";
 import type {
+  AuthResponse,
   BetHistoryRecord,
   BingoCard,
   DashboardResponse,
@@ -62,6 +63,13 @@ const cartellaList = Array.from({ length: 200 }, (_, idx) => idx + 1);
 const calledBoard = Array.from({ length: 75 }, (_, idx) => idx + 1);
 const callerLetters = ["B", "I", "N", "G", "O"] as const;
 const callerRows = Array.from({ length: 15 }, (_, idx) => [idx + 1, idx + 16, idx + 31, idx + 46, idx + 61]);
+const fallbackBrand = {
+  name: "Ethio Bingo",
+  tagline: "Play smart. Win fair.",
+  primary: "#391066",
+  accent: "#ffd400",
+  surface: "#a693c8",
+};
 
 const fmtEtb = (value: number) => `ETB ${value.toFixed(2)}`;
 const fmtDate = (value: string) => new Date(value).toLocaleString();
@@ -628,6 +636,31 @@ export default function App() {
     }
   };
 
+  const completeAuthFlow = (auth: AuthResponse, normalizedPhone: string, successMessage: string) => {
+    setAuthToken(auth.token);
+    setProfile(auth.user);
+    setDashboard((prev) => ({
+      brand: prev?.brand ?? fallbackBrand,
+      user: auth.user,
+      is_admin: auth.user.is_admin,
+      wallet: auth.wallet,
+      deposit_methods: prev?.deposit_methods ?? [],
+      stake_options: prev?.stake_options ?? [],
+      faq: prev?.faq ?? [],
+      games: prev?.games ?? [],
+    }));
+    setNotice(successMessage);
+    setAuthName("");
+    setAuthPhone(normalizedPhone);
+    if (!rememberPassword) {
+      setAuthPassword("");
+    }
+    setAuthMode("login");
+    setDrawerOpen(false);
+    setService("home");
+    void loadData();
+  };
+
   useEffect(() => {
     const token = getAuthToken();
     if (!token) {
@@ -818,30 +851,18 @@ export default function App() {
     try {
       const normalizedPhone = authPhone.trim();
       if (authMode === "signup") {
-        await signupRequest({
+        const res = await signupRequest({
           user_name: authName.trim(),
           phone_number: normalizedPhone,
           password: authPassword,
         });
-        setAuthMode("login");
-        setAuthName("");
-        setAuthPhone(normalizedPhone);
-        if (!rememberPassword) {
-          setAuthPassword("");
-        }
-        setAuthNotice("Account Created. Please sign in.");
+        completeAuthFlow(res, normalizedPhone, "Account created and signed in.");
       } else {
         const res = await loginRequest({
           phone_number: normalizedPhone,
           password: authPassword,
         });
-        setAuthToken(res.token);
-        setAuthName("");
-        setAuthPhone(normalizedPhone);
-        if (!rememberPassword) {
-          setAuthPassword("");
-        }
-        await loadData();
+        completeAuthFlow(res, normalizedPhone, "Signed in successfully.");
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Login failed";
@@ -872,8 +893,7 @@ export default function App() {
         init_data: tgInitData,
         ...(canLinkExisting ? { phone_number: phoneForLink, password: authPassword } : {}),
       });
-      setAuthToken(res.token);
-      await loadData();
+      completeAuthFlow(res, res.user.phone_number, "Telegram sign-in successful.");
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : "Telegram login failed");
     } finally {
