@@ -1663,8 +1663,10 @@ export default function App() {
                 const canOpen = Boolean(stake.open_available && (stake.my_cards_current ?? 0) > 0);
                 return (
                   <div key={stake.id} className={`stake-row ${stake.bonus ? "bonus" : ""}`}>
-                    {stake.bonus && <div className="bonus-tag">Bonus</div>}
-                    <span className="stake-col">{stake.stake} birr</span>
+                    <span className="stake-col">
+                      {stake.bonus && <span className="bonus-tag">Bonus</span>}
+                      {stake.stake} birr
+                    </span>
                     <span className={`stake-col status ${stake.status}`}>{active}</span>
                     <span className="stake-col win">{stake.possible_win != null ? `${stake.possible_win} Birr` : "-"}</span>
                     <button

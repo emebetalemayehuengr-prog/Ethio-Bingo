@@ -1618,17 +1618,21 @@ body {
 }
 
 .bonus-tag {
-  position: absolute;
-  left: -40px;
-  top: -10px;
-  transform: rotate(-15deg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 6px;
+  vertical-align: middle;
   background: #f7d128;
   color: #2d1f47;
   border-radius: 999px;
-  padding: 5px 14px;
-  font-family: "Teko", sans-serif;
-  font-size: 1.2rem;
+  padding: 2px 7px;
+  font-family: "Sora", sans-serif;
+  font-size: 0.68rem;
+  line-height: 1;
+  letter-spacing: 0.01em;
   font-weight: 700;
+  text-transform: uppercase;
 }
 
 .stake-row .join-btn {
@@ -1728,8 +1732,9 @@ body {
   }
 
   .bonus-tag {
-    left: 8px;
-    top: -10px;
+    margin-right: 5px;
+    padding: 2px 6px;
+    font-size: 0.62rem;
   }
 
   .game-card h2 {
