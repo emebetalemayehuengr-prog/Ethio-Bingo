@@ -1170,6 +1170,8 @@ export default function App() {
         ? pickerRoom.call_countdown_seconds
         : pickerRoom?.announcement_seconds ?? 0;
   const pickerPaidCount = pickerRoom?.display_paid_count ?? pickerRoom?.paid_cartellas.length ?? 0;
+  const latestBallLetter = typeof room?.latest_number === "number" ? toBingoLetter(room.latest_number) : null;
+  const latestBallClass = latestBallLetter ? `call-${latestBallLetter.toLowerCase()}` : "call-idle";
   const renderBoughtCard = (ownedCard: BingoCard, rail: "desktop" | "panel" = "desktop") => {
     const isActive = selectedCardNo === ownedCard.card_no;
     const marksForOwnedCard = marksForCard(room, ownedCard.card_no);
@@ -1379,15 +1381,18 @@ export default function App() {
                     </div>
                     <div className="caller-layout">
                       <aside className="caller-side-card">
-                        <div className="caller-ball-shell">
-                          <div className="caller-ball">
-                            <small>{room.latest_number ? toBingoLetter(room.latest_number) : "-"}</small>
+                        <div className={`caller-ball-shell ${latestBallClass}`}>
+                          <div className={`caller-ball ${latestBallClass}`}>
+                            <small>{latestBallLetter ?? "-"}</small>
                             <strong>{room.latest_number ?? "--"}</strong>
                           </div>
                         </div>
                         <div className="caller-recent-row">
                           {(room.called_numbers.slice(-4).reverse() ?? []).map((num) => (
-                            <div key={`recent-${num}`} className={`recent-pill ${room.latest_number === num ? "latest" : ""}`}>
+                            <div
+                              key={`recent-${num}`}
+                              className={`recent-pill call-${toBingoLetter(num).toLowerCase()} ${room.latest_number === num ? "latest" : ""}`}
+                            >
                               {num}
                             </div>
                           ))}
