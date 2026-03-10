@@ -2211,16 +2211,16 @@ body {
 /* Caller + Cartella reference styling */
 .game-panel {
   background: linear-gradient(160deg, rgba(63, 20, 105, 0.94), rgba(43, 12, 81, 0.94));
-  padding: 10px;
+  padding: 8px;
 }
 
 .game-top-row {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .game-panel > .game-top-row.compact {
@@ -2228,37 +2228,38 @@ body {
   top: 68px;
   z-index: 8;
   border-radius: 16px;
-  padding: 8px 10px;
+  padding: 6px 8px;
   background: rgba(39, 14, 67, 0.85);
   backdrop-filter: blur(3px);
 }
 
 .game-top-row.compact .countdown {
   margin: 0;
-  min-width: 120px;
+  min-width: 106px;
   text-align: center;
-  font-size: clamp(1.9rem, 4vw, 3.2rem);
+  font-size: clamp(1.72rem, 3.7vw, 2.8rem);
   font-family: "Teko", sans-serif;
   letter-spacing: 0.06em;
 }
 
 .game-top-row.compact .stake-chip {
   margin: 0;
-  min-width: min(320px, 100%);
-  font-size: clamp(1.3rem, 2.5vw, 2rem);
+  min-width: min(282px, 100%);
+  font-size: clamp(1.1rem, 2.2vw, 1.72rem);
   text-align: center;
 }
 
 .game-top-row.compact .latest-call {
   margin: 0;
-  min-width: 210px;
+  min-width: 188px;
   border-radius: 999px;
   background: rgba(23, 37, 79, 0.72);
   border: 1px solid rgba(251, 230, 148, 0.48);
   color: #fbf0b2;
-  padding: 10px 14px;
+  padding: 8px 10px;
   text-align: center;
   font-weight: 700;
+  font-size: 0.9rem;
 }
 
 .game-top-row.compact .countdown.phase-selecting {
@@ -2288,8 +2289,8 @@ body {
 .game-stat-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 12px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .stat-box {
@@ -2297,31 +2298,31 @@ body {
   border-radius: 12px;
   background: #f6f7fb;
   color: #101322;
-  min-height: 88px;
+  min-height: 74px;
   display: grid;
   place-items: center;
-  gap: 4px;
-  padding: 8px;
+  gap: 2px;
+  padding: 6px;
   text-align: center;
 }
 
 .stat-box small {
-  font-size: 1rem;
+  font-size: 0.92rem;
 }
 
 .stat-box strong {
-  font-size: 2rem;
+  font-size: 1.72rem;
   line-height: 1;
   font-family: "Teko", sans-serif;
 }
 
 .stat-box.stat-sound {
-  font-size: 1.9rem;
+  font-size: 1.6rem;
   cursor: pointer;
 }
 
 .pot-formula {
-  margin: 2px 0 10px;
+  margin: 1px 0 8px;
   font-size: 0.92rem;
   color: #e8ebff;
   letter-spacing: 0.01em;
@@ -2379,10 +2380,10 @@ body {
 }
 
 .caller-ball small {
-  font-size: 1.08rem;
-  font-weight: 700;
+  font-size: 1.24rem;
+  font-weight: 800;
   letter-spacing: 0.04em;
-  margin-bottom: -2px;
+  margin-bottom: -1px;
   line-height: 1;
 }
 
@@ -2490,9 +2491,10 @@ body {
 
 .caller-board-panel {
   border-radius: 20px;
-  padding: 10px;
+  padding: 7px;
   background: linear-gradient(140deg, rgba(173, 160, 201, 0.56), rgba(95, 77, 137, 0.5));
   order: 1;
+  overflow: hidden;
 }
 
 .caller-board-head {
@@ -2547,24 +2549,24 @@ body {
 
 .caller-board-grid {
   display: grid;
-  gap: 7px;
+  gap: 5px;
 }
 
 .caller-head-row {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 7px;
+  gap: 5px;
 }
 
 .caller-row {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px;
+  gap: 4px;
 }
 
 .caller-letter {
   border-radius: 999px;
-  min-height: 36px;
+  min-height: 34px;
   display: grid;
   place-items: center;
   font-weight: 800;
@@ -2594,7 +2596,7 @@ body {
 
 .caller-number {
   border-radius: 8px;
-  min-height: 34px;
+  min-height: 32px;
   display: grid;
   place-items: center;
   background: #1f2f5f;
@@ -2688,10 +2690,10 @@ body {
 }
 
 .game-actions {
-  margin-top: 12px;
+  margin-top: 8px;
   display: flex;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
@@ -3089,35 +3091,36 @@ body {
 
   .game-top-row.compact .countdown {
     width: 100%;
-    font-size: clamp(2.4rem, 12vw, 3.4rem);
+    font-size: clamp(1.86rem, 9.6vw, 2.7rem);
   }
 
   .game-top-row.compact .stake-chip {
     min-width: calc(100% - 70px);
-    font-size: 2rem;
+    font-size: 1.5rem;
   }
 
   .game-top-row.compact .latest-call {
     width: 100%;
+    font-size: 0.82rem;
   }
 
   .game-stat-grid {
     grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 8px;
+    gap: 6px;
   }
 
   .stat-box {
-    min-height: 72px;
+    min-height: 58px;
     border-radius: 10px;
-    padding: 6px;
+    padding: 5px;
   }
 
   .stat-box small {
-    font-size: 0.95rem;
+    font-size: 0.8rem;
   }
 
   .stat-box strong {
-    font-size: 1.6rem;
+    font-size: 1.28rem;
   }
 
   .pot-formula {
@@ -3267,11 +3270,11 @@ body {
   }
 
   .caller-ball small {
-    font-size: 0.88rem;
+    font-size: 1.04rem;
   }
 
   .caller-board-panel {
-    padding: 10px;
+    padding: 6px;
   }
 
   .caller-board-panel h3 {
