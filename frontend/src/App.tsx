@@ -380,7 +380,6 @@ export default function App() {
 
   const [selectedStake, setSelectedStake] = useState<StakeOption | null>(null);
   const [cartellaOpen, setCartellaOpen] = useState(false);
-  const [cartellaRelaxedView, setCartellaRelaxedView] = useState(true);
   const [cartellaStep, setCartellaStep] = useState<CartellaStep>("pick");
   const [pickerRoom, setPickerRoom] = useState<RoomState | null>(null);
   const [selectedCartella, setSelectedCartella] = useState<number | null>(null);
@@ -1961,14 +1960,8 @@ export default function App() {
                         <strong>{pickerRoom?.next_my_cartellas.length ?? 0}</strong> My Next
                       </span>
                     </div>
-                    <div className="cartella-view-controls">
-                      <button className="secondary-btn" type="button" onClick={() => setCartellaRelaxedView((current) => !current)}>
-                        {cartellaRelaxedView ? "Relaxed View: On" : "Relaxed View: Off"}
-                      </button>
-                      <small>Bigger spacing and larger card buttons for easier selection.</small>
-                    </div>
                     <p className="cartella-legend">White = available, Red = held, Blue = paid, Gold = simulated player card.</p>
-                    <div className={`cartella-surface ${cartellaRelaxedView ? "relaxed" : ""}`}>
+                    <div className="cartella-surface">
                       <div className="cartella-grid">
                         {cartellaList.map((num) => {
                           const paid = paidSet.has(num);
