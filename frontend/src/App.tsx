@@ -65,6 +65,60 @@ const maskPhone = (value: string) => {
   if (value.length < 4) return value;
   return `${value.slice(0, 3)}***${value.slice(-2)}`;
 };
+const txLabelPattern =
+  /\b(?:transaction(?:\s*(?:number|no|id|ref(?:erence)?))?|tx(?:n|id)?|trx|receipt(?:\s*(?:number|no|id))?|reference|ref)\b[\s:#=-]*([A-Za-z0-9-]{3,120})\b/i;
+const txStopWords = new Set([
+  "ETB",
+  "BIRR",
+  "TELEBIRR",
+  "CBEBIRR",
+  "CBE",
+  "TRANSFER",
+  "SUCCESS",
+  "PAYMENT",
+  "FROM",
+  "TO",
+  "DATE",
+  "TIME",
+  "TX",
+  "TRX",
+  "REF",
+  "ID",
+  "NO",
+]);
+const normalizeTransactionNumberInput = (value: string) => value.trim().replace(/\s+/g, "").toUpperCase();
+const isLikelyTransactionToken = (token: string) => {
+  if (!/^[A-Z0-9-]{3,120}$/.test(token)) return false;
+  if (txStopWords.has(token)) return false;
+  if (!/\d/.test(token)) return false;
+  const hasLetter = /[A-Z]/.test(token);
+  if (!hasLetter && token.length < 6) return false;
+  if (/^\d{8,13}$/.test(token)) return false;
+  return true;
+};
+const extractTransactionNumber = (rawText: string) => {
+  const text = rawText.trim();
+  if (!text) return "";
+
+  const labeledMatch = text.match(txLabelPattern);
+  if (labeledMatch?.[1]) {
+    const candidate = normalizeTransactionNumberInput(labeledMatch[1]);
+    if (isLikelyTransactionToken(candidate)) {
+      return candidate;
+    }
+  }
+
+  const tokens = text
+    .toUpperCase()
+    .replace(/[^A-Z0-9-\s]/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .filter(isLikelyTransactionToken)
+    .sort((a, b) => b.length - a.length);
+
+  return tokens[0] ?? "";
+};
 const toBingoLetter = (value: number) => {
   if (value <= 15) return "B";
   if (value <= 30) return "I";
@@ -746,12 +800,15 @@ export default function App() {
     setError("");
     try {
       const amount = Number(depositAmount);
+      const directTxNo = normalizeTransactionNumberInput(txNo);
+      const inferredTxNo = extractTransactionNumber(receiptMessage);
+      const transactionNumber = directTxNo || inferredTxNo;
       if (!amount || amount <= 0) throw new Error("Enter valid amount.");
-      if (txNo.trim().length < 5) throw new Error("Enter valid transaction number.");
+      if (transactionNumber.length < 3) throw new Error("Enter valid transaction number or paste the receipt message.");
       const res = await submitDeposit({
         method: methodCode,
         amount,
-        transaction_number: txNo.trim(),
+        transaction_number: transactionNumber,
         receipt_message: receiptMessage.trim() || undefined,
       });
       setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
@@ -1895,11 +1952,39 @@ export default function App() {
                   </label>
                   <label>
                     Transaction Number
-                    <input value={txNo} onChange={(event) => setTxNo(event.target.value)} />
+                    <input
+                      value={txNo}
+                      onChange={(event) => {
+                        const rawValue = event.target.value;
+                        const extracted = extractTransactionNumber(rawValue);
+                        if (/\s/.test(rawValue) && extracted) {
+                          setTxNo(extracted);
+                          if (!receiptMessage.trim()) {
+                            setReceiptMessage(rawValue.trim());
+                          }
+                          return;
+                        }
+                        setTxNo(rawValue);
+                      }}
+                    />
                   </label>
                   <label>
                     Message
-                    <input value={receiptMessage} onChange={(event) => setReceiptMessage(event.target.value)} />
+                    <input
+                      value={receiptMessage}
+                      placeholder="Paste payment SMS/receipt message"
+                      onChange={(event) => {
+                        const nextMessage = event.target.value;
+                        setReceiptMessage(nextMessage);
+                        const extracted = extractTransactionNumber(nextMessage);
+                        if (!extracted) return;
+                        setTxNo((current) => {
+                          const currentNormalized = normalizeTransactionNumberInput(current);
+                          if (currentNormalized && currentNormalized !== extracted) return current;
+                          return extracted;
+                        });
+                      }}
+                    />
                   </label>
                   <button className="primary-btn" type="submit" disabled={working}>
                     {working ? "Submitting..." : "Submit Deposit"}

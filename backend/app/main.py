@@ -183,7 +183,7 @@ class TelegramAuthRequest(BaseModel):
 class DepositRequest(BaseModel):
     method: Literal["telebirr", "cbebirr"]
     amount: float = Field(gt=0, le=20000)
-    transaction_number: str = Field(min_length=3, max_length=120)
+    transaction_number: str | None = Field(default=None, min_length=3, max_length=120)
     receipt_message: str | None = Field(default=None, max_length=1000)
 
 
@@ -1259,11 +1259,73 @@ def normalize_transaction_number(value: str) -> str:
     return cleaned
 
 
+TX_LABEL_PATTERN = re.compile(
+    r"\b(?:transaction(?:\s*(?:number|no|id|ref(?:erence)?))?|tx(?:n|id)?|trx|receipt(?:\s*(?:number|no|id))?|reference|ref)\b[\s:#=-]*([A-Za-z0-9-]{3,120})\b",
+    flags=re.IGNORECASE,
+)
+TX_STOPWORDS = {
+    "ETB",
+    "BIRR",
+    "TELEBIRR",
+    "CBEBIRR",
+    "CBE",
+    "TRANSFER",
+    "SUCCESS",
+    "PAYMENT",
+    "FROM",
+    "TO",
+    "DATE",
+    "TIME",
+    "TX",
+    "TRX",
+    "REF",
+    "ID",
+    "NO",
+}
+
+
+def is_likely_transaction_token(token: str) -> bool:
+    if not re.fullmatch(r"[A-Z0-9-]{3,120}", token):
+        return False
+    if token in TX_STOPWORDS:
+        return False
+    if not re.search(r"\d", token):
+        return False
+    has_letter = bool(re.search(r"[A-Z]", token))
+    if not has_letter and len(token) < 6:
+        return False
+    if re.fullmatch(r"\d{8,13}", token):
+        return False
+    return True
+
+
+def extract_transaction_number_candidate(message: str | None) -> str | None:
+    if not message:
+        return None
+
+    text = message.strip()
+    if not text:
+        return None
+
+    labeled_match = TX_LABEL_PATTERN.search(text)
+    if labeled_match:
+        candidate = normalize_transaction_number(labeled_match.group(1))
+        if is_likely_transaction_token(candidate):
+            return candidate
+
+    tokens = re.findall(r"[A-Z0-9-]{3,120}", text.upper())
+    tokens.sort(key=len, reverse=True)
+    for token in tokens:
+        if is_likely_transaction_token(token):
+            return token
+    return None
+
+
 def ensure_valid_transaction_number(value: str) -> None:
     if not re.fullmatch(r"[A-Z0-9-]{3,120}", value):
         raise HTTPException(
             status_code=400,
-            detail="Invalid transaction number format. Use letters/numbers only.",
+            detail="Invalid transaction number format. Use letters, numbers, and hyphen only.",
         )
 
 
@@ -2431,7 +2493,18 @@ def bet_history(user: UserStore = Depends(get_current_user)) -> dict:
 
 @app.post("/api/wallet/deposit")
 def submit_deposit(payload: DepositRequest, user: UserStore = Depends(get_current_user)) -> dict:
-    tx_number = normalize_transaction_number(payload.transaction_number)
+    tx_number = normalize_transaction_number(payload.transaction_number or "")
+    if not re.fullmatch(r"[A-Z0-9-]{3,120}", tx_number):
+        inferred_tx = extract_transaction_number_candidate(payload.transaction_number) or extract_transaction_number_candidate(
+            payload.receipt_message,
+        )
+        if inferred_tx:
+            tx_number = inferred_tx
+    if not tx_number:
+        raise HTTPException(
+            status_code=400,
+            detail="Transaction number is required. Paste your receipt message to auto-detect it.",
+        )
     ensure_valid_transaction_number(tx_number)
     links = validate_receipt_source_links(payload.method, payload.receipt_message)
     reserve_deposit_receipt(tx_number, user.phone_number, links)
