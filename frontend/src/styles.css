@@ -2019,19 +2019,6 @@ body {
   gap: 14px;
 }
 
-.casino-wallet-row {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.casino-wallet-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .casino-game-grid {
   display: grid;
   gap: 12px;
@@ -2047,99 +2034,35 @@ body {
   gap: 8px;
 }
 
-.casino-game-card.selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(255, 212, 0, 0.55);
+.casino-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 .casino-game-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  display: block;
 }
 
 .casino-game-head h3 {
   margin: 0;
+  font-size: 1.2rem;
 }
 
 .casino-game-card p {
   margin: 0;
+  opacity: 0.92;
 }
 
-.casino-volatility {
-  font-size: 0.75rem;
-  text-transform: uppercase;
+.casino-game-card small {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 3px 8px;
   border-radius: 999px;
-  padding: 3px 9px;
-  font-weight: 700;
-}
-
-.casino-volatility.low {
-  background: rgba(59, 197, 133, 0.24);
-  color: #9ef0c2;
-}
-
-.casino-volatility.medium {
-  background: rgba(75, 143, 255, 0.24);
-  color: #d2e1ff;
-}
-
-.casino-volatility.high {
-  background: rgba(255, 95, 95, 0.24);
-  color: #ffd6d6;
-}
-
-.casino-play-panel {
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(0, 0, 0, 0.2);
-  padding: 12px;
-  display: grid;
-  gap: 10px;
-}
-
-.casino-play-panel h3 {
-  margin: 0;
-}
-
-.casino-play-form {
-  display: flex;
-  gap: 10px;
-  align-items: end;
-  flex-wrap: wrap;
-}
-
-.casino-play-form label {
-  display: grid;
-  gap: 6px;
-  min-width: 190px;
-}
-
-.casino-play-form input {
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 10px;
-  background: rgba(13, 23, 51, 0.65);
-  color: var(--text);
-  padding: 9px 11px;
-}
-
-.casino-result {
-  border-radius: 10px;
-  padding: 10px;
-  display: grid;
-  gap: 4px;
-  border: 1px solid transparent;
-}
-
-.casino-result.win {
-  background: rgba(41, 186, 120, 0.2);
-  border-color: rgba(41, 186, 120, 0.45);
-}
-
-.casino-result.lose {
-  background: rgba(228, 77, 95, 0.2);
-  border-color: rgba(228, 77, 95, 0.45);
+  background: rgba(255, 255, 255, 0.14);
+  font-weight: 600;
 }
 
 .cartella-grid {
