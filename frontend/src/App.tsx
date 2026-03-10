@@ -395,6 +395,7 @@ export default function App() {
   const [markedNumbers, setMarkedNumbers] = useState<number[]>([]);
   const [markingNumber, setMarkingNumber] = useState<number | null>(null);
   const [claimingBingo, setClaimingBingo] = useState(false);
+  const [autoClaimRequested, setAutoClaimRequested] = useState(false);
 
   const wallet: Wallet = dashboard?.wallet ?? { currency: "ETB", main_balance: 0, bonus_balance: 0 };
   const selectedMethod = useMemo(
@@ -734,6 +735,17 @@ export default function App() {
     const timer = window.setTimeout(() => setCardRechargeLabel(""), 7000);
     return () => window.clearTimeout(timer);
   }, [cardRechargeLabel]);
+
+  useEffect(() => {
+    if (!autoClaimRequested) return;
+    if (markingNumber !== null || claimingBingo) return;
+    const claimReady = room?.phase === "playing" && !!card ? hasBingo(card, room?.called_numbers ?? [], markedNumbers) : false;
+    if (!claimReady || !room?.id) {
+      setAutoClaimRequested(false);
+      return;
+    }
+    void onClaimBingo();
+  }, [autoClaimRequested, markingNumber, claimingBingo, room, card, markedNumbers]);
 
   const onAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1091,10 +1103,16 @@ export default function App() {
   const onClaimBingo = async () => {
     if (!room?.id) return;
     if (!bingoClaimable) {
+      if (markingNumber !== null) {
+        setAutoClaimRequested(true);
+        setNotice("Finishing your last mark... Bingo will claim automatically.");
+        return;
+      }
       setNotice("Mark called numbers first.");
       return;
     }
 
+    setAutoClaimRequested(false);
     setClaimingBingo(true);
     setError("");
     try {
@@ -1106,8 +1124,8 @@ export default function App() {
         setDashboard((prev) => (prev ? { ...prev, wallet: paidWallet } : prev));
       }
       setNotice(res.message);
-      await refreshHistory();
-      await refreshBetHistory();
+      void refreshHistory();
+      void refreshBetHistory();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to claim bingo");
     } finally {

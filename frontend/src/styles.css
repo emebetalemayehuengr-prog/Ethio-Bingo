@@ -2235,11 +2235,12 @@ body {
 
 .game-top-row.compact .countdown {
   margin: 0;
-  min-width: 106px;
+  min-width: 112px;
   text-align: center;
-  font-size: clamp(1.72rem, 3.7vw, 2.8rem);
+  font-size: clamp(1.88rem, 3.9vw, 2.95rem);
   font-family: "Teko", sans-serif;
   letter-spacing: 0.06em;
+  line-height: 0.92;
 }
 
 .game-top-row.compact .stake-chip {
@@ -2916,8 +2917,9 @@ body {
 
 .cartella-pill.countdown {
   font-family: "Teko", sans-serif;
-  font-size: 1.28rem;
+  font-size: 1.34rem;
   letter-spacing: 0.03em;
+  line-height: 1;
 }
 
 .cartella-pill.stake {
@@ -3091,7 +3093,8 @@ body {
 
   .game-top-row.compact .countdown {
     width: 100%;
-    font-size: clamp(1.86rem, 9.6vw, 2.7rem);
+    font-size: clamp(2.02rem, 10.2vw, 2.95rem);
+    line-height: 0.9;
   }
 
   .game-top-row.compact .stake-chip {
@@ -3142,7 +3145,7 @@ body {
   }
 
   .cartella-pill.countdown {
-    font-size: 1.1rem;
+    font-size: 1.16rem;
   }
 
   .cartella-pill.stake {
