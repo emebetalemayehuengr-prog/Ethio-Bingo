@@ -204,6 +204,22 @@ class WithdrawRequest(BaseModel):
     amount: int = Field(gt=2, le=50000)
 
 
+class CasinoGameItem(BaseModel):
+    id: str
+    title: str
+    description: str
+    min_bet: float
+    max_bet: float
+    max_multiplier: float
+    volatility: Literal["low", "medium", "high"]
+    provider: str = "OpenSource Casino 8.5"
+
+
+class CasinoPlayRequest(BaseModel):
+    game_id: str = Field(min_length=2, max_length=80)
+    stake: float = Field(gt=0, le=10000)
+
+
 class WithdrawTicket(BaseModel):
     id: str
     phone_number: str
@@ -424,6 +440,92 @@ FAQ_ITEMS = [
         "answer": "Use Withdraw, add your bank details, request amount, verify OTP, then submit your withdrawal.",
     },
 ]
+
+CASINO_GAMES: list[CasinoGameItem] = [
+    CasinoGameItem(
+        id="slots-megaways",
+        title="Slots Megaways",
+        description="Fast reel spins with stacked symbols and jackpot swings.",
+        min_bet=5.0,
+        max_bet=500.0,
+        max_multiplier=10.0,
+        volatility="high",
+    ),
+    CasinoGameItem(
+        id="roulette-euro",
+        title="European Roulette",
+        description="Single-zero roulette with high-risk payout spikes.",
+        min_bet=10.0,
+        max_bet=1000.0,
+        max_multiplier=20.0,
+        volatility="medium",
+    ),
+    CasinoGameItem(
+        id="blackjack-classic",
+        title="Blackjack Classic",
+        description="Classic 21 flow with steady medium volatility returns.",
+        min_bet=10.0,
+        max_bet=800.0,
+        max_multiplier=8.0,
+        volatility="low",
+    ),
+    CasinoGameItem(
+        id="baccarat-royal",
+        title="Baccarat Royal",
+        description="Banker versus player quick rounds with balanced odds.",
+        min_bet=10.0,
+        max_bet=900.0,
+        max_multiplier=9.0,
+        volatility="low",
+    ),
+    CasinoGameItem(
+        id="crash-orbit",
+        title="Crash Orbit",
+        description="Multiplier rush mode with explosive top-end payouts.",
+        min_bet=5.0,
+        max_bet=400.0,
+        max_multiplier=20.0,
+        volatility="high",
+    ),
+    CasinoGameItem(
+        id="mines-grid",
+        title="Mines Grid",
+        description="Reveal safe tiles and cash out before the mine hits.",
+        min_bet=5.0,
+        max_bet=350.0,
+        max_multiplier=12.0,
+        volatility="medium",
+    ),
+    CasinoGameItem(
+        id="hilo-cards",
+        title="Hi-Lo Cards",
+        description="Predict high or low swings for quick multiplier jumps.",
+        min_bet=5.0,
+        max_bet=300.0,
+        max_multiplier=6.0,
+        volatility="medium",
+    ),
+    CasinoGameItem(
+        id="lucky-dice",
+        title="Lucky Dice",
+        description="Two-dice instant rounds with frequent outcomes.",
+        min_bet=5.0,
+        max_bet=300.0,
+        max_multiplier=6.0,
+        volatility="low",
+    ),
+]
+
+CASINO_PAYOUT_TABLES: dict[str, list[tuple[float, float]]] = {
+    "slots-megaways": [(0.56, 0.0), (0.26, 1.4), (0.12, 2.2), (0.05, 4.0), (0.01, 10.0)],
+    "roulette-euro": [(0.64, 0.0), (0.26, 2.0), (0.08, 3.0), (0.018, 8.0), (0.002, 20.0)],
+    "blackjack-classic": [(0.52, 0.0), (0.32, 1.8), (0.13, 2.2), (0.025, 3.5), (0.005, 8.0)],
+    "baccarat-royal": [(0.57, 0.0), (0.31, 1.9), (0.10, 2.4), (0.018, 4.0), (0.002, 9.0)],
+    "crash-orbit": [(0.70, 0.0), (0.17, 2.0), (0.09, 3.0), (0.03, 5.0), (0.009, 10.0), (0.001, 20.0)],
+    "mines-grid": [(0.62, 0.0), (0.24, 1.7), (0.10, 2.6), (0.035, 5.0), (0.005, 12.0)],
+    "hilo-cards": [(0.56, 0.0), (0.36, 1.9), (0.07, 2.5), (0.01, 6.0)],
+    "lucky-dice": [(0.53, 0.0), (0.39, 1.85), (0.07, 2.8), (0.01, 6.0)],
+}
 
 CARTELLA_TOTAL = 200
 CALL_INTERVAL_SECONDS = 5.0
@@ -1175,6 +1277,25 @@ def find_deposit_method(method_code: Literal["telebirr", "cbebirr"]) -> DepositM
     if method is None:
         raise HTTPException(status_code=404, detail="Deposit method not found")
     return method
+
+
+def get_casino_game_or_404(game_id: str) -> CasinoGameItem:
+    normalized_game_id = game_id.strip().lower()
+    game = next((item for item in CASINO_GAMES if item.id == normalized_game_id), None)
+    if game is None:
+        raise HTTPException(status_code=404, detail="Casino game not found")
+    return game
+
+
+def roll_casino_multiplier(game_id: str) -> float:
+    payout_table = CASINO_PAYOUT_TABLES.get(game_id, [(1.0, 0.0)])
+    roll = randint(1, 1_000_000) / 1_000_000
+    cumulative = 0.0
+    for chance, multiplier in payout_table:
+        cumulative += max(0.0, chance)
+        if roll <= cumulative:
+            return max(0.0, multiplier)
+    return max(0.0, payout_table[-1][1])
 
 
 def record_transaction(
@@ -2454,6 +2575,7 @@ def dashboard(user: UserStore = Depends(get_current_user)) -> dict:
         "games": [
             {"id": "bingo", "title": "Bingo Game", "description": "Classic live bingo room", "cta": "Play"},
             {"id": "spin", "title": "Spin Game", "description": "Quick spin mini game", "cta": "Play"},
+            {"id": "casino", "title": "Casino Games", "description": "Wallet-linked casino games", "cta": "Play"},
         ],
     }
 
@@ -2700,6 +2822,53 @@ def withdraw_balance(payload: WithdrawRequest, user: UserStore = Depends(get_cur
         "wallet": user.wallet.model_dump(),
         "request_id": ticket.id,
         "email_notified": email_notified,
+    }
+
+
+@app.get("/api/casino/games")
+def casino_games(user: UserStore = Depends(get_current_user)) -> dict:
+    return {"items": [game.model_dump() for game in CASINO_GAMES]}
+
+
+@app.post("/api/casino/play")
+def casino_play(payload: CasinoPlayRequest, user: UserStore = Depends(get_current_user)) -> dict:
+    game = get_casino_game_or_404(payload.game_id)
+    stake = round(float(payload.stake), 2)
+    if stake < game.min_bet or stake > game.max_bet:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Stake for {game.title} must be between ETB {game.min_bet:.2f} and ETB {game.max_bet:.2f}.",
+        )
+    if user.wallet.main_balance < stake:
+        raise HTTPException(status_code=400, detail="Insufficient balance")
+
+    user.wallet.main_balance = round(user.wallet.main_balance - stake, 2)
+    record_transaction(user, "Bet", stake, "Completed")
+
+    multiplier = round(roll_casino_multiplier(game.id), 4)
+    payout = round(stake * multiplier, 2)
+    if payout > 0:
+        user.wallet.main_balance = round(user.wallet.main_balance + payout, 2)
+        record_transaction(user, "Win", payout, "Completed")
+
+    net = round(payout - stake, 2)
+    outcome: Literal["win", "lose"] = "win" if payout > 0 else "lose"
+    persist_users()
+
+    direction = "won" if net >= 0 else "lost"
+    return {
+        "message": f"{game.title} round finished. You {direction} ETB {abs(net):.2f}.",
+        "wallet": user.wallet.model_dump(),
+        "result": {
+            "game_id": game.id,
+            "game_title": game.title,
+            "stake": stake,
+            "multiplier": multiplier,
+            "payout": payout,
+            "net": net,
+            "outcome": outcome,
+            "played_at": utc_now().replace(microsecond=0).isoformat(),
+        },
     }
 
 

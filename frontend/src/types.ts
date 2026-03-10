@@ -47,6 +47,28 @@ export type DepositMethod = {
   receipt_example: string;
 };
 
+export type CasinoGame = {
+  id: string;
+  title: string;
+  description: string;
+  min_bet: number;
+  max_bet: number;
+  max_multiplier: number;
+  volatility: "low" | "medium" | "high";
+  provider: string;
+};
+
+export type CasinoPlayResult = {
+  game_id: string;
+  game_title: string;
+  stake: number;
+  multiplier: number;
+  payout: number;
+  net: number;
+  outcome: "win" | "lose";
+  played_at: string;
+};
+
 export type WithdrawTicket = {
   id: string;
   phone_number: string;

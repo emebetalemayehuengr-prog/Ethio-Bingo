@@ -3,6 +3,7 @@ import {
   approveAdminWithdrawRequest,
   claimBingo,
   clearAuthToken,
+  fetchCasinoGames,
   fetchAdminWithdrawRequests,
   fetchBetHistory,
   fetchDashboard,
@@ -20,6 +21,7 @@ import {
   setAuthToken,
   signup as signupRequest,
   submitDeposit,
+  playCasinoGame,
   submitTransfer,
   submitWithdraw,
   syncRoom,
@@ -29,6 +31,8 @@ import type {
   AuthResponse,
   BetHistoryRecord,
   BingoCard,
+  CasinoGame,
+  CasinoPlayResult,
   DashboardResponse,
   DepositMethod,
   RoomState,
@@ -40,7 +44,7 @@ import type {
 } from "./types";
 
 type AuthMode = "login" | "signup";
-type ServiceView = "home" | "stakes" | "game" | "wallet" | "history" | "how" | "contact";
+type ServiceView = "home" | "stakes" | "game" | "casino" | "wallet" | "history" | "how" | "contact";
 type CartellaStep = "pick" | "preview";
 type WalletTab = "deposit" | "withdraw" | "transfer" | "history" | "admin";
 
@@ -53,6 +57,7 @@ const services: Array<{ view: ServiceView; label: string }> = [
   { view: "home", label: "Home" },
   { view: "stakes", label: "Bingo Game" },
   { view: "game", label: "Live Game" },
+  { view: "casino", label: "Casino Games" },
   { view: "wallet", label: "Wallet" },
   { view: "history", label: "History" },
   { view: "how", label: "How To Play" },
@@ -426,6 +431,11 @@ export default function App() {
   const [history, setHistory] = useState<TransactionRecord[]>([]);
   const [betHistory, setBetHistory] = useState<BetHistoryRecord[]>([]);
   const [selectedBet, setSelectedBet] = useState<BetHistoryRecord | null>(null);
+  const [casinoGames, setCasinoGames] = useState<CasinoGame[]>([]);
+  const [casinoGameId, setCasinoGameId] = useState("");
+  const [casinoBetAmount, setCasinoBetAmount] = useState("10");
+  const [casinoPlaying, setCasinoPlaying] = useState(false);
+  const [casinoResult, setCasinoResult] = useState<CasinoPlayResult | null>(null);
   const [service, setService] = useState<ServiceView>("home");
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -472,6 +482,10 @@ export default function App() {
   const selectedMethod = useMemo(
     () => dashboard?.deposit_methods.find((method) => method.code === methodCode) ?? null,
     [dashboard, methodCode],
+  );
+  const selectedCasinoGame = useMemo(
+    () => casinoGames.find((item) => item.id === casinoGameId) ?? null,
+    [casinoGames, casinoGameId],
   );
   const paidSet = useMemo(() => new Set(pickerRoom?.paid_cartellas ?? []), [pickerRoom]);
   const simulatedPaidSet = useMemo(() => new Set(pickerRoom?.simulated_paid_cartellas ?? []), [pickerRoom]);
@@ -569,6 +583,9 @@ export default function App() {
       setDrawerOpen(false);
       return;
     }
+    if (next === "casino" && !casinoGames.length) {
+      void refreshCasinoCatalog();
+    }
     setService(next);
     setDrawerOpen(false);
   };
@@ -595,6 +612,16 @@ export default function App() {
     setBetHistory(data.items);
   };
 
+  const refreshCasinoCatalog = async () => {
+    try {
+      const data = await fetchCasinoGames();
+      setCasinoGames(data.items);
+      setCasinoGameId((current) => (current && data.items.some((item) => item.id === current) ? current : (data.items[0]?.id ?? "")));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load casino games");
+    }
+  };
+
   const refreshAdminWithdrawRequests = async () => {
     if (!profile?.is_admin) return;
     const data = await fetchAdminWithdrawRequests();
@@ -614,11 +641,18 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const [dash, hist, betHist] = await Promise.all([fetchDashboard(), fetchHistory(), safeFetchBetHistory()]);
+      const [dash, hist, betHist, casino] = await Promise.all([
+        fetchDashboard(),
+        fetchHistory(),
+        safeFetchBetHistory(),
+        fetchCasinoGames().catch(() => ({ items: [] as CasinoGame[] })),
+      ]);
       setDashboard(dash);
       setProfile(dash.user);
       setHistory(hist.items);
       setBetHistory(betHist.items);
+      setCasinoGames(casino.items);
+      setCasinoGameId((current) => (current && casino.items.some((item) => item.id === current) ? current : (casino.items[0]?.id ?? "")));
       if (dash.deposit_methods.length > 0) {
         setMethodCode(dash.deposit_methods[0].code);
       }
@@ -913,6 +947,9 @@ export default function App() {
     setHistory([]);
     setBetHistory([]);
     setSelectedBet(null);
+    setCasinoGames([]);
+    setCasinoGameId("");
+    setCasinoResult(null);
     setRoom(null);
     setCards([]);
     setSelectedCardNo(null);
@@ -1114,6 +1151,36 @@ export default function App() {
     }
   };
 
+  const onPlayCasino = async () => {
+    if (!selectedCasinoGame) {
+      setError("Casino games are not available yet.");
+      return;
+    }
+    setCasinoPlaying(true);
+    setError("");
+    try {
+      const stake = Number(casinoBetAmount);
+      if (!stake || stake <= 0) throw new Error("Enter a valid stake amount.");
+      if (stake < selectedCasinoGame.min_bet || stake > selectedCasinoGame.max_bet) {
+        throw new Error(
+          `Stake for ${selectedCasinoGame.title} must be between ETB ${selectedCasinoGame.min_bet.toFixed(2)} and ETB ${selectedCasinoGame.max_bet.toFixed(2)}.`,
+        );
+      }
+      const res = await playCasinoGame({
+        game_id: selectedCasinoGame.id,
+        stake,
+      });
+      setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
+      setCasinoResult(res.result);
+      setNotice(res.message);
+      await refreshHistory();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Casino play failed");
+    } finally {
+      setCasinoPlaying(false);
+    }
+  };
+
   const onSaveDepositAccounts = async (methodCodeToSave: "telebirr" | "cbebirr") => {
     const draft = adminDraftAccounts[methodCodeToSave] ?? [];
     const cleaned = draft
@@ -1296,6 +1363,9 @@ export default function App() {
           : `Next game opens in ${Math.max(0, pickerRoom?.announcement_seconds ?? 0)}s`;
   const cardBuyAmount = selectedStake?.stake ?? pickerRoom?.card_price ?? 0;
   const insufficientCardBalance = cardBuyAmount > 0 && wallet.main_balance < cardBuyAmount;
+  const casinoStakeValue = Number(casinoBetAmount);
+  const invalidCasinoStake = !casinoStakeValue || casinoStakeValue <= 0;
+  const insufficientCasinoBalance = !invalidCasinoStake && casinoStakeValue > wallet.main_balance;
   const latestBallLetter = typeof room?.latest_number === "number" ? toBingoLetter(room.latest_number) : null;
   const latestBallClass = latestBallLetter ? `call-${latestBallLetter.toLowerCase()}` : "call-idle";
   const renderBoughtCard = (ownedCard: BingoCard, rail: "desktop" | "panel" = "desktop") => {
@@ -1418,6 +1488,13 @@ export default function App() {
                 <h3>Live Game</h3>
                 <p>After countdown, players mark called numbers by clicking.</p>
                 <button className="primary-btn" type="button" onClick={() => openService("game")}>
+                  Open
+                </button>
+              </article>
+              <article className="service-card">
+                <h3>Casino Games</h3>
+                <p>Play quick casino rounds with the same Ethio Bingo wallet balance.</p>
+                <button className="primary-btn" type="button" onClick={() => openService("casino")}>
                   Open
                 </button>
               </article>
@@ -1615,6 +1692,118 @@ export default function App() {
                 )}
               </>
             )}
+          </section>
+        )}
+
+        {service === "casino" && (
+          <section className="panel casino-panel">
+            <h2>Casino Games</h2>
+            <p className="panel-subtitle">OpenSource Casino 8.5 lineup integrated with your Ethio Bingo wallet balance.</p>
+            <div className="casino-wallet-row">
+              <div className="balance-card">
+                <h3>Main Balance</h3>
+                <strong>{fmtEtb(wallet.main_balance)}</strong>
+              </div>
+              <div className="casino-wallet-actions">
+                <button
+                  className="secondary-btn"
+                  type="button"
+                  onClick={() => {
+                    setWalletTab("deposit");
+                    openService("wallet");
+                  }}
+                >
+                  Deposit
+                </button>
+                <button
+                  className="secondary-btn"
+                  type="button"
+                  onClick={() => {
+                    setWalletTab("withdraw");
+                    openService("wallet");
+                  }}
+                >
+                  Withdraw
+                </button>
+                <button className="secondary-btn" type="button" onClick={() => void refreshCasinoCatalog()}>
+                  Refresh Games
+                </button>
+              </div>
+            </div>
+
+            <div className="casino-game-grid">
+              {casinoGames.map((game) => {
+                const selected = selectedCasinoGame?.id === game.id;
+                return (
+                  <article key={game.id} className={`casino-game-card ${selected ? "selected" : ""}`}>
+                    <div className="casino-game-head">
+                      <h3>{game.title}</h3>
+                      <span className={`casino-volatility ${game.volatility}`}>{game.volatility}</span>
+                    </div>
+                    <p>{game.description}</p>
+                    <small>
+                      ETB {game.min_bet.toFixed(2)} - {game.max_bet.toFixed(2)} | Max x{game.max_multiplier.toFixed(1)}
+                    </small>
+                    <button className="secondary-btn" type="button" onClick={() => setCasinoGameId(game.id)}>
+                      {selected ? "Selected" : "Select"}
+                    </button>
+                  </article>
+                );
+              })}
+              {!casinoGames.length && (
+                <div className="empty-state">
+                  <h3>Casino catalog unavailable</h3>
+                  <p>Tap refresh to load game list from server.</p>
+                  <button className="primary-btn" type="button" onClick={() => void refreshCasinoCatalog()}>
+                    Retry
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="casino-play-panel">
+              <h3>{selectedCasinoGame ? `Play ${selectedCasinoGame.title}` : "Select a game to start"}</h3>
+              {selectedCasinoGame ? (
+                <div className="casino-play-form">
+                  <label>
+                    Stake (ETB)
+                    <input
+                      type="number"
+                      min={selectedCasinoGame.min_bet}
+                      max={selectedCasinoGame.max_bet}
+                      step="1"
+                      value={casinoBetAmount}
+                      onChange={(event) => setCasinoBetAmount(event.target.value)}
+                    />
+                  </label>
+                  <button
+                    className={`primary-btn ${insufficientCasinoBalance ? "insufficient-buy-btn" : ""}`}
+                    type="button"
+                    onClick={() => void onPlayCasino()}
+                    disabled={casinoPlaying || invalidCasinoStake || insufficientCasinoBalance}
+                  >
+                    {casinoPlaying
+                      ? "Playing..."
+                      : insufficientCasinoBalance
+                        ? "Insufficient Balance"
+                        : `Play ${selectedCasinoGame.title}`}
+                  </button>
+                </div>
+              ) : (
+                <p className="panel-subtitle">Choose any game card above to begin.</p>
+              )}
+              {casinoResult && (
+                <div className={`casino-result ${casinoResult.outcome}`}>
+                  <strong>
+                    {casinoResult.outcome === "win" ? "Win" : "Loss"}: {fmtEtb(casinoResult.net)}
+                  </strong>
+                  <span>
+                    {casinoResult.game_title} | Stake {fmtEtb(casinoResult.stake)} | x{casinoResult.multiplier.toFixed(2)} | Payout{" "}
+                    {fmtEtb(casinoResult.payout)}
+                  </span>
+                </div>
+              )}
+            </div>
           </section>
         )}
 
