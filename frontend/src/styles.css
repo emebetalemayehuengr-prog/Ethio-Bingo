@@ -1560,28 +1560,33 @@ body {
 .stake-head-row {
   display: grid;
   grid-template-columns: 1.1fr 1fr 1fr 0.9fr;
-  gap: 10px;
-  border-radius: 14px;
+  gap: 8px;
+  border-radius: 12px;
   background: rgba(42, 56, 98, 0.9);
-  padding: 16px 30px;
+  padding: 9px 14px;
   font-family: "Teko", sans-serif;
-  font-size: 2rem;
+  font-size: clamp(1.1rem, 2.7vw, 1.5rem);
+  line-height: 0.9;
+}
+
+.stake-head-row span {
+  white-space: nowrap;
 }
 
 .stake-list {
-  margin-top: 12px;
+  margin-top: 6px;
   display: grid;
-  gap: 10px;
+  gap: 6px;
 }
 
 .stake-row {
   position: relative;
   display: grid;
   grid-template-columns: 1.1fr 1fr 1fr 0.9fr;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
-  border-radius: 16px;
-  padding: 10px 20px;
+  border-radius: 12px;
+  padding: 6px 12px;
   background: linear-gradient(90deg, rgba(200, 201, 225, 0.35), rgba(166, 168, 197, 0.16));
 }
 
@@ -1591,7 +1596,9 @@ body {
 
 .stake-col {
   font-family: "Teko", sans-serif;
-  font-size: 2rem;
+  font-size: clamp(1.08rem, 2.6vw, 1.45rem);
+  line-height: 0.95;
+  white-space: nowrap;
 }
 
 .stake-col.status.playing {
@@ -1613,7 +1620,7 @@ body {
 .bonus-tag {
   position: absolute;
   left: -40px;
-  top: -12px;
+  top: -10px;
   transform: rotate(-15deg);
   background: #f7d128;
   color: #2d1f47;
@@ -1626,9 +1633,11 @@ body {
 
 .stake-row .join-btn {
   justify-self: end;
-  min-width: 160px;
-  min-height: 48px;
-  font-size: 2rem;
+  min-width: 112px;
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 1.22rem;
+  line-height: 0.9;
   font-family: "Teko", sans-serif;
 }
 
@@ -1682,18 +1691,40 @@ body {
     padding: 14px 10px 90px;
   }
 
+  .stake-panel {
+    padding: 8px 8px 6px;
+    gap: 5px;
+  }
+
+  .stake-panel h2 {
+    margin-bottom: 2px;
+    font-size: 1.45rem;
+  }
+
   .stake-head-row,
   .stake-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 0.95fr 0.85fr 1fr 0.72fr;
+    gap: 6px;
+    padding-left: 8px;
+    padding-right: 8px;
+    min-height: 38px;
+  }
+
+  .stake-head-row {
+    font-size: 0.95rem;
   }
 
   .stake-row .join-btn {
-    width: 100%;
-    justify-self: stretch;
+    width: auto;
+    justify-self: end;
+    min-width: 70px;
+    min-height: 30px;
+    padding: 4px 8px;
+    font-size: 0.98rem;
   }
 
   .stake-col {
-    font-size: 1.5rem;
+    font-size: 1.02rem;
   }
 
   .bonus-tag {
@@ -1992,6 +2023,18 @@ body {
   margin: 0 0 10px;
   font-family: "Teko", sans-serif;
   font-size: 2rem;
+}
+
+.stake-panel {
+  padding: 10px 12px 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.stake-panel h2 {
+  margin: 0 0 4px;
+  font-size: clamp(1.45rem, 4.2vw, 1.95rem);
+  line-height: 0.95;
 }
 
 .home-grid {
