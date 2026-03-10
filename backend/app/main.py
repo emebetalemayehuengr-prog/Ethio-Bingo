@@ -13,6 +13,7 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from html import escape
 from pathlib import Path
 from random import Random, randint, sample, shuffle
 from typing import Literal
@@ -30,6 +31,7 @@ except Exception:  # pragma: no cover - optional dependency for postgres runtime
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from .postgres_store import PostgresStateStore, read_sqlite_state
@@ -225,6 +227,11 @@ class CasinoLaunchRequest(BaseModel):
     device: Literal["mobile", "desktop", "auto"] = "auto"
     locale: str = Field(default="en", min_length=2, max_length=16)
     return_url: str | None = Field(default=None, max_length=500)
+
+
+class CasinoLaunchPlayRequest(BaseModel):
+    launch_id: str = Field(min_length=8, max_length=120)
+    stake: float = Field(gt=0, le=10000)
 
 
 class WithdrawTicket(BaseModel):
@@ -637,7 +644,7 @@ except ValueError:
     SIGNUP_INITIAL_BONUS_BALANCE = 0.0
 
 CASINO_PROVIDER_NAME = os.getenv("CASINO_PROVIDER_NAME", "Booming").strip() or "Booming"
-CASINO_PROVIDER_MODE = os.getenv("CASINO_PROVIDER_MODE", "demo").strip().lower()
+CASINO_PROVIDER_MODE = os.getenv("CASINO_PROVIDER_MODE", "selfhosted").strip().lower()
 CASINO_LAUNCH_API_URL = os.getenv("CASINO_LAUNCH_API_URL", "").strip()
 CASINO_PROVIDER_OPERATOR_ID = os.getenv("CASINO_PROVIDER_OPERATOR_ID", "ethio-bingo").strip() or "ethio-bingo"
 CASINO_PROVIDER_API_KEY = os.getenv("CASINO_PROVIDER_API_KEY", "").strip()
@@ -1359,6 +1366,307 @@ def prune_expired_casino_launches() -> None:
             expired.append(launch_id)
     for launch_id in expired:
         CASINO_LAUNCH_SESSIONS.pop(launch_id, None)
+
+
+def get_casino_launch_session_or_404(launch_id: str) -> dict[str, str]:
+    prune_expired_casino_launches()
+    launch = CASINO_LAUNCH_SESSIONS.get(launch_id)
+    if launch is None:
+        raise HTTPException(status_code=404, detail="Casino launch session expired")
+    expires_at = parse_iso_datetime(launch.get("expires_at"))
+    if expires_at is None or expires_at <= utc_now():
+        CASINO_LAUNCH_SESSIONS.pop(launch_id, None)
+        raise HTTPException(status_code=404, detail="Casino launch session expired")
+    return launch
+
+
+def build_selfhosted_casino_launch_url(request: Request, game: CasinoGameItem, launch_id: str) -> str:
+    base = str(request.base_url).rstrip("/")
+    return f"{base}/casino/selfhosted/{game.id}?launch_id={launch_id}"
+
+
+def build_selfhosted_game_html(game: CasinoGameItem, launch_id: str) -> str:
+    template = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>__TITLE__</title>
+  <style>
+    :root {
+      --bg: #090d19;
+      --panel: #121a2d;
+      --ink: #edf2ff;
+      --muted: #b8c3de;
+      --accent: #ffd400;
+      --accent-ink: #4a1570;
+      --danger: #ff5a74;
+      --ok: #4ad17f;
+      --soft: #1c2744;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at 20% -20%, rgba(255, 212, 0, 0.18), transparent 36%), var(--bg);
+      color: var(--ink);
+      font-family: Segoe UI, Arial, sans-serif;
+    }
+    .wrap {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 10px;
+      padding: 12px;
+    }
+    .top {
+      display: grid;
+      gap: 8px;
+      background: var(--panel);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 14px;
+      padding: 12px;
+    }
+    .title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .title h1 {
+      margin: 0;
+      font-size: clamp(1.1rem, 4.6vw, 1.5rem);
+    }
+    .provider {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    .meta span {
+      background: rgba(255,255,255,0.07);
+      border-radius: 999px;
+      padding: 6px 10px;
+    }
+    .play {
+      background: var(--panel);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 14px;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+    .play-grid {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: end;
+    }
+    .play label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    .play input {
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 10px;
+      background: #f8fbff;
+      color: #161b29;
+      padding: 10px 12px;
+      font-size: 1rem;
+    }
+    .btn {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-weight: 700;
+      cursor: pointer;
+      background: var(--accent);
+      color: var(--accent-ink);
+      min-width: 108px;
+      height: 44px;
+    }
+    .btn:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+    .stage {
+      margin-top: 4px;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: linear-gradient(170deg, #172344, #111a34);
+      min-height: 220px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 12px;
+    }
+    .reels {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      margin-bottom: 10px;
+    }
+    .reel {
+      width: clamp(52px, 16vw, 72px);
+      aspect-ratio: 1;
+      border-radius: 12px;
+      background: var(--soft);
+      border: 1px solid rgba(255,255,255,0.18);
+      display: grid;
+      place-items: center;
+      font-size: clamp(1.2rem, 5vw, 1.9rem);
+      font-weight: 700;
+    }
+    .wallet {
+      font-size: 0.95rem;
+      color: var(--muted);
+    }
+    .wallet strong {
+      color: var(--ink);
+      font-size: 1.15rem;
+    }
+    .msg {
+      border-radius: 10px;
+      padding: 10px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      background: rgba(255,255,255,0.05);
+    }
+    .msg.ok { color: var(--ok); border: 1px solid rgba(74,209,127,0.45); }
+    .msg.err { color: var(--danger); border: 1px solid rgba(255,90,116,0.45); }
+    .foot {
+      color: var(--muted);
+      font-size: 0.82rem;
+      text-align: center;
+      padding-bottom: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="top">
+      <div class="title">
+        <h1>__TITLE__</h1>
+        <span class="provider">__PROVIDER__</span>
+      </div>
+      <div class="meta">
+        <span>Volatility: __VOLATILITY__</span>
+        <span>Min Bet: ETB __MIN_BET__</span>
+        <span>Max Bet: ETB __MAX_BET__</span>
+        <span>Max Win: x__MAX_MULTIPLIER__</span>
+      </div>
+    </section>
+
+    <section class="play">
+      <p style="margin:0;color:var(--muted)">__DESCRIPTION__</p>
+      <div class="play-grid">
+        <label>
+          Stake (ETB)
+          <input id="stakeInput" type="number" min="__MIN_BET__" max="__MAX_BET__" step="0.01" value="__MIN_BET__" />
+        </label>
+        <button id="playBtn" class="btn" type="button">Play Round</button>
+      </div>
+      <div class="wallet">Wallet Balance: ETB <strong id="walletValue">--</strong></div>
+      <div id="message" class="msg">Press Play Round to start.</div>
+      <div class="stage">
+        <div>
+          <div class="reels">
+            <div class="reel" id="r1">?</div>
+            <div class="reel" id="r2">?</div>
+            <div class="reel" id="r3">?</div>
+          </div>
+          <div id="resultLine" style="color:var(--muted)">Waiting for your first round...</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="foot">Self-hosted mode. Payout settles from Ethio Bingo wallet in real-time.</div>
+  </div>
+  <script>
+    const launchId = "__LAUNCH_ID__";
+    const minBet = Number("__MIN_BET__");
+    const maxBet = Number("__MAX_BET__");
+    const symbols = ["7", "A", "K", "Q", "J", "$", "#", "*"];
+    const stakeInput = document.getElementById("stakeInput");
+    const playBtn = document.getElementById("playBtn");
+    const walletValue = document.getElementById("walletValue");
+    const message = document.getElementById("message");
+    const resultLine = document.getElementById("resultLine");
+    const reels = [document.getElementById("r1"), document.getElementById("r2"), document.getElementById("r3")];
+
+    function setMessage(text, tone) {
+      message.textContent = text;
+      message.className = "msg " + (tone || "");
+    }
+
+    function spinVisual() {
+      reels.forEach((item, idx) => {
+        setTimeout(() => {
+          item.textContent = symbols[Math.floor(Math.random() * symbols.length)];
+        }, idx * 120);
+      });
+    }
+
+    async function playRound() {
+      const stake = Number(stakeInput.value);
+      if (!Number.isFinite(stake)) {
+        setMessage("Enter a valid stake amount.", "err");
+        return;
+      }
+      if (stake < minBet || stake > maxBet) {
+        setMessage(`Stake must be between ETB ${minBet.toFixed(2)} and ETB ${maxBet.toFixed(2)}.`, "err");
+        return;
+      }
+
+      playBtn.disabled = true;
+      setMessage("Playing round...", "");
+      spinVisual();
+      try {
+        const response = await fetch("/api/casino/play-launch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ launch_id: launchId, stake }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload?.detail || "Unable to play round.");
+        }
+        const balance = Number(payload?.wallet?.main_balance ?? 0);
+        walletValue.textContent = balance.toFixed(2);
+        setMessage(payload.message || "Round finished.", payload?.result?.outcome === "win" ? "ok" : "");
+        const net = Number(payload?.result?.net ?? 0);
+        resultLine.textContent = `Result: ${net >= 0 ? "WIN" : "LOSS"} ETB ${Math.abs(net).toFixed(2)} | x${Number(payload?.result?.multiplier ?? 0).toFixed(2)}`;
+      } catch (error) {
+        const text = error instanceof Error ? error.message : "Unable to play round.";
+        setMessage(text, "err");
+      } finally {
+        playBtn.disabled = false;
+      }
+    }
+
+    playBtn.addEventListener("click", playRound);
+  </script>
+</body>
+</html>
+"""
+    return (
+        template.replace("__TITLE__", escape(game.title))
+        .replace("__PROVIDER__", escape(CASINO_PROVIDER_NAME))
+        .replace("__DESCRIPTION__", escape(game.description))
+        .replace("__VOLATILITY__", escape(game.volatility))
+        .replace("__MIN_BET__", f"{game.min_bet:.2f}")
+        .replace("__MAX_BET__", f"{game.max_bet:.2f}")
+        .replace("__MAX_MULTIPLIER__", f"{game.max_multiplier:.2f}")
+        .replace("__LAUNCH_ID__", escape(launch_id))
+    )
 
 
 def request_external_casino_launch_url(
@@ -2969,22 +3277,67 @@ def casino_games(user: UserStore = Depends(get_current_user)) -> dict:
     return {"items": [game.model_dump() for game in CASINO_GAMES]}
 
 
+def settle_casino_round(user: UserStore, game: CasinoGameItem, stake_value: float) -> dict:
+    stake = round(float(stake_value), 2)
+    if stake < game.min_bet or stake > game.max_bet:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Stake for {game.title} must be between ETB {game.min_bet:.2f} and ETB {game.max_bet:.2f}.",
+        )
+    if user.wallet.main_balance < stake:
+        raise HTTPException(status_code=400, detail="Insufficient balance")
+
+    user.wallet.main_balance = round(user.wallet.main_balance - stake, 2)
+    record_transaction(user, "Bet", stake, "Completed")
+
+    multiplier = round(roll_casino_multiplier(game.id), 4)
+    payout = round(stake * multiplier, 2)
+    if payout > 0:
+        user.wallet.main_balance = round(user.wallet.main_balance + payout, 2)
+        record_transaction(user, "Win", payout, "Completed")
+
+    net = round(payout - stake, 2)
+    outcome: Literal["win", "lose"] = "win" if payout > 0 else "lose"
+    persist_users()
+
+    direction = "won" if net >= 0 else "lost"
+    return {
+        "message": f"{game.title} round finished. You {direction} ETB {abs(net):.2f}.",
+        "wallet": user.wallet.model_dump(),
+        "result": {
+            "game_id": game.id,
+            "game_title": game.title,
+            "stake": stake,
+            "multiplier": multiplier,
+            "payout": payout,
+            "net": net,
+            "outcome": outcome,
+            "played_at": utc_now().replace(microsecond=0).isoformat(),
+        },
+    }
+
+
 @app.post("/api/casino/launch")
-def casino_launch(payload: CasinoLaunchRequest, user: UserStore = Depends(get_current_user)) -> dict:
+def casino_launch(payload: CasinoLaunchRequest, request: Request, user: UserStore = Depends(get_current_user)) -> dict:
     game = get_casino_game_or_404(payload.game_id)
     prune_expired_casino_launches()
     launch_id = secrets.token_urlsafe(18)
+    mode_key = CASINO_PROVIDER_MODE or "selfhosted"
 
-    if CASINO_PROVIDER_MODE != "external":
+    if mode_key == "external":
+        launch_url, mode = request_external_casino_launch_url(payload, user, game, launch_id)
+    elif mode_key in {"selfhosted", "self-hosted", "free", "oss", "opensource"}:
+        launch_url = build_selfhosted_casino_launch_url(request, game, launch_id)
+        mode = "iframe"
+    else:
         raise HTTPException(
             status_code=503,
             detail=(
-                "Casino provider mode is not external. "
-                "Configure CASINO_PROVIDER_MODE=external and provider launch settings."
+                f"Unsupported CASINO_PROVIDER_MODE '{CASINO_PROVIDER_MODE}'. "
+                "Use 'selfhosted' or 'external'."
             ),
         )
 
-    launch_url, mode = request_external_casino_launch_url(payload, user, game, launch_id)
     now = utc_now().replace(microsecond=0)
     expires_at = now + timedelta(seconds=CASINO_LAUNCH_SESSION_SECONDS)
     CASINO_LAUNCH_SESSIONS[launch_id] = {
@@ -3007,6 +3360,31 @@ def casino_launch(payload: CasinoLaunchRequest, user: UserStore = Depends(get_cu
         "launch_url": launch_url,
         "expires_at": expires_at.isoformat(),
     }
+
+
+@app.get("/casino/selfhosted/{game_id}", response_class=HTMLResponse)
+def casino_selfhosted_page(game_id: str, launch_id: str) -> HTMLResponse:
+    launch = get_casino_launch_session_or_404(launch_id)
+    if launch.get("game_id") != game_id:
+        raise HTTPException(status_code=404, detail="Launch session does not match this game")
+    game = get_casino_game_or_404(game_id)
+    html = build_selfhosted_game_html(game, launch_id)
+    return HTMLResponse(content=html)
+
+
+@app.post("/api/casino/play-launch")
+def casino_play_launch(payload: CasinoLaunchPlayRequest) -> dict:
+    launch = get_casino_launch_session_or_404(payload.launch_id)
+    game_id = launch.get("game_id", "")
+    phone_number = launch.get("phone_number", "")
+    game = get_casino_game_or_404(game_id)
+    user = find_user_by_phone(phone_number)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Launch user not found")
+    settled = settle_casino_round(user, game, payload.stake)
+    launch["last_played_at"] = utc_now().replace(microsecond=0).isoformat()
+    launch["expires_at"] = (utc_now() + timedelta(seconds=CASINO_LAUNCH_SESSION_SECONDS)).replace(microsecond=0).isoformat()
+    return settled
 
 
 @app.post("/api/casino/webhook")
@@ -3107,43 +3485,7 @@ async def casino_webhook(
 @app.post("/api/casino/play")
 def casino_play(payload: CasinoPlayRequest, user: UserStore = Depends(get_current_user)) -> dict:
     game = get_casino_game_or_404(payload.game_id)
-    stake = round(float(payload.stake), 2)
-    if stake < game.min_bet or stake > game.max_bet:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Stake for {game.title} must be between ETB {game.min_bet:.2f} and ETB {game.max_bet:.2f}.",
-        )
-    if user.wallet.main_balance < stake:
-        raise HTTPException(status_code=400, detail="Insufficient balance")
-
-    user.wallet.main_balance = round(user.wallet.main_balance - stake, 2)
-    record_transaction(user, "Bet", stake, "Completed")
-
-    multiplier = round(roll_casino_multiplier(game.id), 4)
-    payout = round(stake * multiplier, 2)
-    if payout > 0:
-        user.wallet.main_balance = round(user.wallet.main_balance + payout, 2)
-        record_transaction(user, "Win", payout, "Completed")
-
-    net = round(payout - stake, 2)
-    outcome: Literal["win", "lose"] = "win" if payout > 0 else "lose"
-    persist_users()
-
-    direction = "won" if net >= 0 else "lost"
-    return {
-        "message": f"{game.title} round finished. You {direction} ETB {abs(net):.2f}.",
-        "wallet": user.wallet.model_dump(),
-        "result": {
-            "game_id": game.id,
-            "game_title": game.title,
-            "stake": stake,
-            "multiplier": multiplier,
-            "payout": payout,
-            "net": net,
-            "outcome": outcome,
-            "played_at": utc_now().replace(microsecond=0).isoformat(),
-        },
-    }
+    return settle_casino_round(user, game, payload.stake)
 
 
 @app.post("/api/game/preview")
