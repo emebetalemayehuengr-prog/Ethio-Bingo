@@ -2132,6 +2132,16 @@ body {
   font-weight: 600;
 }
 
+.casino-catalog-note {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(211, 35, 117, 0.12);
+  color: #772f58;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
 .casino-section-label.latest {
   margin-top: 0;
 }
@@ -2205,8 +2215,16 @@ body {
   font-weight: 700;
   color: #1e2332;
   background: #ffffff;
-  min-height: 44px;
+  min-height: 38px;
   line-height: 1.2;
+}
+
+.casino-card-meta {
+  padding: 0 9px 10px;
+  font-size: 0.78rem;
+  color: #4c5163;
+  background: #ffffff;
+  font-weight: 600;
 }
 
 .casino-exclusive-badge {
@@ -2249,6 +2267,32 @@ body {
 
 .casino-thumb {
   width: 100%;
+}
+
+.casino-play-modal {
+  max-width: 540px;
+  background: #0a2f5f;
+}
+
+.casino-play-cover {
+  width: 100%;
+  border-radius: 12px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: #111826;
+}
+
+.casino-play-desc {
+  margin: 10px 0 8px;
+  color: #eef2ff;
+}
+
+.casino-play-meta {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  color: #d6defa;
+  font-size: 0.9rem;
 }
 
 @media (min-width: 780px) {

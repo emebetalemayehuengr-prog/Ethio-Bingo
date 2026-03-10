@@ -5,6 +5,7 @@ import {
   clearAuthToken,
   fetchAdminWithdrawRequests,
   fetchBetHistory,
+  fetchCasinoGames,
   fetchDashboard,
   fetchHistory,
   fetchStakeRoom,
@@ -16,6 +17,7 @@ import {
   markPaidAdminWithdrawRequest,
   logout as logoutRequest,
   previewCard,
+  playCasinoGame,
   rejectAdminWithdrawRequest,
   setAuthToken,
   signup as signupRequest,
@@ -29,6 +31,7 @@ import type {
   AuthResponse,
   BetHistoryRecord,
   BingoCard,
+  CasinoGame,
   DashboardResponse,
   DepositMethod,
   RoomState,
@@ -43,6 +46,7 @@ type AuthMode = "login" | "signup";
 type ServiceView = "home" | "stakes" | "game" | "casino" | "wallet" | "history" | "how" | "contact";
 type CartellaStep = "pick" | "preview";
 type WalletTab = "deposit" | "withdraw" | "transfer" | "history" | "admin";
+type CasinoDisplayGame = CasinoGame & { image_url: string; exclusive?: boolean };
 
 const AUTH_PHONE_STORAGE_KEY = "ethio_bingo_auth_phone";
 const AUTH_PASSWORD_STORAGE_KEY = "ethio_bingo_auth_password";
@@ -77,27 +81,99 @@ const casinoTopCategories = [
   { id: "jackpot", title: "Jackpot Slots", subtitle: "Big Wins", icon: "777" },
   { id: "exclusive", title: "Exclusive", subtitle: "Members", icon: "VIP" },
 ];
-const casinoCircleGames = [
-  { id: "welcome-offer", title: "Welcome Offer", image_url: "/casino/welcome-offer.svg" },
-  { id: "claw-machine", title: "Claw Machine", image_url: "/casino/claw-machine.svg" },
-  { id: "win-wheel", title: "Win With The Wheel Sweepstakes", image_url: "/casino/win-wheel-sweepstakes.svg" },
-  { id: "power-up", title: "Pick A Power-Up", image_url: "/casino/pick-a-power-up.svg" },
-  { id: "roar-bear", title: "Roar of the Bear Megaways", image_url: "/casino/roar-bear.svg" },
-];
-const casinoFeaturedGames = [
-  { id: "super-hammer", title: "Super Hammer", image_url: "/casino/super-hammer.svg", exclusive: true },
-  { id: "walking-dead", title: "Walking Dead Collect Em", image_url: "/casino/walking-dead.svg", exclusive: true },
-  { id: "roar-bear", title: "Roar of the Bear", image_url: "/casino/roar-bear.svg", exclusive: true },
-  { id: "bankin-more-bacon", title: "Bankin More Bacon", image_url: "/casino/bankin-more-bacon.svg", exclusive: true },
-  { id: "treasure-drops", title: "Treasure Drops", image_url: "/casino/treasure-drops.svg", exclusive: true },
-];
-const casinoLatestGames = [
-  { id: "gates-of-olympus", title: "Gates of Olympus", image_url: "/casino/gates-of-olympus.svg" },
-  { id: "sweet-bonanza", title: "Sweet Bonanza", image_url: "/casino/sweet-bonanza.svg" },
-  { id: "wolf-gold", title: "Wolf Gold", image_url: "/casino/wolf-gold.svg" },
-  { id: "book-of-ra", title: "Book of Ra", image_url: "/casino/book-of-ra.svg" },
-  { id: "big-bass", title: "Big Bass Splash", image_url: "/casino/big-bass-splash.svg" },
-  { id: "blackjack", title: "Blackjack Classic", image_url: "/casino/blackjack-classic.svg" },
+const casinoImageById: Record<string, string> = {
+  "slots-megaways": "https://raw.githubusercontent.com/s0bvi/goldsvet-opensource/main/frontend/Default/ico/JokerSlotKA.jpg",
+  "roulette-euro": "https://raw.githubusercontent.com/s0bvi/goldsvet-opensource/main/frontend/Default/ico/RouletteClassicPT.jpg",
+  "blackjack-classic": "https://raw.githubusercontent.com/s0bvi/goldsvet-opensource/main/frontend/Default/ico/BlackJackAM.jpg",
+  "baccarat-royal": "https://raw.githubusercontent.com/s0bvi/goldsvet-opensource/main/frontend/Default/ico/CasinoHoldemPG.jpg",
+  "crash-orbit": "https://raw.githubusercontent.com/s0bvi/goldsvet-opensource/main/frontend/Default/ico/BillysGameAM.jpg",
+  "mines-grid": "https://raw.githubusercontent.com/s0bvi/goldsvet-opensource/main/frontend/Default/ico/GameOfLuckEGT.jpg",
+  "hilo-cards": "https://raw.githubusercontent.com/s0bvi/goldsvet-opensource/main/frontend/Default/ico/MoneyGame.jpg",
+  "lucky-dice": "https://raw.githubusercontent.com/s0bvi/goldsvet-opensource/main/frontend/Default/ico/VirtualRouletteEGT.jpg",
+};
+const fallbackCasinoImage =
+  "https://raw.githubusercontent.com/s0bvi/goldsvet-opensource/main/frontend/Default/img/casino1.png";
+const fallbackCasinoGames: CasinoGame[] = [
+  {
+    id: "slots-megaways",
+    title: "Slots Megaways",
+    description: "Fast reel spins with stacked symbols and jackpot swings.",
+    min_bet: 5,
+    max_bet: 500,
+    max_multiplier: 10,
+    volatility: "high",
+    provider: "OpenSource Casino 8.5",
+  },
+  {
+    id: "roulette-euro",
+    title: "European Roulette",
+    description: "Single-zero roulette with high-risk payout spikes.",
+    min_bet: 10,
+    max_bet: 1000,
+    max_multiplier: 20,
+    volatility: "medium",
+    provider: "OpenSource Casino 8.5",
+  },
+  {
+    id: "blackjack-classic",
+    title: "Blackjack Classic",
+    description: "Classic 21 flow with steady medium volatility returns.",
+    min_bet: 10,
+    max_bet: 800,
+    max_multiplier: 8,
+    volatility: "low",
+    provider: "OpenSource Casino 8.5",
+  },
+  {
+    id: "baccarat-royal",
+    title: "Baccarat Royal",
+    description: "Banker versus player quick rounds with balanced odds.",
+    min_bet: 10,
+    max_bet: 900,
+    max_multiplier: 9,
+    volatility: "low",
+    provider: "OpenSource Casino 8.5",
+  },
+  {
+    id: "crash-orbit",
+    title: "Crash Orbit",
+    description: "Multiplier rush mode with explosive top-end payouts.",
+    min_bet: 5,
+    max_bet: 400,
+    max_multiplier: 20,
+    volatility: "high",
+    provider: "OpenSource Casino 8.5",
+  },
+  {
+    id: "mines-grid",
+    title: "Mines Grid",
+    description: "Reveal safe tiles and cash out before the mine hits.",
+    min_bet: 5,
+    max_bet: 350,
+    max_multiplier: 12,
+    volatility: "medium",
+    provider: "OpenSource Casino 8.5",
+  },
+  {
+    id: "hilo-cards",
+    title: "Hi-Lo Cards",
+    description: "Predict high or low swings for quick multiplier jumps.",
+    min_bet: 5,
+    max_bet: 300,
+    max_multiplier: 6,
+    volatility: "medium",
+    provider: "OpenSource Casino 8.5",
+  },
+  {
+    id: "lucky-dice",
+    title: "Lucky Dice",
+    description: "Two-dice instant rounds with frequent outcomes.",
+    min_bet: 5,
+    max_bet: 300,
+    max_multiplier: 6,
+    volatility: "low",
+    provider: "OpenSource Casino 8.5",
+  },
 ];
 
 const fmtEtb = (value: number) => `ETB ${value.toFixed(2)}`;
@@ -459,6 +535,11 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [casinoTapMode, setCasinoTapMode] = useState(false);
   const [activeCasinoCardId, setActiveCasinoCardId] = useState<string | null>(null);
+  const [casinoGames, setCasinoGames] = useState<CasinoGame[]>(fallbackCasinoGames);
+  const [casinoCatalogNotice, setCasinoCatalogNotice] = useState("");
+  const [casinoSelectedGame, setCasinoSelectedGame] = useState<CasinoDisplayGame | null>(null);
+  const [casinoStakeAmount, setCasinoStakeAmount] = useState("");
+  const [casinoPlayBusy, setCasinoPlayBusy] = useState(false);
 
   const [methodCode, setMethodCode] = useState<"telebirr" | "cbebirr">("telebirr");
   const [walletTab, setWalletTab] = useState<WalletTab>("deposit");
@@ -508,6 +589,18 @@ export default function App() {
   const simulatedPaidSet = useMemo(() => new Set(pickerRoom?.simulated_paid_cartellas ?? []), [pickerRoom]);
   const heldSet = useMemo(() => new Set(pickerRoom?.held_cartellas ?? []), [pickerRoom]);
   const calledSet = useMemo(() => new Set(room?.called_numbers ?? []), [room?.called_numbers]);
+  const casinoCatalog = useMemo<CasinoDisplayGame[]>(
+    () =>
+      (casinoGames.length > 0 ? casinoGames : fallbackCasinoGames).map((game, idx) => ({
+        ...game,
+        image_url: casinoImageById[game.id] ?? fallbackCasinoImage,
+        exclusive: idx < 4 || game.volatility === "high",
+      })),
+    [casinoGames],
+  );
+  const casinoCircleGames = useMemo(() => casinoCatalog.slice(0, 5), [casinoCatalog]);
+  const casinoFeaturedGames = useMemo(() => casinoCatalog.slice(0, Math.min(5, casinoCatalog.length)), [casinoCatalog]);
+  const casinoLatestGames = useMemo(() => (casinoCatalog.length > 5 ? casinoCatalog.slice(5) : casinoCatalog), [casinoCatalog]);
 
   useEffect(() => {
     try {
@@ -579,6 +672,10 @@ export default function App() {
     if (!casinoTapMode || service !== "casino") {
       setActiveCasinoCardId(null);
     }
+    if (service !== "casino") {
+      setCasinoSelectedGame(null);
+      setCasinoPlayBusy(false);
+    }
   }, [casinoTapMode, service]);
 
   useEffect(() => {
@@ -626,8 +723,37 @@ export default function App() {
     setActiveCasinoCardId((prev) => (prev === gameId ? null : gameId));
   };
 
-  const handleCasinoPlay = (gameTitle: string) => {
-    setNotice(`Opening ${gameTitle}...`);
+  const handleCasinoPlay = (game: CasinoDisplayGame) => {
+    setCasinoSelectedGame(game);
+    setCasinoStakeAmount(game.min_bet.toFixed(2));
+    setActiveCasinoCardId(null);
+    setError("");
+  };
+
+  const onCasinoPlayRound = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!casinoSelectedGame) return;
+    const stake = Number(casinoStakeAmount);
+    if (!Number.isFinite(stake)) {
+      setError("Enter a valid casino stake amount.");
+      return;
+    }
+    if (stake < casinoSelectedGame.min_bet || stake > casinoSelectedGame.max_bet) {
+      setError(`Stake must be between ETB ${casinoSelectedGame.min_bet.toFixed(2)} and ETB ${casinoSelectedGame.max_bet.toFixed(2)}.`);
+      return;
+    }
+    setCasinoPlayBusy(true);
+    setError("");
+    try {
+      const res = await playCasinoGame({ game_id: casinoSelectedGame.id, stake });
+      setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
+      setNotice(res.message);
+      setCasinoSelectedGame(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to play casino game");
+    } finally {
+      setCasinoPlayBusy(false);
+    }
   };
 
   const refreshHistory = async () => {
@@ -671,11 +797,18 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const [dash, hist, betHist] = await Promise.all([fetchDashboard(), fetchHistory(), safeFetchBetHistory()]);
+      const [dash, hist, betHist, casino] = await Promise.all([
+        fetchDashboard(),
+        fetchHistory(),
+        safeFetchBetHistory(),
+        fetchCasinoGames().catch(() => ({ items: fallbackCasinoGames })),
+      ]);
       setDashboard(dash);
       setProfile(dash.user);
       setHistory(hist.items);
       setBetHistory(betHist.items);
+      setCasinoGames(casino.items.length > 0 ? casino.items : fallbackCasinoGames);
+      setCasinoCatalogNotice(casino.items.length > 0 ? "" : "Showing cached casino lineup.");
       if (dash.deposit_methods.length > 0) {
         setMethodCode(dash.deposit_methods[0].code);
       }
@@ -1682,7 +1815,7 @@ export default function App() {
           </section>
         )}
 
-        {service === "casino" && (
+                {service === "casino" && (
           <section className="panel casino-panel">
             <div className="casino-top-strip">
               {casinoTopCategories.map((item) => (
@@ -1698,7 +1831,15 @@ export default function App() {
               {casinoCircleGames.map((game) => (
                 <article key={game.id} className="casino-circle-item">
                   <div className="casino-circle-image-shell">
-                    <img className="casino-circle-image" src={game.image_url} alt={`${game.title} icon`} loading="lazy" />
+                    <img
+                      className="casino-circle-image"
+                      src={game.image_url}
+                      alt={`${game.title} icon`}
+                      loading="lazy"
+                      onError={(event) => {
+                        event.currentTarget.src = fallbackCasinoImage;
+                      }}
+                    />
                   </div>
                   <p>{game.title}</p>
                 </article>
@@ -1708,78 +1849,101 @@ export default function App() {
             <div className="casino-content-block">
               <div className="casino-section-heading">
                 <div className="casino-section-label">FEATURED</div>
-                <p className="casino-section-subtitle">Top picks right now</p>
+                <p className="casino-section-subtitle">Real catalog images from source repo</p>
               </div>
+              {casinoCatalogNotice && <p className="casino-catalog-note">{casinoCatalogNotice}</p>}
               <div className="casino-card-grid">
-              {casinoFeaturedGames.map((game) => (
-                <article
-                  key={game.id}
-                  className={`casino-feature-card ${casinoTapMode && activeCasinoCardId === game.id ? "mobile-open" : ""}`}
-                  onClick={() => handleCasinoCardTap(game.id)}
-                >
-                  {game.exclusive && <span className="casino-exclusive-badge">Exclusive</span>}
-                  <button
-                    className="casino-star-btn"
-                    type="button"
-                    aria-label={`Favorite ${game.title}`}
-                    onClick={(event) => event.stopPropagation()}
+                {casinoFeaturedGames.map((game) => (
+                  <article
+                    key={game.id}
+                    className={`casino-feature-card ${casinoTapMode && activeCasinoCardId === game.id ? "mobile-open" : ""}`}
+                    onClick={() => handleCasinoCardTap(game.id)}
                   >
-                    ☆
-                  </button>
-                  <img className="casino-thumb" src={game.image_url} alt={`${game.title} preview`} loading="lazy" />
-                  <div className="casino-card-overlay">
+                    {game.exclusive && <span className="casino-exclusive-badge">Exclusive</span>}
                     <button
-                      className="casino-play-btn"
+                      className="casino-star-btn"
                       type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleCasinoPlay(game.title);
-                      }}
+                      aria-label={`Favorite ${game.title}`}
+                      onClick={(event) => event.stopPropagation()}
                     >
-                      Play
+                      {"\u2606"}
                     </button>
-                  </div>
-                  <div className="casino-card-title">{game.title}</div>
-                </article>
-              ))}
-            </div>
+                    <img
+                      className="casino-thumb"
+                      src={game.image_url}
+                      alt={`${game.title} preview`}
+                      loading="lazy"
+                      onError={(event) => {
+                        event.currentTarget.src = fallbackCasinoImage;
+                      }}
+                    />
+                    <div className="casino-card-overlay">
+                      <button
+                        className="casino-play-btn"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleCasinoPlay(game);
+                        }}
+                      >
+                        Open
+                      </button>
+                    </div>
+                    <div className="casino-card-title">{game.title}</div>
+                    <div className="casino-card-meta">
+                      Min ETB {game.min_bet.toFixed(0)} - x{game.max_multiplier.toFixed(0)}
+                    </div>
+                  </article>
+                ))}
+              </div>
 
-            <div className="casino-section-heading">
-              <div className="casino-section-label latest">LATEST RELEASES</div>
-              <p className="casino-section-subtitle">Latest and greatest slot games</p>
-            </div>
-            <div className="casino-card-grid latest">
-              {casinoLatestGames.map((game) => (
-                <article
-                  key={game.id}
-                  className={`casino-feature-card latest ${casinoTapMode && activeCasinoCardId === game.id ? "mobile-open" : ""}`}
-                  onClick={() => handleCasinoCardTap(game.id)}
-                >
-                  <button
-                    className="casino-star-btn"
-                    type="button"
-                    aria-label={`Favorite ${game.title}`}
-                    onClick={(event) => event.stopPropagation()}
+              <div className="casino-section-heading">
+                <div className="casino-section-label latest">LATEST RELEASES</div>
+                <p className="casino-section-subtitle">Tap game card and open to play with wallet balance</p>
+              </div>
+              <div className="casino-card-grid latest">
+                {casinoLatestGames.map((game) => (
+                  <article
+                    key={game.id}
+                    className={`casino-feature-card latest ${casinoTapMode && activeCasinoCardId === game.id ? "mobile-open" : ""}`}
+                    onClick={() => handleCasinoCardTap(game.id)}
                   >
-                    ☆
-                  </button>
-                  <img className="casino-thumb" src={game.image_url} alt={`${game.title} preview`} loading="lazy" />
-                  <div className="casino-card-overlay">
                     <button
-                      className="casino-play-btn"
+                      className="casino-star-btn"
                       type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleCasinoPlay(game.title);
-                      }}
+                      aria-label={`Favorite ${game.title}`}
+                      onClick={(event) => event.stopPropagation()}
                     >
-                      Play
+                      {"\u2606"}
                     </button>
-                  </div>
-                  <div className="casino-card-title">{game.title}</div>
-                </article>
-              ))}
-            </div>
+                    <img
+                      className="casino-thumb"
+                      src={game.image_url}
+                      alt={`${game.title} preview`}
+                      loading="lazy"
+                      onError={(event) => {
+                        event.currentTarget.src = fallbackCasinoImage;
+                      }}
+                    />
+                    <div className="casino-card-overlay">
+                      <button
+                        className="casino-play-btn"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleCasinoPlay(game);
+                        }}
+                      >
+                        Open
+                      </button>
+                    </div>
+                    <div className="casino-card-title">{game.title}</div>
+                    <div className="casino-card-meta">
+                      Min ETB {game.min_bet.toFixed(0)} - x{game.max_multiplier.toFixed(0)}
+                    </div>
+                  </article>
+                ))}
+              </div>
             </div>
           </section>
         )}
@@ -2203,6 +2367,62 @@ export default function App() {
           </section>
         )}
       </main>
+
+      {casinoSelectedGame && (
+        <div
+          className="modal-overlay show"
+          onClick={() => {
+            if (!casinoPlayBusy) setCasinoSelectedGame(null);
+          }}
+        >
+          <div className="modal-card casino-play-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <h3>{casinoSelectedGame.title}</h3>
+              <button type="button" onClick={() => setCasinoSelectedGame(null)} disabled={casinoPlayBusy}>
+                x
+              </button>
+            </div>
+            <img
+              className="casino-play-cover"
+              src={casinoSelectedGame.image_url}
+              alt={`${casinoSelectedGame.title} cover`}
+              loading="lazy"
+              onError={(event) => {
+                event.currentTarget.src = fallbackCasinoImage;
+              }}
+            />
+            <p className="casino-play-desc">{casinoSelectedGame.description}</p>
+            <div className="casino-play-meta">
+              <span>Provider: {casinoSelectedGame.provider}</span>
+              <span>Volatility: {casinoSelectedGame.volatility}</span>
+              <span>
+                Range: ETB {casinoSelectedGame.min_bet.toFixed(2)} - ETB {casinoSelectedGame.max_bet.toFixed(2)}
+              </span>
+            </div>
+            <form className="wallet-form" onSubmit={onCasinoPlayRound}>
+              <label>
+                Stake
+                <input
+                  type="number"
+                  min={casinoSelectedGame.min_bet}
+                  max={casinoSelectedGame.max_bet}
+                  step="0.01"
+                  value={casinoStakeAmount}
+                  onChange={(event) => setCasinoStakeAmount(event.target.value)}
+                />
+              </label>
+              <div className="modal-actions">
+                <button className="secondary-btn" type="button" onClick={() => setCasinoSelectedGame(null)} disabled={casinoPlayBusy}>
+                  Cancel
+                </button>
+                <button className="primary-btn" type="submit" disabled={casinoPlayBusy}>
+                  {casinoPlayBusy ? "Playing..." : "Play Round"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {cartellaOpen && (
         <div className="modal-overlay show" onClick={() => setCartellaOpen(false)}>
