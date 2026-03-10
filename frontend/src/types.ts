@@ -123,6 +123,16 @@ export type CasinoPlayResponse = {
   };
 };
 
+export type CasinoLaunchResponse = {
+  launch_id: string;
+  game_id: string;
+  game_title: string;
+  provider: string;
+  mode: "iframe" | "redirect";
+  launch_url: string;
+  expires_at: string;
+};
+
 export type BingoCard = {
   card_no: number;
   grid: Array<Array<number | string>>;

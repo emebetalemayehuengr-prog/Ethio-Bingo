@@ -2,6 +2,7 @@ import type {
   AuthResponse,
   BetHistoryRecord,
   CasinoGame,
+  CasinoLaunchResponse,
   CasinoPlayResponse,
   DashboardResponse,
   DepositMethod,
@@ -126,6 +127,18 @@ export function fetchCasinoGames() {
 
 export function playCasinoGame(payload: { game_id: string; stake: number }) {
   return request<CasinoPlayResponse>("/api/casino/play", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function launchCasinoGame(payload: {
+  game_id: string;
+  device?: "mobile" | "desktop" | "auto";
+  locale?: string;
+  return_url?: string;
+}) {
+  return request<CasinoLaunchResponse>("/api/casino/launch", {
     method: "POST",
     body: JSON.stringify(payload),
   });

@@ -15,9 +15,9 @@ import {
   markNumberForCard,
   login as loginRequest,
   markPaidAdminWithdrawRequest,
+  launchCasinoGame,
   logout as logoutRequest,
   previewCard,
-  playCasinoGame,
   rejectAdminWithdrawRequest,
   setAuthToken,
   signup as signupRequest,
@@ -32,6 +32,7 @@ import type {
   BetHistoryRecord,
   BingoCard,
   CasinoGame,
+  CasinoLaunchResponse,
   DashboardResponse,
   DepositMethod,
   RoomState,
@@ -43,7 +44,7 @@ import type {
 } from "./types";
 
 type AuthMode = "login" | "signup";
-type ServiceView = "home" | "stakes" | "game" | "casino" | "wallet" | "history" | "how" | "contact";
+type ServiceView = "home" | "stakes" | "game" | "casino" | "casino-launch" | "wallet" | "history" | "how" | "contact";
 type CartellaStep = "pick" | "preview";
 type WalletTab = "deposit" | "withdraw" | "transfer" | "history" | "admin";
 type CasinoDisplayGame = CasinoGame & { image_url: string; exclusive?: boolean };
@@ -537,9 +538,8 @@ export default function App() {
   const [activeCasinoCardId, setActiveCasinoCardId] = useState<string | null>(null);
   const [casinoGames, setCasinoGames] = useState<CasinoGame[]>(fallbackCasinoGames);
   const [casinoCatalogNotice, setCasinoCatalogNotice] = useState("");
-  const [casinoSelectedGame, setCasinoSelectedGame] = useState<CasinoDisplayGame | null>(null);
-  const [casinoStakeAmount, setCasinoStakeAmount] = useState("");
-  const [casinoPlayBusy, setCasinoPlayBusy] = useState(false);
+  const [casinoLaunchBusyId, setCasinoLaunchBusyId] = useState<string | null>(null);
+  const [casinoLaunch, setCasinoLaunch] = useState<CasinoLaunchResponse | null>(null);
 
   const [methodCode, setMethodCode] = useState<"telebirr" | "cbebirr">("telebirr");
   const [walletTab, setWalletTab] = useState<WalletTab>("deposit");
@@ -672,9 +672,9 @@ export default function App() {
     if (!casinoTapMode || service !== "casino") {
       setActiveCasinoCardId(null);
     }
-    if (service !== "casino") {
-      setCasinoSelectedGame(null);
-      setCasinoPlayBusy(false);
+    if (service !== "casino-launch") {
+      setCasinoLaunch(null);
+      setCasinoLaunchBusyId(null);
     }
   }, [casinoTapMode, service]);
 
@@ -723,37 +723,34 @@ export default function App() {
     setActiveCasinoCardId((prev) => (prev === gameId ? null : gameId));
   };
 
-  const handleCasinoPlay = (game: CasinoDisplayGame) => {
-    setCasinoSelectedGame(game);
-    setCasinoStakeAmount(game.min_bet.toFixed(2));
+  const handleCasinoPlay = async (game: CasinoDisplayGame) => {
     setActiveCasinoCardId(null);
-    setError("");
-  };
-
-  const onCasinoPlayRound = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!casinoSelectedGame) return;
-    const stake = Number(casinoStakeAmount);
-    if (!Number.isFinite(stake)) {
-      setError("Enter a valid casino stake amount.");
-      return;
-    }
-    if (stake < casinoSelectedGame.min_bet || stake > casinoSelectedGame.max_bet) {
-      setError(`Stake must be between ETB ${casinoSelectedGame.min_bet.toFixed(2)} and ETB ${casinoSelectedGame.max_bet.toFixed(2)}.`);
-      return;
-    }
-    setCasinoPlayBusy(true);
+    setCasinoLaunchBusyId(game.id);
     setError("");
     try {
-      const res = await playCasinoGame({ game_id: casinoSelectedGame.id, stake });
-      setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
-      setNotice(res.message);
-      setCasinoSelectedGame(null);
+      const launch = await launchCasinoGame({
+        game_id: game.id,
+        device: casinoTapMode ? "mobile" : "desktop",
+        locale: "en",
+        return_url: window.location.href,
+      });
+      if (launch.mode === "redirect") {
+        window.location.assign(launch.launch_url);
+        return;
+      }
+      setCasinoLaunch(launch);
+      setService("casino-launch");
+      setDrawerOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to play casino game");
+      setError(err instanceof Error ? err.message : "Unable to launch casino game");
     } finally {
-      setCasinoPlayBusy(false);
+      setCasinoLaunchBusyId(null);
     }
+  };
+
+  const closeCasinoLaunch = () => {
+    setCasinoLaunch(null);
+    setService("casino");
   };
 
   const refreshHistory = async () => {
@@ -1527,63 +1524,68 @@ export default function App() {
       </article>
     );
   };
+  const isCasinoLaunchView = service === "casino-launch" && Boolean(casinoLaunch);
 
   return (
-    <div className="ethio-app">
-      <div className={`drawer-overlay ${drawerOpen ? "show" : ""}`} onClick={() => setDrawerOpen(false)} />
-      <aside className={`side-drawer ${drawerOpen ? "open" : ""}`}>
-        <div className="drawer-profile">
-          <div className="avatar">EB</div>
-          <div>
-            <h3>HEY, PLAYER</h3>
-            <p>{profile.user_name}</p>
-          </div>
-        </div>
-        <nav>
-          {services.map((item) => (
-            <button
-              key={item.view}
-              className={`menu-item ${service === item.view ? "active" : ""}`}
-              type="button"
-              onClick={() => openService(item.view)}
-            >
-              {item.label}
-            </button>
-          ))}
-          <button className="menu-item danger" type="button" onClick={() => void onLogout()}>
-            Logout
-          </button>
-        </nav>
-      </aside>
+    <div className={`ethio-app ${isCasinoLaunchView ? "casino-launch-active" : ""}`}>
+      {!isCasinoLaunchView && (
+        <>
+          <div className={`drawer-overlay ${drawerOpen ? "show" : ""}`} onClick={() => setDrawerOpen(false)} />
+          <aside className={`side-drawer ${drawerOpen ? "open" : ""}`}>
+            <div className="drawer-profile">
+              <div className="avatar">EB</div>
+              <div>
+                <h3>HEY, PLAYER</h3>
+                <p>{profile.user_name}</p>
+              </div>
+            </div>
+            <nav>
+              {services.map((item) => (
+                <button
+                  key={item.view}
+                  className={`menu-item ${service === item.view ? "active" : ""}`}
+                  type="button"
+                  onClick={() => openService(item.view)}
+                >
+                  {item.label}
+                </button>
+              ))}
+              <button className="menu-item danger" type="button" onClick={() => void onLogout()}>
+                Logout
+              </button>
+            </nav>
+          </aside>
 
-      <header className="top-header">
-        <div className="top-strip">
-          <div className="brand-inline">
-            <img src="/brand/ethio-bingo-logo.svg" alt="Ethio Bingo logo" className="brand-inline-logo" />
-            <span>Ethio Bingo</span>
-          </div>
-          <button className="menu-toggle" type="button" onClick={() => setDrawerOpen((state) => !state)}>
-            =
-          </button>
-          <button
-            className={`theme-toggle ${isDarkMode ? "dark" : "light"}`}
-            type="button"
-            aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
-            onClick={() => setIsDarkMode((current) => !current)}
-          >
-            <span>{isDarkMode ? "Dark" : "Light"}</span>
-          </button>
-          <button className="refresh-btn" type="button" onClick={() => void loadData()}>
-            Refresh
-          </button>
-          <div className="wallet-pill">{fmtEtb(wallet.main_balance)}</div>
-        </div>
-      </header>
+          <header className="top-header">
+            <div className="top-strip">
+              <div className="brand-inline">
+                <img src="/brand/ethio-bingo-logo.svg" alt="Ethio Bingo logo" className="brand-inline-logo" />
+                <span>Ethio Bingo</span>
+              </div>
+              <button className="menu-toggle" type="button" onClick={() => setDrawerOpen((state) => !state)}>
+                =
+              </button>
+              <button
+                className={`theme-toggle ${isDarkMode ? "dark" : "light"}`}
+                type="button"
+                aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+                onClick={() => setIsDarkMode((current) => !current)}
+              >
+                <span>{isDarkMode ? "Dark" : "Light"}</span>
+              </button>
+              <button className="refresh-btn" type="button" onClick={() => void loadData()}>
+                Refresh
+              </button>
+              <div className="wallet-pill">{fmtEtb(wallet.main_balance)}</div>
+            </div>
+          </header>
+        </>
+      )}
 
-      <main className="main-content">
-        {loading && <div className="notice">Refreshing data...</div>}
-        {error && <div className="notice error">{error}</div>}
-        {notice && <div className="notice success">{notice}</div>}
+      <main className={`main-content ${isCasinoLaunchView ? "casino-launch-main" : ""}`}>
+        {!isCasinoLaunchView && loading && <div className="notice">Refreshing data...</div>}
+        {!isCasinoLaunchView && error && <div className="notice error">{error}</div>}
+        {!isCasinoLaunchView && notice && <div className="notice success">{notice}</div>}
 
         {service === "home" && (
           <section className="panel">
@@ -1815,7 +1817,7 @@ export default function App() {
           </section>
         )}
 
-                {service === "casino" && (
+        {service === "casino" && (
           <section className="panel casino-panel">
             <div className="casino-top-strip">
               {casinoTopCategories.map((item) => (
@@ -1881,12 +1883,13 @@ export default function App() {
                       <button
                         className="casino-play-btn"
                         type="button"
+                        disabled={casinoLaunchBusyId === game.id}
                         onClick={(event) => {
                           event.stopPropagation();
-                          handleCasinoPlay(game);
+                          void handleCasinoPlay(game);
                         }}
                       >
-                        Open
+                        {casinoLaunchBusyId === game.id ? "Opening..." : "Open"}
                       </button>
                     </div>
                     <div className="casino-card-title">{game.title}</div>
@@ -1929,12 +1932,13 @@ export default function App() {
                       <button
                         className="casino-play-btn"
                         type="button"
+                        disabled={casinoLaunchBusyId === game.id}
                         onClick={(event) => {
                           event.stopPropagation();
-                          handleCasinoPlay(game);
+                          void handleCasinoPlay(game);
                         }}
                       >
-                        Open
+                        {casinoLaunchBusyId === game.id ? "Opening..." : "Open"}
                       </button>
                     </div>
                     <div className="casino-card-title">{game.title}</div>
@@ -1945,6 +1949,43 @@ export default function App() {
                 ))}
               </div>
             </div>
+          </section>
+        )}
+
+        {service === "casino-launch" && (
+          <section className="casino-launch-view">
+            <div className="casino-launch-head">
+              <button className="secondary-btn" type="button" onClick={closeCasinoLaunch}>
+                Back
+              </button>
+              <div className="casino-launch-title">
+                <strong>{casinoLaunch?.game_title ?? "Casino Game"}</strong>
+                <span>{casinoLaunch?.provider ?? "Provider"}</span>
+              </div>
+              <button
+                className="secondary-btn"
+                type="button"
+                onClick={() => {
+                  if (casinoLaunch?.launch_url) {
+                    window.open(casinoLaunch.launch_url, "_blank", "noopener,noreferrer");
+                  }
+                }}
+                disabled={!casinoLaunch?.launch_url}
+              >
+                Open External
+              </button>
+            </div>
+            {casinoLaunch?.launch_url ? (
+              <iframe
+                className="casino-launch-frame"
+                src={casinoLaunch.launch_url}
+                title={casinoLaunch.game_title}
+                allow="autoplay; fullscreen; payment"
+                allowFullScreen
+              />
+            ) : (
+              <div className="casino-launch-empty">Launch session unavailable.</div>
+            )}
           </section>
         )}
 
@@ -2367,62 +2408,6 @@ export default function App() {
           </section>
         )}
       </main>
-
-      {casinoSelectedGame && (
-        <div
-          className="modal-overlay show"
-          onClick={() => {
-            if (!casinoPlayBusy) setCasinoSelectedGame(null);
-          }}
-        >
-          <div className="modal-card casino-play-modal" onClick={(event) => event.stopPropagation()}>
-            <div className="modal-head">
-              <h3>{casinoSelectedGame.title}</h3>
-              <button type="button" onClick={() => setCasinoSelectedGame(null)} disabled={casinoPlayBusy}>
-                x
-              </button>
-            </div>
-            <img
-              className="casino-play-cover"
-              src={casinoSelectedGame.image_url}
-              alt={`${casinoSelectedGame.title} cover`}
-              loading="lazy"
-              onError={(event) => {
-                event.currentTarget.src = fallbackCasinoImage;
-              }}
-            />
-            <p className="casino-play-desc">{casinoSelectedGame.description}</p>
-            <div className="casino-play-meta">
-              <span>Provider: {casinoSelectedGame.provider}</span>
-              <span>Volatility: {casinoSelectedGame.volatility}</span>
-              <span>
-                Range: ETB {casinoSelectedGame.min_bet.toFixed(2)} - ETB {casinoSelectedGame.max_bet.toFixed(2)}
-              </span>
-            </div>
-            <form className="wallet-form" onSubmit={onCasinoPlayRound}>
-              <label>
-                Stake
-                <input
-                  type="number"
-                  min={casinoSelectedGame.min_bet}
-                  max={casinoSelectedGame.max_bet}
-                  step="0.01"
-                  value={casinoStakeAmount}
-                  onChange={(event) => setCasinoStakeAmount(event.target.value)}
-                />
-              </label>
-              <div className="modal-actions">
-                <button className="secondary-btn" type="button" onClick={() => setCasinoSelectedGame(null)} disabled={casinoPlayBusy}>
-                  Cancel
-                </button>
-                <button className="primary-btn" type="submit" disabled={casinoPlayBusy}>
-                  {casinoPlayBusy ? "Playing..." : "Play Round"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {cartellaOpen && (
         <div className="modal-overlay show" onClick={() => setCartellaOpen(false)}>

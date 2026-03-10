@@ -2209,6 +2209,11 @@ body {
   cursor: pointer;
 }
 
+.casino-play-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .casino-card-title {
   padding: 8px 9px 10px;
   font-size: 0.9rem;
@@ -2269,30 +2274,61 @@ body {
   width: 100%;
 }
 
-.casino-play-modal {
-  max-width: 540px;
-  background: #0a2f5f;
+.ethio-app.casino-launch-active {
+  background: #03060d;
 }
 
-.casino-play-cover {
-  width: 100%;
-  border-radius: 12px;
-  aspect-ratio: 16 / 9;
-  object-fit: cover;
-  background: #111826;
+.casino-launch-main {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  gap: 0;
 }
 
-.casino-play-desc {
-  margin: 10px 0 8px;
-  color: #eef2ff;
-}
-
-.casino-play-meta {
+.casino-launch-view {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
   display: grid;
-  gap: 6px;
-  margin-bottom: 12px;
-  color: #d6defa;
-  font-size: 0.9rem;
+  grid-template-rows: auto 1fr;
+  background: #060b16;
+}
+
+.casino-launch-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(7, 12, 24, 0.95);
+}
+
+.casino-launch-title {
+  flex: 1;
+  display: grid;
+  gap: 2px;
+}
+
+.casino-launch-title strong {
+  color: #f2f5ff;
+}
+
+.casino-launch-title span {
+  color: #b7c2e7;
+  font-size: 0.85rem;
+}
+
+.casino-launch-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #02050a;
+}
+
+.casino-launch-empty {
+  display: grid;
+  place-items: center;
+  color: #d2dcff;
 }
 
 @media (min-width: 780px) {

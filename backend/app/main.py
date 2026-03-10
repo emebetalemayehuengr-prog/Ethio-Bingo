@@ -17,7 +17,7 @@ from pathlib import Path
 from random import Random, randint, sample, shuffle
 from typing import Literal
 from urllib.parse import parse_qsl, unquote, unquote_plus, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request as UrlRequest, urlopen
 
 try:
     import psycopg
@@ -28,7 +28,7 @@ except Exception:  # pragma: no cover - optional dependency for postgres runtime
     dict_row = None
     Jsonb = None
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -218,6 +218,13 @@ class CasinoGameItem(BaseModel):
 class CasinoPlayRequest(BaseModel):
     game_id: str = Field(min_length=2, max_length=80)
     stake: float = Field(gt=0, le=10000)
+
+
+class CasinoLaunchRequest(BaseModel):
+    game_id: str = Field(min_length=2, max_length=80)
+    device: Literal["mobile", "desktop", "auto"] = "auto"
+    locale: str = Field(default="en", min_length=2, max_length=16)
+    return_url: str | None = Field(default=None, max_length=500)
 
 
 class WithdrawTicket(BaseModel):
@@ -629,6 +636,17 @@ try:
 except ValueError:
     SIGNUP_INITIAL_BONUS_BALANCE = 0.0
 
+CASINO_PROVIDER_NAME = os.getenv("CASINO_PROVIDER_NAME", "Booming").strip() or "Booming"
+CASINO_PROVIDER_MODE = os.getenv("CASINO_PROVIDER_MODE", "demo").strip().lower()
+CASINO_LAUNCH_API_URL = os.getenv("CASINO_LAUNCH_API_URL", "").strip()
+CASINO_PROVIDER_OPERATOR_ID = os.getenv("CASINO_PROVIDER_OPERATOR_ID", "ethio-bingo").strip() or "ethio-bingo"
+CASINO_PROVIDER_API_KEY = os.getenv("CASINO_PROVIDER_API_KEY", "").strip()
+CASINO_PROVIDER_SECRET = os.getenv("CASINO_PROVIDER_SECRET", "").strip()
+CASINO_WEBHOOK_SECRET = os.getenv("CASINO_WEBHOOK_SECRET", "").strip()
+CASINO_LAUNCH_MODE = os.getenv("CASINO_LAUNCH_MODE", "redirect").strip().lower()
+CASINO_ALLOWED_RETURN_HOSTS = {host.lower() for host in env_list("CASINO_ALLOWED_RETURN_HOSTS")}
+CASINO_LAUNCH_SESSION_SECONDS = max(120, env_int("CASINO_LAUNCH_SESSION_SECONDS", 900))
+
 USERS: dict[str, UserStore] = {}
 SESSIONS: dict[str, dict[str, str]] = {}
 ROOMS: dict[str, RoomStore] = {}
@@ -636,6 +654,7 @@ GAME_TICKER_TASK: asyncio.Task | None = None
 USED_DEPOSIT_TX: dict[str, str] = {}
 USED_RECEIPT_LINKS: dict[str, str] = {}
 WITHDRAW_TICKETS: list[WithdrawTicket] = []
+CASINO_LAUNCH_SESSIONS: dict[str, dict[str, str]] = {}
 
 DEPOSIT_SOURCE_DOMAINS: dict[str, set[str]] = {
     "telebirr": {"telebirr.et", "telebirr.com.et", "ethiotelecom.et"},
@@ -1077,7 +1096,7 @@ def verify_transfer_otp(phone_number: str, otp: str) -> bool:
         }
     ).encode("utf-8")
 
-    request = Request(
+    request = UrlRequest(
         TRANSFER_OTP_VERIFY_URL,
         data=payload,
         headers={"Content-Type": "application/json"},
@@ -1296,6 +1315,126 @@ def roll_casino_multiplier(game_id: str) -> float:
         if roll <= cumulative:
             return max(0.0, multiplier)
     return max(0.0, payout_table[-1][1])
+
+
+def read_nested_str(payload: object, dotted_key: str) -> str | None:
+    value: object = payload
+    for part in dotted_key.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned:
+            return cleaned
+    return None
+
+
+def normalize_casino_launch_mode(mode_value: str | None) -> Literal["iframe", "redirect"]:
+    mode = (mode_value or "").strip().lower()
+    return "iframe" if mode == "iframe" else "redirect"
+
+
+def sanitize_casino_return_url(return_url: str | None) -> str | None:
+    if not return_url:
+        return None
+    candidate = return_url.strip()
+    if not candidate:
+        return None
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    hostname = (parsed.hostname or "").lower()
+    if CASINO_ALLOWED_RETURN_HOSTS and hostname not in CASINO_ALLOWED_RETURN_HOSTS:
+        return None
+    return candidate
+
+
+def prune_expired_casino_launches() -> None:
+    now = utc_now()
+    expired: list[str] = []
+    for launch_id, raw in list(CASINO_LAUNCH_SESSIONS.items()):
+        expires_at = parse_iso_datetime(raw.get("expires_at"))
+        if expires_at is None or expires_at <= now:
+            expired.append(launch_id)
+    for launch_id in expired:
+        CASINO_LAUNCH_SESSIONS.pop(launch_id, None)
+
+
+def request_external_casino_launch_url(
+    payload: CasinoLaunchRequest,
+    user: UserStore,
+    game: CasinoGameItem,
+    launch_id: str,
+) -> tuple[str, Literal["iframe", "redirect"]]:
+    if not CASINO_LAUNCH_API_URL:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Casino launch provider is not configured. "
+                "Set CASINO_LAUNCH_API_URL and provider credentials."
+            ),
+        )
+
+    return_url = sanitize_casino_return_url(payload.return_url)
+    provider_payload: dict[str, object] = {
+        "operator_id": CASINO_PROVIDER_OPERATOR_ID,
+        "provider": CASINO_PROVIDER_NAME,
+        "game_id": game.id,
+        "player_id": user.phone_number,
+        "session_id": launch_id,
+        "currency": "ETB",
+        "locale": payload.locale,
+        "device": payload.device,
+    }
+    if return_url:
+        provider_payload["return_url"] = return_url
+
+    request_body = json.dumps(provider_payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if CASINO_PROVIDER_API_KEY:
+        headers["x-api-key"] = CASINO_PROVIDER_API_KEY
+    if CASINO_PROVIDER_SECRET:
+        headers["x-signature"] = hmac.new(
+            CASINO_PROVIDER_SECRET.encode("utf-8"),
+            request_body,
+            hashlib.sha256,
+        ).hexdigest()
+
+    request = UrlRequest(
+        CASINO_LAUNCH_API_URL,
+        data=request_body,
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=12) as response:
+            raw_text = response.read().decode("utf-8")
+    except Exception as exc:  # pragma: no cover - external call path
+        raise HTTPException(status_code=502, detail=f"Casino provider launch failed: {exc}") from exc
+
+    try:
+        response_payload = json.loads(raw_text)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Casino provider returned invalid JSON: {exc}") from exc
+
+    launch_url = (
+        read_nested_str(response_payload, "launch_url")
+        or read_nested_str(response_payload, "url")
+        or read_nested_str(response_payload, "game_url")
+        or read_nested_str(response_payload, "gameUrl")
+        or read_nested_str(response_payload, "data.launch_url")
+        or read_nested_str(response_payload, "data.url")
+    )
+    if not launch_url:
+        raise HTTPException(status_code=502, detail="Casino provider did not return a launch URL.")
+
+    mode = normalize_casino_launch_mode(
+        read_nested_str(response_payload, "mode")
+        or read_nested_str(response_payload, "open_mode")
+        or CASINO_LAUNCH_MODE
+    )
+    return launch_url, mode
 
 
 def record_transaction(
@@ -2828,6 +2967,141 @@ def withdraw_balance(payload: WithdrawRequest, user: UserStore = Depends(get_cur
 @app.get("/api/casino/games")
 def casino_games(user: UserStore = Depends(get_current_user)) -> dict:
     return {"items": [game.model_dump() for game in CASINO_GAMES]}
+
+
+@app.post("/api/casino/launch")
+def casino_launch(payload: CasinoLaunchRequest, user: UserStore = Depends(get_current_user)) -> dict:
+    game = get_casino_game_or_404(payload.game_id)
+    prune_expired_casino_launches()
+    launch_id = secrets.token_urlsafe(18)
+
+    if CASINO_PROVIDER_MODE != "external":
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Casino provider mode is not external. "
+                "Configure CASINO_PROVIDER_MODE=external and provider launch settings."
+            ),
+        )
+
+    launch_url, mode = request_external_casino_launch_url(payload, user, game, launch_id)
+    now = utc_now().replace(microsecond=0)
+    expires_at = now + timedelta(seconds=CASINO_LAUNCH_SESSION_SECONDS)
+    CASINO_LAUNCH_SESSIONS[launch_id] = {
+        "launch_id": launch_id,
+        "game_id": game.id,
+        "phone_number": user.phone_number,
+        "provider": CASINO_PROVIDER_NAME,
+        "launch_url": launch_url,
+        "mode": mode,
+        "created_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
+    }
+
+    return {
+        "launch_id": launch_id,
+        "game_id": game.id,
+        "game_title": game.title,
+        "provider": CASINO_PROVIDER_NAME,
+        "mode": mode,
+        "launch_url": launch_url,
+        "expires_at": expires_at.isoformat(),
+    }
+
+
+@app.post("/api/casino/webhook")
+async def casino_webhook(
+    request: Request,
+    x_signature: str | None = Header(default=None),
+    x_casino_signature: str | None = Header(default=None),
+) -> dict:
+    raw_body = await request.body()
+    if CASINO_WEBHOOK_SECRET:
+        provided_signature = (x_casino_signature or x_signature or "").strip().lower()
+        expected_signature = hmac.new(
+            CASINO_WEBHOOK_SECRET.encode("utf-8"),
+            raw_body,
+            hashlib.sha256,
+        ).hexdigest().lower()
+        if not provided_signature or not hmac.compare_digest(provided_signature, expected_signature):
+            raise HTTPException(status_code=401, detail="Invalid casino webhook signature")
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8") or "{}")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid casino webhook payload: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid casino webhook payload type")
+
+    launch_id = (
+        read_nested_str(payload, "launch_id")
+        or read_nested_str(payload, "session_id")
+        or read_nested_str(payload, "sessionId")
+        or read_nested_str(payload, "round_id")
+    )
+    user: UserStore | None = None
+    if launch_id:
+        launch_record = CASINO_LAUNCH_SESSIONS.get(launch_id)
+        if launch_record:
+            user = find_user_by_phone(launch_record.get("phone_number", ""))
+
+    if user is None:
+        player_hint = (
+            read_nested_str(payload, "phone_number")
+            or read_nested_str(payload, "player_id")
+            or read_nested_str(payload, "playerId")
+            or read_nested_str(payload, "user_id")
+            or read_nested_str(payload, "external_player_id")
+        )
+        if player_hint:
+            user = find_user_by_phone(player_hint)
+
+    if user is None:
+        return {"status": "ignored", "reason": "user_not_found"}
+
+    amount_value: object = None
+    for key in ["amount", "net", "delta", "settlement_amount", "win_amount", "payout"]:
+        if key in payload:
+            amount_value = payload.get(key)
+            break
+    if amount_value is None:
+        nested_settlement = payload.get("settlement")
+        if isinstance(nested_settlement, dict):
+            for key in ["amount", "net", "delta"]:
+                if key in nested_settlement:
+                    amount_value = nested_settlement.get(key)
+                    break
+
+    amount: float | None = None
+    if isinstance(amount_value, (int, float)):
+        amount = float(amount_value)
+    elif isinstance(amount_value, str):
+        cleaned = amount_value.replace(",", "").strip()
+        try:
+            amount = float(cleaned)
+        except ValueError:
+            amount = None
+
+    if amount is None:
+        return {"status": "ignored", "reason": "amount_missing"}
+
+    normalized_amount = round(amount, 2)
+    if normalized_amount > 0:
+        user.wallet.main_balance = round(user.wallet.main_balance + normalized_amount, 2)
+        record_transaction(user, "Win", normalized_amount, "Completed")
+    elif normalized_amount < 0:
+        debit = abs(normalized_amount)
+        user.wallet.main_balance = round(max(0.0, user.wallet.main_balance - debit), 2)
+        record_transaction(user, "Bet", debit, "Completed")
+
+    persist_users()
+    prune_expired_casino_launches()
+    return {
+        "status": "ok",
+        "applied_amount": normalized_amount,
+        "wallet": user.wallet.model_dump(),
+    }
 
 
 @app.post("/api/casino/play")
