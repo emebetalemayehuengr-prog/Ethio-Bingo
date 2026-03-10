@@ -3468,7 +3468,6 @@ def dashboard(user: UserStore = Depends(get_current_user)) -> dict:
         "games": [
             {"id": "bingo", "title": "Bingo Game", "description": "Classic live bingo room", "cta": "Play"},
             {"id": "spin", "title": "Spin Game", "description": "Quick spin mini game", "cta": "Play"},
-            {"id": "casino", "title": "Casino Games", "description": "Wallet-linked casino games", "cta": "Play"},
         ],
     }
 

@@ -53,12 +53,13 @@ const AUTH_PHONE_STORAGE_KEY = "ethio_bingo_auth_phone";
 const AUTH_PASSWORD_STORAGE_KEY = "ethio_bingo_auth_password";
 const AUTH_REMEMBER_STORAGE_KEY = "ethio_bingo_auth_remember_password";
 const THEME_STORAGE_KEY = "ethio_bingo_theme_mode";
+const CASINO_ENABLED = false;
 
 const services: Array<{ view: ServiceView; label: string }> = [
   { view: "home", label: "Home" },
   { view: "stakes", label: "Bingo Game" },
   { view: "game", label: "Live Game" },
-  { view: "casino", label: "Casino Games" },
+  ...(CASINO_ENABLED ? [{ view: "casino" as ServiceView, label: "Casino Games" }] : []),
   { view: "wallet", label: "Wallet" },
   { view: "history", label: "History" },
   { view: "how", label: "How To Play" },
@@ -679,6 +680,13 @@ export default function App() {
   }, [casinoTapMode, service]);
 
   useEffect(() => {
+    if (!CASINO_ENABLED && (service === "casino" || service === "casino-launch")) {
+      setService("home");
+      setNotice("Casino games are temporarily unavailable while design is finalized.");
+    }
+  }, [service]);
+
+  useEffect(() => {
     if (!dashboard?.deposit_methods?.length) return;
     if (walletTab === "admin" && profile?.is_admin) return;
     setAdminDraftAccounts((prev) => {
@@ -708,6 +716,12 @@ export default function App() {
   }, [profile?.phone_number]);
 
   const openService = (next: ServiceView) => {
+    if (!CASINO_ENABLED && (next === "casino" || next === "casino-launch")) {
+      setService("home");
+      setNotice("Casino games are temporarily unavailable while design is finalized.");
+      setDrawerOpen(false);
+      return;
+    }
     if (next === "game" && (!room || !cards.length)) {
       setService("stakes");
       setNotice("Choose stake and buy cartella first.");
@@ -750,7 +764,7 @@ export default function App() {
 
   const closeCasinoLaunch = () => {
     setCasinoLaunch(null);
-    setService("casino");
+    setService(CASINO_ENABLED ? "casino" : "home");
   };
 
   const refreshHistory = async () => {
@@ -1613,13 +1627,15 @@ export default function App() {
                   Open
                 </button>
               </article>
-              <article className="service-card">
-                <h3>Casino Games</h3>
-                <p>Play quick casino rounds with the same Ethio Bingo wallet balance.</p>
-                <button className="primary-btn" type="button" onClick={() => openService("casino")}>
-                  Open
-                </button>
-              </article>
+              {CASINO_ENABLED && (
+                <article className="service-card">
+                  <h3>Casino Games</h3>
+                  <p>Play quick casino rounds with the same Ethio Bingo wallet balance.</p>
+                  <button className="primary-btn" type="button" onClick={() => openService("casino")}>
+                    Open
+                  </button>
+                </article>
+              )}
             </div>
           </section>
         )}
@@ -1817,7 +1833,7 @@ export default function App() {
           </section>
         )}
 
-        {service === "casino" && (
+        {CASINO_ENABLED && service === "casino" && (
           <section className="panel casino-panel">
             <div className="casino-top-strip">
               {casinoTopCategories.map((item) => (
@@ -1952,7 +1968,7 @@ export default function App() {
           </section>
         )}
 
-        {service === "casino-launch" && (
+        {CASINO_ENABLED && service === "casino-launch" && (
           <section className="casino-launch-view">
             <div className="casino-launch-head">
               <button className="secondary-btn" type="button" onClick={closeCasinoLaunch}>
