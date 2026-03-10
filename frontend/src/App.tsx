@@ -235,7 +235,7 @@ function MethodCard({ method, active, onClick }: { method: DepositMethod; active
             const target = event.currentTarget;
             if (target.dataset.fallbackApplied === "1") return;
             target.dataset.fallbackApplied = "1";
-            target.src = method.code === "telebirr" ? "/providers/telebirr.svg" : "/providers/cbebirr.svg";
+            target.src = method.code === "telebirr" ? "/providers/telebirr.svg" : "/providers/cbebirr.png";
           }}
         />
       ) : null}
@@ -280,6 +280,7 @@ function AuthScreen({
   onTelegramLogin: () => void;
   telegramAvailable: boolean;
 }) {
+  const accountCreatedNotice = notice.toLowerCase().startsWith("account created");
   return (
     <div className="auth-shell">
       <div className="auth-card">
@@ -287,7 +288,7 @@ function AuthScreen({
           <img src="/brand/ethio-bingo-logo.svg" alt="Ethio Bingo logo" className="auth-brand-logo" />
           <h1>Ethio Bingo</h1>
         </div>
-        <p>Sign in to continue.</p>
+        <p>{mode === "signup" ? "Create account to continue." : "Sign in to continue."}</p>
         <div className="auth-switch">
           <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
             Login
@@ -315,7 +316,7 @@ function AuthScreen({
             <input type="checkbox" checked={rememberPassword} onChange={(event) => setRememberPassword(event.target.checked)} />
             <span>Remember password on this device</span>
           </label>
-          {notice && <p className="auth-notice">{notice}</p>}
+          {notice && <p className={`auth-notice ${accountCreatedNotice ? "account-created" : ""}`}>{notice}</p>}
           {error && <p className="auth-error">{error}</p>}
           <button className="primary-btn" type="submit" disabled={busy}>
             {busy ? "Please wait..." : mode === "login" ? "Log in" : "Create account"}
@@ -336,6 +337,7 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState(false);
+  const [cardRechargeLabel, setCardRechargeLabel] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
@@ -490,7 +492,8 @@ export default function App() {
 
   const openService = (next: ServiceView) => {
     if (next === "game" && (!room || !cards.length)) {
-      setNotice("Join cartella first.");
+      setService("stakes");
+      setNotice("Choose stake and buy cartella first.");
       setDrawerOpen(false);
       return;
     }
@@ -598,6 +601,7 @@ export default function App() {
 
   useEffect(() => {
     if (!profile) return;
+    if (cartellaOpen || service === "game" || service === "stakes") return;
     let inFlight = false;
     const pollDashboard = () => {
       if (inFlight) return;
@@ -617,9 +621,9 @@ export default function App() {
     pollDashboard();
     const timer = window.setInterval(() => {
       pollDashboard();
-    }, 1000);
+    }, 1800);
     return () => window.clearInterval(timer);
-  }, [profile?.phone_number]);
+  }, [profile?.phone_number, service, cartellaOpen]);
 
   useEffect(() => {
     if (!room?.id || service !== "game") return;
@@ -725,6 +729,12 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [service, room?.phase, room?.id, pickerRoom?.phase, pickerRoom?.id, cartellaOpen]);
 
+  useEffect(() => {
+    if (!cardRechargeLabel) return;
+    const timer = window.setTimeout(() => setCardRechargeLabel(""), 7000);
+    return () => window.clearTimeout(timer);
+  }, [cardRechargeLabel]);
+
   const onAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setAuthBusy(true);
@@ -744,7 +754,7 @@ export default function App() {
         if (!rememberPassword) {
           setAuthPassword("");
         }
-        setAuthNotice("Registration successful. Please sign in.");
+        setAuthNotice("Account Created. Please sign in.");
       } else {
         const res = await loginRequest({
           phone_number: normalizedPhone,
@@ -899,7 +909,6 @@ export default function App() {
     setWorking(true);
     setError("");
     try {
-      await new Promise((resolve) => window.setTimeout(resolve, 250));
       const res = await joinStake(selectedStake.id, selectedCartella);
       setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
       setPickerRoom(res.room);
@@ -907,7 +916,7 @@ export default function App() {
       setCards(res.cards ?? (res.card ? [res.card] : []));
       setSelectedCardNo(res.card?.card_no ?? selectedCartella);
       setNotice(res.message);
-      await refreshHistory();
+      void refreshHistory();
       if (res.room.phase === "playing" && res.queue !== "next") {
         setCartellaOpen(false);
         setService("game");
@@ -945,6 +954,7 @@ export default function App() {
       });
       setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
       setNotice(res.message);
+      setCardRechargeLabel(`Recharged +ETB ${amount.toFixed(2)}`);
       setTxNo("");
       setReceiptMessage("");
       setDepositGuideOpen(false);
@@ -1174,6 +1184,17 @@ export default function App() {
         ? pickerRoom.call_countdown_seconds
         : pickerRoom?.announcement_seconds ?? 0;
   const pickerPaidCount = pickerRoom?.display_paid_count ?? pickerRoom?.paid_cartellas.length ?? 0;
+  const pickerPhase = pickerRoom?.phase ?? "selecting";
+  const pickerLiveDetail =
+    pickerRoom?.active_queue === "next"
+      ? "Holding open for next game"
+      : pickerRoom?.phase === "selecting"
+        ? `Game starts in ${Math.max(0, pickerRoom?.countdown_seconds ?? 0)}s`
+        : pickerRoom?.phase === "playing"
+          ? "Live calls in progress"
+          : `Next game opens in ${Math.max(0, pickerRoom?.announcement_seconds ?? 0)}s`;
+  const cardBuyAmount = selectedStake?.stake ?? pickerRoom?.card_price ?? 0;
+  const insufficientCardBalance = cardBuyAmount > 0 && wallet.main_balance < cardBuyAmount;
   const latestBallLetter = typeof room?.latest_number === "number" ? toBingoLetter(room.latest_number) : null;
   const latestBallClass = latestBallLetter ? `call-${latestBallLetter.toLowerCase()}` : "call-idle";
   const renderBoughtCard = (ownedCard: BingoCard, rail: "desktop" | "panel" = "desktop") => {
@@ -1937,39 +1958,32 @@ export default function App() {
                         x
                       </button>
                     </div>
-                    <div className="game-top-row compact">
-                      <div className={`countdown phase-${pickerRoom?.phase ?? "selecting"}`}>
-                        0:{String(Math.max(0, pickerCountdownValue)).padStart(2, "0")}
+                    {cardRechargeLabel && <div className="modal-recharge-label">{cardRechargeLabel}</div>}
+                    <div className="cartella-details-lines">
+                      <div className="cartella-details-line primary">
+                        <span className={`cartella-pill countdown phase-${pickerPhase}`}>0:{String(Math.max(0, pickerCountdownValue)).padStart(2, "0")}</span>
+                        <span className="cartella-pill stake">{selectedStake ? `${selectedStake.stake} Birr Per Card` : "0 Birr Per Card"}</span>
+                        <span className={`cartella-pill latest phase-${pickerPhase}`}>{pickerLiveDetail}</span>
                       </div>
-                      <div className="stake-chip">{selectedStake ? `${selectedStake.stake} Birr Per Card` : "0 Birr Per Card"}</div>
-                      <div className={`latest-call phase-${pickerRoom?.phase ?? "selecting"}`}>
-                        {pickerRoom?.active_queue === "next"
-                          ? "Holding open for next game"
-                          : pickerRoom?.phase === "selecting"
-                            ? `Game starts in ${Math.max(0, pickerRoom?.countdown_seconds ?? 0)}s`
-                            : pickerRoom?.phase === "playing"
-                              ? "Live calls in progress"
-                              : `Next game opens in ${Math.max(0, pickerRoom?.announcement_seconds ?? 0)}s`}
+                      <div className="cartella-details-line secondary">
+                        <span>
+                          <strong>{pickerRoom?.held_cartellas.length ?? 0}</strong> Held
+                        </span>
+                        <span>
+                          <strong>{pickerPaidCount}</strong> Paid
+                        </span>
+                        <span>
+                          <strong>200</strong> Total
+                        </span>
+                        <span>
+                          <strong>{pickerRoom?.my_cartellas.length ?? 0}</strong> My Current
+                        </span>
+                        <span>
+                          <strong>{pickerRoom?.next_my_cartellas.length ?? 0}</strong> My Next
+                        </span>
+                        <span className="legend-inline">W=available R=held B=paid G=sim</span>
                       </div>
                     </div>
-                    <div className="cartella-status-row">
-                      <span>
-                        <strong>{pickerRoom?.held_cartellas.length ?? 0}</strong> Held
-                      </span>
-                      <span>
-                        <strong>{pickerPaidCount}</strong> Paid
-                      </span>
-                      <span>
-                        <strong>200</strong> Total
-                      </span>
-                      <span>
-                        <strong>{pickerRoom?.my_cartellas.length ?? 0}</strong> My Current
-                      </span>
-                      <span>
-                        <strong>{pickerRoom?.next_my_cartellas.length ?? 0}</strong> My Next
-                      </span>
-                    </div>
-                    <p className="cartella-legend">White = available, Red = held, Blue = paid, Gold = simulated player card.</p>
                     <div className="cartella-surface">
                       <div className="cartella-grid">
                         {cartellaList.map((num) => {
@@ -2001,12 +2015,26 @@ export default function App() {
                         Go Back
                       </button>
                       <button
-                        className="primary-btn"
+                        className="secondary-btn"
                         type="button"
                         onClick={() => void onPreviewCartella()}
                         disabled={!selectedCartella || working}
                       >
                         {working ? "Loading..." : "Preview Card"}
+                      </button>
+                      <button
+                        className={`primary-btn ${insufficientCardBalance ? "insufficient-buy-btn" : ""}`}
+                        type="button"
+                        onClick={() => void onConfirmCartella()}
+                        disabled={!selectedCartella || working || insufficientCardBalance}
+                      >
+                        {working
+                          ? "Buying..."
+                          : insufficientCardBalance
+                            ? `Insufficient Balance (Need ETB ${cardBuyAmount})`
+                            : pickerRoom?.active_queue === "next"
+                              ? "Buy For Next Game"
+                              : "Buy Card"}
                       </button>
                     </div>
                   </section>
@@ -2022,6 +2050,7 @@ export default function App() {
                   </div>
                   <div className="stake-chip">{selectedStake ? `${selectedStake.stake} Birr Per Card` : "0 Birr Per Card"}</div>
                 </div>
+                {cardRechargeLabel && <div className="modal-recharge-label">{cardRechargeLabel}</div>}
                 <article className="bingo-card">
                   <h3>Card No. {preview.card_no}</h3>
                   <div className="letters">
@@ -2043,8 +2072,19 @@ export default function App() {
                   <button className="secondary-btn" type="button" onClick={() => setCartellaStep("pick")}>
                     Go Back
                   </button>
-                  <button className="primary-btn" type="button" disabled={working} onClick={() => void onConfirmCartella()}>
-                    {working ? "Paying..." : pickerRoom?.active_queue === "next" ? "Buy For Next Game" : "Confirm Cards"}
+                  <button
+                    className={`primary-btn ${insufficientCardBalance ? "insufficient-buy-btn" : ""}`}
+                    type="button"
+                    disabled={working || insufficientCardBalance}
+                    onClick={() => void onConfirmCartella()}
+                  >
+                    {working
+                      ? "Paying..."
+                      : insufficientCardBalance
+                        ? `Insufficient Balance (Need ETB ${cardBuyAmount})`
+                        : pickerRoom?.active_queue === "next"
+                          ? "Buy For Next Game"
+                          : "Buy Card"}
                   </button>
                 </div>
               </>
@@ -2073,7 +2113,7 @@ export default function App() {
                       const target = event.currentTarget;
                       if (target.dataset.fallbackApplied === "1") return;
                       target.dataset.fallbackApplied = "1";
-                      target.src = selectedMethod.code === "telebirr" ? "/providers/telebirr.svg" : "/providers/cbebirr.svg";
+                      target.src = selectedMethod.code === "telebirr" ? "/providers/telebirr.svg" : "/providers/cbebirr.png";
                     }}
                   />
                 ) : null}

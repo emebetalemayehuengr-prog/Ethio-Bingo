@@ -357,7 +357,7 @@ BRAND = {
 
 DEFAULT_DEPOSIT_LOGOS: dict[str, str] = {
     "telebirr": "https://tse3.mm.bing.net/th/id/OIP.4yqd3lozkEImH0fgytD6RgHaD4?rs=1&pid=ImgDetMain&o=7&rm=3",
-    "cbebirr": "/providers/cbebirr.svg",
+    "cbebirr": "/providers/cbebirr.png",
 }
 
 DEPOSIT_METHODS = [
