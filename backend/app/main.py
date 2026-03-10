@@ -1403,6 +1403,8 @@ def build_selfhosted_game_html(game: CasinoGameItem, launch_id: str) -> str:
       --danger: #ff5a74;
       --ok: #4ad17f;
       --soft: #1c2744;
+      --cell: #1b2540;
+      --cell-hit: #2879ff;
     }
     * { box-sizing: border-box; }
     body {
@@ -1474,13 +1476,14 @@ def build_selfhosted_game_html(game: CasinoGameItem, launch_id: str) -> str:
       color: var(--muted);
       font-size: 0.88rem;
     }
-    .play input {
+    .play input, .play select {
       border: 1px solid rgba(255,255,255,0.18);
       border-radius: 10px;
       background: #f8fbff;
       color: #161b29;
       padding: 10px 12px;
       font-size: 1rem;
+      width: 100%;
     }
     .btn {
       border: 0;
@@ -1497,33 +1500,23 @@ def build_selfhosted_game_html(game: CasinoGameItem, launch_id: str) -> str:
       opacity: 0.65;
       cursor: not-allowed;
     }
+    .game-options {
+      display: grid;
+      gap: 8px;
+    }
+    .game-options.row {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
     .stage {
       margin-top: 4px;
       border-radius: 14px;
       border: 1px solid rgba(255,255,255,0.12);
       background: linear-gradient(170deg, #172344, #111a34);
-      min-height: 220px;
+      min-height: 230px;
       display: grid;
       place-items: center;
       text-align: center;
       padding: 12px;
-    }
-    .reels {
-      display: flex;
-      gap: 8px;
-      justify-content: center;
-      margin-bottom: 10px;
-    }
-    .reel {
-      width: clamp(52px, 16vw, 72px);
-      aspect-ratio: 1;
-      border-radius: 12px;
-      background: var(--soft);
-      border: 1px solid rgba(255,255,255,0.18);
-      display: grid;
-      place-items: center;
-      font-size: clamp(1.2rem, 5vw, 1.9rem);
-      font-weight: 700;
     }
     .wallet {
       font-size: 0.95rem;
@@ -1542,6 +1535,144 @@ def build_selfhosted_game_html(game: CasinoGameItem, launch_id: str) -> str:
     }
     .msg.ok { color: var(--ok); border: 1px solid rgba(74,209,127,0.45); }
     .msg.err { color: var(--danger); border: 1px solid rgba(255,90,116,0.45); }
+    .result-line {
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: center;
+      min-height: 20px;
+    }
+    .slot-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 6px;
+      width: 100%;
+      max-width: 360px;
+    }
+    .slot-cell {
+      background: var(--cell);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 10px;
+      min-height: 52px;
+      display: grid;
+      place-items: center;
+      font-size: 1.3rem;
+      font-weight: 700;
+    }
+    .slot-cell.hit {
+      background: var(--cell-hit);
+      border-color: rgba(255,255,255,0.38);
+    }
+    .roulette-wheel {
+      width: clamp(180px, 52vw, 240px);
+      aspect-ratio: 1;
+      border-radius: 999px;
+      border: 10px solid #7d90c6;
+      background: conic-gradient(#0e1a33 0 20deg, #992f2f 20deg 40deg, #1f1f1f 40deg 60deg, #992f2f 60deg 80deg, #1f1f1f 80deg 100deg, #992f2f 100deg 120deg, #1f1f1f 120deg 140deg, #992f2f 140deg 160deg, #1f1f1f 160deg 180deg, #992f2f 180deg 200deg, #1f1f1f 200deg 220deg, #992f2f 220deg 240deg, #1f1f1f 240deg 260deg, #992f2f 260deg 280deg, #1f1f1f 280deg 300deg, #992f2f 300deg 320deg, #1f1f1f 320deg 340deg, #992f2f 340deg 360deg);
+      display: grid;
+      place-items: center;
+      position: relative;
+    }
+    .roulette-center {
+      width: 64px;
+      height: 64px;
+      border-radius: 999px;
+      background: #f5f7ff;
+      color: #0f1730;
+      display: grid;
+      place-items: center;
+      font-size: 1.3rem;
+      font-weight: 800;
+    }
+    .table-hands {
+      width: 100%;
+      display: grid;
+      gap: 8px;
+      max-width: 420px;
+    }
+    .hand-row {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 10px;
+      padding: 8px;
+      text-align: left;
+      font-size: 0.95rem;
+    }
+    .crash-meter {
+      width: min(92%, 360px);
+      height: 20px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.1);
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.16);
+    }
+    .crash-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #3cd88d, #ffdc4d);
+      transition: width 0.4s ease;
+    }
+    .crash-multi {
+      margin-top: 10px;
+      font-size: clamp(1.4rem, 8vw, 2.4rem);
+      font-weight: 800;
+    }
+    .mines-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 6px;
+      width: min(92vw, 360px);
+    }
+    .mine-cell {
+      border-radius: 8px;
+      background: #26345f;
+      border: 1px solid rgba(255,255,255,0.16);
+      min-height: 44px;
+      display: grid;
+      place-items: center;
+      font-size: 1rem;
+      font-weight: 700;
+    }
+    .mine-cell.hit {
+      background: #2a9158;
+    }
+    .mine-cell.boom {
+      background: #b53e53;
+    }
+    .hilo-cards {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      justify-content: center;
+    }
+    .card {
+      width: 82px;
+      aspect-ratio: 3 / 4;
+      border-radius: 10px;
+      background: #f6f8ff;
+      color: #10172d;
+      display: grid;
+      place-items: center;
+      font-size: 1.4rem;
+      font-weight: 800;
+    }
+    .dice-wrap {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      align-items: center;
+    }
+    .dice {
+      width: 66px;
+      height: 66px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: #f5f7ff;
+      color: #0f162b;
+      display: grid;
+      place-items: center;
+      font-size: 2rem;
+      font-weight: 700;
+    }
     .foot {
       color: var(--muted);
       font-size: 0.82rem;
@@ -1572,47 +1703,354 @@ def build_selfhosted_game_html(game: CasinoGameItem, launch_id: str) -> str:
           Stake (ETB)
           <input id="stakeInput" type="number" min="__MIN_BET__" max="__MAX_BET__" step="0.01" value="__MIN_BET__" />
         </label>
-        <button id="playBtn" class="btn" type="button">Play Round</button>
+        <button id="playBtn" class="btn" type="button">Play</button>
       </div>
+      <div id="gameOptions" class="game-options"></div>
       <div class="wallet">Wallet Balance: ETB <strong id="walletValue">--</strong></div>
-      <div id="message" class="msg">Press Play Round to start.</div>
-      <div class="stage">
-        <div>
-          <div class="reels">
-            <div class="reel" id="r1">?</div>
-            <div class="reel" id="r2">?</div>
-            <div class="reel" id="r3">?</div>
-          </div>
-          <div id="resultLine" style="color:var(--muted)">Waiting for your first round...</div>
-        </div>
-      </div>
+      <div id="message" class="msg">Configure your round and press Play.</div>
+      <div id="stage" class="stage"></div>
+      <div id="resultLine" class="result-line">Waiting for your first round...</div>
     </section>
 
     <div class="foot">Self-hosted mode. Payout settles from Ethio Bingo wallet in real-time.</div>
   </div>
   <script>
     const launchId = "__LAUNCH_ID__";
+    const gameId = "__GAME_ID__";
     const minBet = Number("__MIN_BET__");
     const maxBet = Number("__MAX_BET__");
-    const symbols = ["7", "A", "K", "Q", "J", "$", "#", "*"];
     const stakeInput = document.getElementById("stakeInput");
     const playBtn = document.getElementById("playBtn");
     const walletValue = document.getElementById("walletValue");
     const message = document.getElementById("message");
     const resultLine = document.getElementById("resultLine");
-    const reels = [document.getElementById("r1"), document.getElementById("r2"), document.getElementById("r3")];
+    const stage = document.getElementById("stage");
+    const gameOptions = document.getElementById("gameOptions");
+    const state = {
+      rouletteBet: "red",
+      rouletteNumber: 17,
+      baccaratBet: "player",
+      hiloPick: "high",
+      dicePick: "over",
+      diceExact: 7,
+      minesCount: 3,
+    };
+
+    const symbols = ["7", "A", "K", "Q", "J", "$", "#", "*"];
+    const cards = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+    const diceFaces = ["1", "2", "3", "4", "5", "6"];
 
     function setMessage(text, tone) {
       message.textContent = text;
       message.className = "msg " + (tone || "");
     }
 
-    function spinVisual() {
-      reels.forEach((item, idx) => {
-        setTimeout(() => {
-          item.textContent = symbols[Math.floor(Math.random() * symbols.length)];
-        }, idx * 120);
+    function randInt(min, max) {
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    function randomCard() {
+      return cards[randInt(0, cards.length - 1)];
+    }
+
+    function renderOptions() {
+      if (gameId === "roulette-euro") {
+        gameOptions.className = "game-options row";
+        gameOptions.innerHTML = `
+          <label>Bet Type
+            <select id="rouletteBet">
+              <option value="red">Red</option>
+              <option value="black">Black</option>
+              <option value="odd">Odd</option>
+              <option value="even">Even</option>
+              <option value="number">Exact Number</option>
+            </select>
+          </label>
+          <label>Number (0-36)
+            <input id="rouletteNumber" type="number" min="0" max="36" value="17" />
+          </label>
+        `;
+        const bet = document.getElementById("rouletteBet");
+        const num = document.getElementById("rouletteNumber");
+        bet.addEventListener("change", () => {
+          state.rouletteBet = bet.value;
+        });
+        num.addEventListener("input", () => {
+          state.rouletteNumber = Math.max(0, Math.min(36, Number(num.value || 0)));
+        });
+        return;
+      }
+      if (gameId === "baccarat-royal") {
+        gameOptions.className = "game-options";
+        gameOptions.innerHTML = `
+          <label>Bet Side
+            <select id="baccaratBet">
+              <option value="player">Player</option>
+              <option value="banker">Banker</option>
+              <option value="tie">Tie</option>
+            </select>
+          </label>
+        `;
+        const select = document.getElementById("baccaratBet");
+        select.addEventListener("change", () => {
+          state.baccaratBet = select.value;
+        });
+        return;
+      }
+      if (gameId === "hilo-cards") {
+        gameOptions.className = "game-options";
+        gameOptions.innerHTML = `
+          <label>Pick Direction
+            <select id="hiloPick">
+              <option value="high">High</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+        `;
+        const select = document.getElementById("hiloPick");
+        select.addEventListener("change", () => {
+          state.hiloPick = select.value;
+        });
+        return;
+      }
+      if (gameId === "lucky-dice") {
+        gameOptions.className = "game-options row";
+        gameOptions.innerHTML = `
+          <label>Prediction
+            <select id="dicePick">
+              <option value="over">Over 7</option>
+              <option value="under">Under 7</option>
+              <option value="exact">Exact 7</option>
+            </select>
+          </label>
+          <label>Exact Total
+            <input id="diceExact" type="number" min="2" max="12" value="7" />
+          </label>
+        `;
+        const pick = document.getElementById("dicePick");
+        const exact = document.getElementById("diceExact");
+        pick.addEventListener("change", () => {
+          state.dicePick = pick.value;
+        });
+        exact.addEventListener("input", () => {
+          state.diceExact = Math.max(2, Math.min(12, Number(exact.value || 7)));
+        });
+        return;
+      }
+      if (gameId === "mines-grid") {
+        gameOptions.className = "game-options";
+        gameOptions.innerHTML = `
+          <label>Mines Count
+            <select id="minesCount">
+              <option value="3">3 Mines</option>
+              <option value="5">5 Mines</option>
+              <option value="7">7 Mines</option>
+            </select>
+          </label>
+        `;
+        const select = document.getElementById("minesCount");
+        select.addEventListener("change", () => {
+          state.minesCount = Number(select.value || "3");
+        });
+        return;
+      }
+      gameOptions.className = "game-options";
+      gameOptions.innerHTML = "";
+    }
+
+    function renderIdleStage() {
+      if (gameId === "slots-megaways") {
+        stage.innerHTML = `
+          <div class="slot-grid">
+            ${Array.from({ length: 10 }, () => `<div class="slot-cell">?</div>`).join("")}
+          </div>
+        `;
+        return;
+      }
+      if (gameId === "roulette-euro") {
+        stage.innerHTML = `
+          <div>
+            <div class="roulette-wheel"><div class="roulette-center">0</div></div>
+            <div style="margin-top:10px;color:var(--muted)">Place bet and spin.</div>
+          </div>
+        `;
+        return;
+      }
+      if (gameId === "blackjack-classic") {
+        stage.innerHTML = `
+          <div class="table-hands">
+            <div class="hand-row"><strong>Dealer:</strong> ? ?</div>
+            <div class="hand-row"><strong>You:</strong> ? ?</div>
+          </div>
+        `;
+        return;
+      }
+      if (gameId === "baccarat-royal") {
+        stage.innerHTML = `
+          <div class="table-hands">
+            <div class="hand-row"><strong>Player:</strong> ? ?</div>
+            <div class="hand-row"><strong>Banker:</strong> ? ?</div>
+          </div>
+        `;
+        return;
+      }
+      if (gameId === "crash-orbit") {
+        stage.innerHTML = `
+          <div>
+            <div class="crash-meter"><div id="crashFill" class="crash-fill"></div></div>
+            <div id="crashMulti" class="crash-multi">x1.00</div>
+          </div>
+        `;
+        return;
+      }
+      if (gameId === "mines-grid") {
+        stage.innerHTML = `
+          <div class="mines-grid">
+            ${Array.from({ length: 25 }, () => `<div class="mine-cell">?</div>`).join("")}
+          </div>
+        `;
+        return;
+      }
+      if (gameId === "hilo-cards") {
+        stage.innerHTML = `
+          <div class="hilo-cards">
+            <div class="card">?</div>
+            <div style="font-size:1.4rem;color:var(--muted)">-></div>
+            <div class="card">?</div>
+          </div>
+        `;
+        return;
+      }
+      if (gameId === "lucky-dice") {
+        stage.innerHTML = `
+          <div class="dice-wrap">
+            <div class="dice">?</div>
+            <div class="dice">?</div>
+          </div>
+        `;
+        return;
+      }
+      stage.innerHTML = `<div style="color:var(--muted)">Ready.</div>`;
+    }
+
+    function renderOutcomeVisual(payload) {
+      const net = Number(payload?.result?.net ?? 0);
+      const isWin = net >= 0;
+
+      if (gameId === "slots-megaways") {
+        const baseSymbol = symbols[randInt(0, symbols.length - 1)];
+        const cells = Array.from({ length: 10 }, (_, idx) => {
+          const symbol = isWin && idx < 4 ? baseSymbol : symbols[randInt(0, symbols.length - 1)];
+          const klass = isWin && idx < 4 ? "slot-cell hit" : "slot-cell";
+          return `<div class="${klass}">${symbol}</div>`;
+        }).join("");
+        stage.innerHTML = `<div class="slot-grid">${cells}</div>`;
+        return;
+      }
+
+      if (gameId === "roulette-euro") {
+        const landed = randInt(0, 36);
+        stage.innerHTML = `
+          <div>
+            <div class="roulette-wheel"><div class="roulette-center">${landed}</div></div>
+            <div style="margin-top:10px;color:${isWin ? "var(--ok)" : "var(--danger)"}">${isWin ? "Winning spin" : "No hit this spin"}</div>
+          </div>
+        `;
+        return;
+      }
+
+      if (gameId === "blackjack-classic") {
+        const dealer = `${randomCard()} ${randomCard()}`;
+        const player = `${randomCard()} ${randomCard()} ${isWin ? randomCard() : ""}`.trim();
+        stage.innerHTML = `
+          <div class="table-hands">
+            <div class="hand-row"><strong>Dealer:</strong> ${dealer}</div>
+            <div class="hand-row"><strong>You:</strong> ${player}</div>
+            <div class="hand-row" style="color:${isWin ? "var(--ok)" : "var(--danger)"}"><strong>${isWin ? "Blackjack flow won" : "Dealer took the hand"}</strong></div>
+          </div>
+        `;
+        return;
+      }
+
+      if (gameId === "baccarat-royal") {
+        const player = `${randomCard()} ${randomCard()}`;
+        const banker = `${randomCard()} ${randomCard()}`;
+        stage.innerHTML = `
+          <div class="table-hands">
+            <div class="hand-row"><strong>Player:</strong> ${player}</div>
+            <div class="hand-row"><strong>Banker:</strong> ${banker}</div>
+            <div class="hand-row" style="color:${isWin ? "var(--ok)" : "var(--danger)"}"><strong>${isWin ? "Your side won" : "Your side lost"}</strong></div>
+          </div>
+        `;
+        return;
+      }
+
+      if (gameId === "crash-orbit") {
+        const target = Math.max(1, Number(payload?.result?.multiplier ?? 1));
+        stage.innerHTML = `
+          <div>
+            <div class="crash-meter"><div id="crashFill" class="crash-fill"></div></div>
+            <div id="crashMulti" class="crash-multi">x1.00</div>
+          </div>
+        `;
+        const fill = document.getElementById("crashFill");
+        const multi = document.getElementById("crashMulti");
+        const pct = Math.max(8, Math.min(100, (target / Math.max(2, Number("__MAX_MULTIPLIER__"))) * 100));
+        fill.style.width = pct.toFixed(0) + "%";
+        multi.textContent = "x" + target.toFixed(2);
+        return;
+      }
+
+      if (gameId === "mines-grid") {
+        const hitCount = isWin ? randInt(10, 18) : randInt(3, 8);
+        const boomAt = isWin ? -1 : randInt(0, 24);
+        const cells = Array.from({ length: 25 }, (_, idx) => {
+          if (idx === boomAt) return `<div class="mine-cell boom">X</div>`;
+          if (idx < hitCount) return `<div class="mine-cell hit">V</div>`;
+          return `<div class="mine-cell">?</div>`;
+        }).join("");
+        stage.innerHTML = `<div class="mines-grid">${cells}</div>`;
+        return;
+      }
+
+      if (gameId === "hilo-cards") {
+        stage.innerHTML = `
+          <div class="hilo-cards">
+            <div class="card">${randomCard()}</div>
+            <div style="font-size:1.4rem;color:${isWin ? "var(--ok)" : "var(--danger)"}">${state.hiloPick === "high" ? "UP" : "DOWN"}</div>
+            <div class="card">${randomCard()}</div>
+          </div>
+        `;
+        return;
+      }
+
+      if (gameId === "lucky-dice") {
+        const d1 = randInt(1, 6);
+        const d2 = randInt(1, 6);
+        stage.innerHTML = `
+          <div>
+            <div class="dice-wrap">
+              <div class="dice">${diceFaces[d1 - 1]}</div>
+              <div class="dice">${diceFaces[d2 - 1]}</div>
+            </div>
+            <div style="margin-top:8px;color:${isWin ? "var(--ok)" : "var(--danger)"}">Total ${d1 + d2}</div>
+          </div>
+        `;
+        return;
+      }
+    }
+
+    async function settleRound(stake) {
+      const response = await fetch("/api/casino/play-launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ launch_id: launchId, stake }),
       });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.detail || "Unable to play round.");
+      }
+      return payload;
     }
 
     async function playRound() {
@@ -1622,28 +2060,22 @@ def build_selfhosted_game_html(game: CasinoGameItem, launch_id: str) -> str:
         return;
       }
       if (stake < minBet || stake > maxBet) {
-        setMessage(`Stake must be between ETB ${minBet.toFixed(2)} and ETB ${maxBet.toFixed(2)}.`, "err");
+        setMessage("Stake must be between ETB " + minBet.toFixed(2) + " and ETB " + maxBet.toFixed(2) + ".", "err");
         return;
       }
 
       playBtn.disabled = true;
-      setMessage("Playing round...", "");
-      spinVisual();
+      setMessage("Running round...", "");
       try {
-        const response = await fetch("/api/casino/play-launch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ launch_id: launchId, stake }),
-        });
-        const payload = await response.json();
-        if (!response.ok) {
-          throw new Error(payload?.detail || "Unable to play round.");
-        }
+        const payload = await settleRound(stake);
         const balance = Number(payload?.wallet?.main_balance ?? 0);
         walletValue.textContent = balance.toFixed(2);
-        setMessage(payload.message || "Round finished.", payload?.result?.outcome === "win" ? "ok" : "");
+        renderOutcomeVisual(payload);
+        const outcome = payload?.result?.outcome === "win" ? "ok" : "";
+        setMessage(payload.message || "Round finished.", outcome);
         const net = Number(payload?.result?.net ?? 0);
-        resultLine.textContent = `Result: ${net >= 0 ? "WIN" : "LOSS"} ETB ${Math.abs(net).toFixed(2)} | x${Number(payload?.result?.multiplier ?? 0).toFixed(2)}`;
+        const mult = Number(payload?.result?.multiplier ?? 0).toFixed(2);
+        resultLine.textContent = "Result: " + (net >= 0 ? "WIN" : "LOSS") + " ETB " + Math.abs(net).toFixed(2) + " | x" + mult;
       } catch (error) {
         const text = error instanceof Error ? error.message : "Unable to play round.";
         setMessage(text, "err");
@@ -1652,6 +2084,21 @@ def build_selfhosted_game_html(game: CasinoGameItem, launch_id: str) -> str:
       }
     }
 
+    function gameButtonLabel() {
+      if (gameId === "slots-megaways") return "Spin";
+      if (gameId === "roulette-euro") return "Spin Wheel";
+      if (gameId === "blackjack-classic") return "Deal";
+      if (gameId === "baccarat-royal") return "Deal";
+      if (gameId === "crash-orbit") return "Start Crash";
+      if (gameId === "mines-grid") return "Start Grid";
+      if (gameId === "hilo-cards") return "Draw Card";
+      if (gameId === "lucky-dice") return "Roll Dice";
+      return "Play";
+    }
+
+    playBtn.textContent = gameButtonLabel();
+    renderOptions();
+    renderIdleStage();
     playBtn.addEventListener("click", playRound);
   </script>
 </body>
@@ -1666,9 +2113,8 @@ def build_selfhosted_game_html(game: CasinoGameItem, launch_id: str) -> str:
         .replace("__MAX_BET__", f"{game.max_bet:.2f}")
         .replace("__MAX_MULTIPLIER__", f"{game.max_multiplier:.2f}")
         .replace("__LAUNCH_ID__", escape(launch_id))
+        .replace("__GAME_ID__", escape(game.id))
     )
-
-
 def request_external_casino_launch_url(
     payload: CasinoLaunchRequest,
     user: UserStore,
