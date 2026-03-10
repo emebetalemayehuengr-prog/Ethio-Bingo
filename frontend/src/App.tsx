@@ -713,13 +713,17 @@ export default function App() {
   }, [cartellaOpen, pickerRoom?.phase, pickerRoom?.id, pickerRoom?.my_cartellas, room?.id, cards.length]);
 
   useEffect(() => {
-    if (service !== "game" || room?.phase !== "finished") return;
+    const roundFinished = room?.phase === "finished" || (cartellaOpen && pickerRoom?.phase === "finished");
+    const inGameFlow = service === "game" || service === "stakes" || cartellaOpen;
+    if (!roundFinished || !inGameFlow) return;
     const timer = window.setTimeout(() => {
+      setCartellaOpen(false);
+      setCartellaStep("pick");
       setService("home");
       setNotice("Round finished. Returning to Home.");
-    }, 2400);
+    }, 1800);
     return () => window.clearTimeout(timer);
-  }, [service, room?.phase, room?.id]);
+  }, [service, room?.phase, room?.id, pickerRoom?.phase, pickerRoom?.id, cartellaOpen]);
 
   const onAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

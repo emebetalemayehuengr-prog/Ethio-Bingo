@@ -2366,7 +2366,7 @@ body {
 }
 
 .caller-ball small {
-  font-size: 0.96rem;
+  font-size: 1.08rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   margin-bottom: -2px;
@@ -2860,22 +2860,86 @@ body {
   min-width: 0;
 }
 
-.cartella-status-row {
-  margin-top: 10px;
+.cartella-stage-main .game-top-row.compact {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: stretch;
+  margin-bottom: 8px;
+}
+
+.cartella-stage-main .game-top-row.compact .countdown,
+.cartella-stage-main .game-top-row.compact .stake-chip,
+.cartella-stage-main .game-top-row.compact .latest-call {
+  margin: 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 50px;
   display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.cartella-stage-main .game-top-row.compact .countdown {
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 6px 10px;
+  font-size: clamp(1.45rem, 3.8vw, 2.05rem);
+  letter-spacing: 0.04em;
+}
+
+.cartella-stage-main .game-top-row.compact .stake-chip {
+  border-radius: 12px;
+  padding: 8px 10px;
+  font-size: clamp(0.94rem, 2.3vw, 1.3rem);
+  line-height: 1.15;
+}
+
+.cartella-stage-main .game-top-row.compact .latest-call {
+  grid-column: 1 / -1;
+  border-radius: 12px;
+  padding: 8px 12px;
+  min-height: 46px;
+  font-size: 0.84rem;
+  line-height: 1.3;
+}
+
+.cartella-status-row {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .cartella-status-row span {
-  border-radius: 999px;
+  border-radius: 12px;
   background: rgba(27, 40, 78, 0.8);
-  padding: 6px 12px;
-  font-size: 0.95rem;
+  padding: 6px 8px;
+  min-height: 50px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 2px;
+  font-size: 0.78rem;
+  line-height: 1.1;
 }
 
 .cartella-status-row span strong {
-  margin-right: 6px;
+  margin-right: 0;
+  font-family: "Teko", sans-serif;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.cartella-legend {
+  margin: 8px auto 0;
+  max-width: 560px;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  text-align: center;
 }
 
 .cartella-surface {
@@ -3017,6 +3081,46 @@ body {
   .game-actions .secondary-btn {
     width: 100%;
   }
+
+  .cartella-stage-main .game-top-row.compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .cartella-stage-main .game-top-row.compact .countdown {
+    width: 100%;
+    font-size: clamp(1.18rem, 5vw, 1.55rem);
+  }
+
+  .cartella-stage-main .game-top-row.compact .stake-chip {
+    min-width: 0;
+    font-size: clamp(0.82rem, 3.4vw, 0.98rem);
+  }
+
+  .cartella-stage-main .game-top-row.compact .latest-call {
+    width: 100%;
+    font-size: 0.76rem;
+  }
+
+  .cartella-status-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .cartella-status-row span {
+    min-height: 46px;
+    font-size: 0.72rem;
+    padding: 6px;
+  }
+
+  .cartella-status-row span strong {
+    font-size: 1rem;
+  }
+
+  .cartella-legend {
+    font-size: 0.69rem;
+    line-height: 1.28;
+  }
 }
 
 @media (max-width: 760px) {
@@ -3123,7 +3227,7 @@ body {
   }
 
   .caller-ball small {
-    font-size: 0.78rem;
+    font-size: 0.88rem;
   }
 
   .caller-board-panel {
