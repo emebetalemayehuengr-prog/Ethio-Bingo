@@ -557,16 +557,21 @@ SIMULATED_PLAYING_MAX_PAID = max(SIMULATED_SELECTING_MAX_PAID, env_int("SIMULATE
 SIMULATED_SELECTING_STEP_SECONDS = max(1, env_int("SIMULATED_SELECTING_STEP_SECONDS", 3))
 SIMULATED_SELECTING_CARDS_PER_STEP = max(1, env_int("SIMULATED_SELECTING_CARDS_PER_STEP", 2))
 SIMULATED_PLAYING_CARDS_PER_CALL = max(1, env_int("SIMULATED_PLAYING_CARDS_PER_CALL", 1))
-SIMULATED_BOT_POOL_SIZE = max(1, env_int("SIMULATED_BOT_POOL_SIZE", 36))
-SIMULATED_PHONE_START = max(0, min(99999999, env_int("SIMULATED_PHONE_START", 96000000)))
+SIMULATED_BOT_POOL_SIZE = max(120, env_int("SIMULATED_BOT_POOL_SIZE", 220))
+SIMULATED_PHONE_START = max(10000000, min(99999999, env_int("SIMULATED_PHONE_START", 96000000)))
 SIMULATED_USER_TAG = "__simulated_bot__"
 SIMULATED_PASSWORD_HASH = "simbot$disabled"
-SIMULATED_MALE_NAMES = [
+SIMULATED_HIGH_TRAFFIC_ROUND_PERCENT = max(0, min(100, env_int("SIMULATED_HIGH_TRAFFIC_ROUND_PERCENT", 35)))
+SIMULATED_HIGH_TRAFFIC_TARGET = max(100, min(CARTELLA_TOTAL, env_int("SIMULATED_HIGH_TRAFFIC_TARGET", 100)))
+SIMULATED_FIRST_NAMES = [
     "Abebe",
+    "Abel",
     "Alemu",
+    "Amanuel",
     "Aschalew",
     "Assefa",
     "Ayele",
+    "Bereket",
     "Bekele",
     "Biniam",
     "Birhanu",
@@ -595,14 +600,48 @@ SIMULATED_MALE_NAMES = [
     "Mesfin",
     "Mohammed",
     "Mulugeta",
+    "Nebiyu",
     "Natnael",
     "Nega",
     "Nigatu",
     "Seifu",
     "Solomon",
     "Tamirat",
+    "Yohannes",
     "Teshome",
     "Yared",
+]
+SIMULATED_LAST_NAMES = [
+    "Abate",
+    "Abebe",
+    "Alemayehu",
+    "Amanuel",
+    "Asfaw",
+    "Assefa",
+    "Ayalew",
+    "Belay",
+    "Bekele",
+    "Birhane",
+    "Demeke",
+    "Desta",
+    "Fikre",
+    "Getachew",
+    "Getahun",
+    "Girma",
+    "Hailemariam",
+    "Kassa",
+    "Kebede",
+    "Legesse",
+    "Mamo",
+    "Mekuria",
+    "Molla",
+    "Negash",
+    "Tadesse",
+    "Tekle",
+    "Wolde",
+    "Yilma",
+    "Yohannes",
+    "Zerihun",
 ]
 ADMIN_BOOTSTRAP_PHONES = env_list("ADMIN_BOOTSTRAP_PHONES", os.getenv("ADMIN_PHONE_NUMBERS", ""))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -2607,6 +2646,46 @@ def simulated_user_marker(index: int) -> str:
     return f"{SIMULATED_USER_TAG}:{index}"
 
 
+def build_simulated_user_name(index: int) -> str:
+    first = SIMULATED_FIRST_NAMES[index % len(SIMULATED_FIRST_NAMES)]
+    last = SIMULATED_LAST_NAMES[(index // len(SIMULATED_FIRST_NAMES)) % len(SIMULATED_LAST_NAMES)]
+    return f"{first} {last}"
+
+
+def is_suspicious_simulated_phone(phone_number: str) -> bool:
+    digits = re.sub(r"\D", "", phone_number)
+    if len(digits) != 10 or not digits.startswith("09"):
+        return True
+    tail = digits[2:]
+    if len(set(tail)) <= 2:
+        return True
+    bad_tokens = ("000000", "111111", "123456", "654321", "012345", "987654", "999999")
+    if any(token in tail for token in bad_tokens):
+        return True
+    ascending = "0123456789"
+    descending = ascending[::-1]
+    for idx in range(0, len(ascending) - 5):
+        seq = ascending[idx : idx + 6]
+        if seq in tail or seq in descending:
+            return True
+    return False
+
+
+def generate_simulated_phone(index: int) -> str:
+    seed = int(hashlib.sha256(f"{SIMULATED_PHONE_START}:{index}".encode("utf-8")).hexdigest()[:12], 16)
+    marker = simulated_user_marker(index)
+    for attempt in range(50000):
+        tail = 10000000 + ((seed + attempt * 104729) % 90000000)
+        candidate = f"09{tail:08d}"
+        if is_suspicious_simulated_phone(candidate):
+            continue
+        existing = USERS.get(candidate)
+        if existing is not None and existing.telegram_username != marker:
+            continue
+        return candidate
+    raise RuntimeError("Unable to allocate a non-suspicious phone number for simulated user.")
+
+
 def is_simulated_user(user: UserStore | None) -> bool:
     if not user:
         return False
@@ -2626,35 +2705,33 @@ def get_or_create_simulated_user(index: int) -> tuple[UserStore, bool]:
         if user.telegram_username == marker:
             return user, False
 
-    user_name = SIMULATED_MALE_NAMES[index % len(SIMULATED_MALE_NAMES)]
-    base = (SIMULATED_PHONE_START + index) % 100000000
-    for attempt in range(10000):
-        candidate = f"09{(base + attempt * SIMULATED_BOT_POOL_SIZE) % 100000000:08d}"
-        existing = USERS.get(candidate)
-        if existing is not None:
-            if existing.telegram_username == marker:
-                return existing, False
-            continue
+    user_name = build_simulated_user_name(index)
+    candidate = generate_simulated_phone(index)
+    existing = USERS.get(candidate)
+    if existing is not None:
+        if existing.telegram_username == marker:
+            return existing, False
+        raise RuntimeError("Simulated phone collision with a real account.")
 
-        simulated = UserStore(
-            user_name=user_name,
-            phone_number=candidate,
-            password_hash=SIMULATED_PASSWORD_HASH,
-            referral_code=create_referral_code(),
-            is_admin=False,
-            telegram_id=None,
-            telegram_username=marker,
-            wallet=WalletState(main_balance=0.0, bonus_balance=0.0),
-        )
-        USERS[candidate] = simulated
-        return simulated, True
-
-    raise RuntimeError("Unable to allocate phone number for simulated user.")
+    simulated = UserStore(
+        user_name=user_name,
+        phone_number=candidate,
+        password_hash=SIMULATED_PASSWORD_HASH,
+        referral_code=create_referral_code(),
+        is_admin=False,
+        telegram_id=None,
+        telegram_username=marker,
+        wallet=WalletState(main_balance=0.0, bonus_balance=0.0),
+    )
+    USERS[candidate] = simulated
+    return simulated, True
 
 
 def get_simulated_owner_phone(room: RoomStore, queue: Literal["current", "next"], cartella_no: int) -> tuple[str, bool]:
-    seed = f"{room.id}:{queue}:{cartella_no}"
-    index = int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12], 16) % SIMULATED_BOT_POOL_SIZE
+    # Deterministic per-round owner assignment while distributing identities across the pool.
+    round_seed = f"{room.id}:{queue}:{room.started_at.isoformat()}"
+    offset = int(hashlib.sha256(round_seed.encode("utf-8")).hexdigest()[:8], 16) % SIMULATED_BOT_POOL_SIZE
+    index = (offset + cartella_no - 1) % SIMULATED_BOT_POOL_SIZE
     user, created = get_or_create_simulated_user(index)
     return user.phone_number, created
 
@@ -2988,6 +3065,7 @@ def get_queue_maps(
 
 
 def compute_simulated_target(
+    room: RoomStore,
     phase: Literal["selecting", "playing", "finished"],
     countdown_seconds: int,
     called_numbers: list[int],
@@ -2998,7 +3076,16 @@ def compute_simulated_target(
     if phase == "selecting":
         elapsed_select = max(0, SELECT_PHASE_SECONDS - max(0, countdown_seconds))
         step_index = elapsed_select // SIMULATED_SELECTING_STEP_SECONDS
-        return min(SIMULATED_SELECTING_MAX_PAID, step_index * SIMULATED_SELECTING_CARDS_PER_STEP)
+        baseline_target = min(SIMULATED_SELECTING_MAX_PAID, step_index * SIMULATED_SELECTING_CARDS_PER_STEP)
+
+        crowd_seed = int(hashlib.sha256(f"{room.id}:{room.started_at.isoformat()}".encode("utf-8")).hexdigest()[:8], 16) % 100
+        if crowd_seed < SIMULATED_HIGH_TRAFFIC_ROUND_PERCENT:
+            ramp_window = max(1, SELECT_PHASE_SECONDS - 2)
+            progress = min(1.0, elapsed_select / ramp_window)
+            burst_target = int(round(SIMULATED_HIGH_TRAFFIC_TARGET * progress))
+            return max(baseline_target, burst_target)
+
+        return baseline_target
 
     _ = (called_numbers,)
     return 0
@@ -3059,7 +3146,7 @@ def ensure_simulated_activity(room: RoomStore, now: datetime) -> None:
     else:
         return
 
-    target = compute_simulated_target(phase, countdown_seconds, called_numbers)
+    target = compute_simulated_target(room, phase, countdown_seconds, called_numbers)
     changed_room, changed_users = ensure_simulated_cards_for_queue(room, queue, target)
     if changed_users:
         persist_users()

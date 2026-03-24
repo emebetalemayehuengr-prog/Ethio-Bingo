@@ -3679,3 +3679,333 @@ body {
     font-size: 0.95rem;
   }
 }
+
+/* Theme Refresh: high-contrast ocean + amber */
+:root {
+  --bg-deep: #061321;
+  --bg-main: #0b1f33;
+  --bg-soft: #17344f;
+  --ink-main: #eef6ff;
+  --ink-muted: #b6cade;
+  --panel: #112840;
+  --panel-soft: #1c3d60;
+  --gold: #f2b71d;
+  --gold-deep: #ce9410;
+  --green: #2ecf86;
+  --danger: #ec4f63;
+  --blue: #3b86ff;
+  --radius-lg: 20px;
+  --radius-md: 12px;
+  --shadow: 0 18px 38px rgba(4, 10, 18, 0.42);
+}
+
+:root[data-theme="light"] {
+  --bg-deep: #dbe7f2;
+  --bg-main: #f4f8fc;
+  --bg-soft: #e6eef7;
+  --ink-main: #16293f;
+  --ink-muted: #49627d;
+  --panel: #ffffff;
+  --panel-soft: #eff4fa;
+  --shadow: 0 16px 30px rgba(20, 40, 64, 0.12);
+}
+
+body {
+  color: var(--ink-main);
+  background:
+    radial-gradient(circle at 8% -12%, rgba(46, 207, 134, 0.22), transparent 26%),
+    radial-gradient(circle at 84% -16%, rgba(242, 183, 29, 0.2), transparent 30%),
+    linear-gradient(165deg, var(--bg-main), var(--bg-deep) 75%);
+}
+
+.top-header {
+  background: rgba(9, 21, 34, 0.9);
+  border-bottom: 1px solid rgba(164, 187, 210, 0.2);
+  backdrop-filter: blur(12px);
+}
+
+.top-strip {
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-inline {
+  color: #f4fbff;
+}
+
+.theme-toggle {
+  border: 1px solid rgba(179, 203, 227, 0.35);
+}
+
+.theme-toggle.dark {
+  background: rgba(21, 52, 79, 0.95);
+  color: #f6fbff;
+}
+
+.theme-toggle.light {
+  background: #ffffff;
+  color: #23466b;
+  border-color: rgba(35, 70, 107, 0.28);
+}
+
+.refresh-btn {
+  border: 1px solid rgba(12, 28, 44, 0.22);
+  background: linear-gradient(180deg, #f6c649, #e8a40d);
+  color: #1f3550;
+}
+
+.wallet-pill {
+  background: linear-gradient(180deg, #2f6fbc, #21589a);
+  color: #f3f9ff;
+  border: 1px solid rgba(199, 221, 244, 0.3);
+}
+
+.main-content {
+  max-width: 1320px;
+  margin-inline: auto;
+  align-content: start;
+}
+
+.panel,
+.wallet-section,
+.faq-section,
+.stake-section,
+.card-section,
+.room-play-section {
+  background: linear-gradient(170deg, rgba(17, 40, 64, 0.95), rgba(10, 26, 42, 0.96));
+  border: 1px solid rgba(157, 185, 213, 0.22);
+  box-shadow: var(--shadow);
+}
+
+:root[data-theme="light"] .panel,
+:root[data-theme="light"] .wallet-section,
+:root[data-theme="light"] .faq-section,
+:root[data-theme="light"] .stake-section,
+:root[data-theme="light"] .card-section,
+:root[data-theme="light"] .room-play-section {
+  background: linear-gradient(170deg, #ffffff, #f1f6fb);
+  border-color: rgba(39, 77, 119, 0.16);
+}
+
+.panel h2,
+.wallet-panel h3,
+.faq-section h2,
+.stake-section h2 {
+  color: #f5c14b;
+}
+
+:root[data-theme="light"] .panel h2,
+:root[data-theme="light"] .wallet-panel h3,
+:root[data-theme="light"] .faq-section h2,
+:root[data-theme="light"] .stake-section h2 {
+  color: #1d3f66;
+}
+
+.service-card,
+.game-card {
+  background: linear-gradient(135deg, rgba(27, 61, 94, 0.98), rgba(13, 33, 53, 0.98));
+  border: 1px solid rgba(157, 184, 212, 0.2);
+}
+
+.service-card h3,
+.game-card h2 {
+  color: #f5c14b;
+}
+
+.service-card p,
+.game-card p,
+.panel-subtitle {
+  color: #c9dbed;
+}
+
+:root[data-theme="light"] .service-card,
+:root[data-theme="light"] .game-card {
+  background: linear-gradient(135deg, #ffffff, #eef4fa);
+  border-color: rgba(40, 72, 108, 0.16);
+}
+
+:root[data-theme="light"] .service-card h3,
+:root[data-theme="light"] .game-card h2 {
+  color: #24507a;
+}
+
+:root[data-theme="light"] .service-card p,
+:root[data-theme="light"] .game-card p {
+  color: #46627f;
+}
+
+.notice {
+  border: 1px solid rgba(176, 201, 225, 0.26);
+  background: rgba(14, 33, 51, 0.9);
+}
+
+.notice.error {
+  background: rgba(120, 25, 38, 0.38);
+  border-color: rgba(236, 79, 99, 0.5);
+  color: #ffdce2;
+}
+
+.notice.success {
+  background: rgba(26, 99, 66, 0.38);
+  border-color: rgba(46, 207, 134, 0.5);
+  color: #d8ffef;
+}
+
+.primary-btn,
+.join-btn {
+  background: linear-gradient(180deg, #f5c14b, #e4a20f);
+  color: #20334f;
+  border: 1px solid rgba(20, 33, 48, 0.2);
+}
+
+.secondary-btn {
+  background: linear-gradient(180deg, #e9f2fb, #d6e6f7);
+  color: #1e4065;
+  border: 1px solid rgba(56, 97, 139, 0.24);
+}
+
+.primary-btn:hover,
+.join-btn:hover {
+  filter: brightness(1.03);
+}
+
+.secondary-btn:hover {
+  filter: brightness(1.02);
+}
+
+.auth-card {
+  border: 1px solid rgba(143, 173, 201, 0.28);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.96), rgba(240, 247, 255, 0.94));
+  color: #162b44;
+}
+
+.auth-switch button {
+  background: #dbe8f5;
+  color: #1f3f62;
+}
+
+.auth-switch button.active {
+  background: #2f6fbc;
+  color: #f1f8ff;
+}
+
+.auth-form input,
+.wallet-form input,
+.wallet-form select,
+.admin-account-row input {
+  background: #f7fbff;
+  border: 1px solid #aac2d9;
+  color: #10263c;
+}
+
+.auth-form input:focus,
+.wallet-form input:focus,
+.wallet-form select:focus,
+.admin-account-row input:focus {
+  outline: 2px solid rgba(59, 134, 255, 0.42);
+  outline-offset: 1px;
+}
+
+.modal-overlay {
+  background: rgba(4, 10, 18, 0.72);
+}
+
+.modal-card,
+.join-modal,
+.deposit-modal,
+.cartella-modal,
+.alert-modal {
+  background: linear-gradient(170deg, #102742, #0a1d31);
+  color: #e8f3ff;
+  border: 1px solid rgba(166, 191, 215, 0.28);
+  box-shadow: 0 24px 46px rgba(3, 10, 18, 0.52);
+}
+
+.modal-card {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.modal-head {
+  align-items: center;
+}
+
+.modal-head h3 {
+  color: #f7c54a;
+}
+
+.modal-head button {
+  background: rgba(203, 222, 241, 0.16);
+  color: #eff7ff;
+}
+
+.brand-modal {
+  background: linear-gradient(160deg, #ffd97a, #f4bc3f);
+  color: #2f4b69;
+  border-color: rgba(59, 82, 106, 0.24);
+}
+
+.brand-modal .modal-head h3,
+.brand-promo h4 {
+  color: #284669;
+}
+
+.brand-modal .modal-head button {
+  color: #2f4b69;
+  background: rgba(47, 75, 105, 0.16);
+}
+
+.brand-promo {
+  background: rgba(255, 255, 255, 0.44);
+  border-color: rgba(47, 75, 105, 0.24);
+}
+
+.brand-promo p {
+  color: #2f4b69;
+}
+
+.bet-history-modal.won {
+  background: linear-gradient(170deg, #1e8a59, #126941);
+}
+
+.bet-history-modal.lost {
+  background: linear-gradient(170deg, #8f2c3a, #6b1e2c);
+}
+
+.history-panel th,
+.stake-section th {
+  background: rgba(22, 48, 75, 0.85);
+  color: #ebf5ff;
+}
+
+.history-panel td,
+.stake-section td {
+  border-color: rgba(165, 191, 218, 0.22);
+}
+
+:root[data-theme="light"] .history-panel th,
+:root[data-theme="light"] .stake-section th {
+  background: #d9e8f8;
+  color: #193553;
+}
+
+:root[data-theme="light"] .history-panel td,
+:root[data-theme="light"] .stake-section td {
+  color: #1d3450;
+}
+
+@media (max-width: 860px) {
+  .top-strip {
+    align-items: center;
+  }
+
+  .modal-card,
+  .join-modal,
+  .deposit-modal,
+  .cartella-modal,
+  .alert-modal {
+    width: min(96vw, 100%);
+    max-height: 92vh;
+  }
+}
