@@ -86,6 +86,15 @@ CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS")
 if not CORS_ALLOWED_ORIGINS and APP_ENV in {"dev", "development", "local", "test"}:
     CORS_ALLOWED_ORIGINS = DEV_CORS_ORIGINS
 
+PROD_CORS_FALLBACK_ORIGINS = env_list(
+    "PROD_CORS_FALLBACK_ORIGINS",
+    "https://40bingo.com,https://www.40bingo.com,http://40bingo.com,http://www.40bingo.com",
+)
+if IS_PRODUCTION_ENV:
+    for origin in PROD_CORS_FALLBACK_ORIGINS:
+        if origin not in CORS_ALLOWED_ORIGINS:
+            CORS_ALLOWED_ORIGINS.append(origin)
+
 CORS_ALLOWED_ORIGIN_REGEX = os.getenv("CORS_ALLOWED_ORIGIN_REGEX", "").strip()
 if not CORS_ALLOWED_ORIGIN_REGEX and APP_ENV in {"dev", "development", "local", "test"}:
     CORS_ALLOWED_ORIGIN_REGEX = (

@@ -32,7 +32,9 @@ services:
       - key: ADMIN_ALERT_EMAILS
         value: embetalemayehuengr@gmail.com
       - key: CORS_ALLOWED_ORIGINS
-        value: https://40bingo-frontend.onrender.com
+        value: https://40bingo.com,https://www.40bingo.com,http://40bingo.com,http://www.40bingo.com,https://40bingo-frontend.onrender.com
+      - key: PROD_CORS_FALLBACK_ORIGINS
+        value: https://40bingo.com,https://www.40bingo.com,http://40bingo.com,http://www.40bingo.com
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: SMTP_HOST

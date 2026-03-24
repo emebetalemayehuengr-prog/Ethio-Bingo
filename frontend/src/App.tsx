@@ -220,6 +220,15 @@ const normalizePhoneForMatch = (value: string) => {
   if (digits.startsWith("09") && digits.length === 10) return digits;
   return digits;
 };
+const normalizeAuthPhoneInput = (value: string) => {
+  const trimmed = value.trim();
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.startsWith("2519") && digits.length === 12) return `+${digits}`;
+  if (digits.startsWith("09") && digits.length === 10) return digits;
+  if (digits.startsWith("9") && digits.length === 9) return `0${digits}`;
+  return trimmed;
+};
+const isValidAuthPhoneInput = (value: string) => /^(09\d{8}|\+2519\d{8})$/.test(value);
 const normalizeOwnerForMatch = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
 const safeDecodeUriComponent = (value: string) => {
   try {
@@ -464,15 +473,20 @@ function AuthScreen({
   onTelegramLogin: () => void;
   telegramAvailable: boolean;
 }) {
+  const [showPassword, setShowPassword] = useState(false);
   const accountCreatedNotice = notice.toLowerCase().startsWith("account created");
   return (
     <div className="auth-shell">
-      <div className="auth-card">
-        <div className="auth-brand">
-          <img src="/brand/40bingo-logo.svg" alt="40bingo logo" className="auth-brand-logo" />
+      <div className="auth-brand-lockup">
+        <img src="/brand/40bingo-logo.svg" alt="40bingo logo" className="auth-brand-logo" />
+        <div>
           <h1>40bingo</h1>
+          <p>Play smart. Win fair.</p>
         </div>
-        <p>{mode === "signup" ? "Create account to continue." : "Sign in to continue."}</p>
+      </div>
+      <div className="auth-card">
+        <h2>{mode === "signup" ? "Create Your Account" : "Welcome Back"}</h2>
+        <p className="auth-subtitle">{mode === "signup" ? "Create account to continue." : "Sign in to continue."}</p>
         <div className="auth-switch">
           <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
             Login
@@ -490,11 +504,36 @@ function AuthScreen({
           )}
           <label>
             Phone Number
-            <input value={phone} onChange={(event) => setPhone(event.target.value)} required />
+            <input
+              value={phone}
+              maxLength={13}
+              inputMode="tel"
+              autoComplete="tel"
+              placeholder="09XXXXXXXX or +2519XXXXXXXX"
+              onChange={(event) => setPhone(event.target.value)}
+              onBlur={(event) => setPhone(normalizeAuthPhoneInput(event.target.value))}
+              required
+            />
           </label>
           <label>
             Password
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+            <div className="auth-password-wrap">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                autoComplete={mode === "login" ? "current-password" : "new-password"}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+              />
+              <button
+                type="button"
+                className="auth-password-toggle"
+                onClick={() => setShowPassword((current) => !current)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
           </label>
           <label className="auth-inline-check">
             <input type="checkbox" checked={rememberPassword} onChange={(event) => setRememberPassword(event.target.checked)} />
@@ -1070,7 +1109,11 @@ export default function App() {
     setAuthNotice("");
     setAuthError("");
     try {
-      const normalizedPhone = authPhone.trim();
+      const normalizedPhone = normalizeAuthPhoneInput(authPhone);
+      if (!isValidAuthPhoneInput(normalizedPhone)) {
+        throw new Error("Use phone format 09XXXXXXXX or +2519XXXXXXXX.");
+      }
+      setAuthPhone(normalizedPhone);
       if (authMode === "signup") {
         const res = await signupRequest({
           user_name: authName.trim(),
@@ -1087,9 +1130,21 @@ export default function App() {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Login failed";
-      if (authMode === "signup" && message.toLowerCase().includes("already registered")) {
+      const normalizedMessage = message.toLowerCase();
+      if (
+        authMode === "signup" &&
+        (normalizedMessage.includes("already registered") ||
+          normalizedMessage.includes("already exists") ||
+          normalizedMessage.includes("already in use"))
+      ) {
         setAuthMode("login");
-        setAuthNotice("This phone is already registered. Please sign in.");
+        setAuthNotice("This phone number already exists. Please log in.");
+        setAuthError("");
+        return;
+      }
+      if (authMode === "login" && normalizedMessage.includes("invalid phone number or password")) {
+        setAuthError("Incorrect phone number or password.");
+        return;
       }
       setAuthError(message);
     } finally {
@@ -1108,8 +1163,8 @@ export default function App() {
       if (!tgInitData) {
         throw new Error("Open this app inside Telegram to use Telegram authentication.");
       }
-      const phoneForLink = authPhone.trim();
-      const canLinkExisting = phoneForLink.length > 0 && authPassword.trim().length >= 6;
+      const phoneForLink = normalizeAuthPhoneInput(authPhone);
+      const canLinkExisting = isValidAuthPhoneInput(phoneForLink) && authPassword.trim().length >= 6;
       const res = await loginWithTelegram({
         init_data: tgInitData,
         ...(canLinkExisting ? { phone_number: phoneForLink, password: authPassword } : {}),
