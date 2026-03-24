@@ -458,17 +458,22 @@ class PostgresStateStore:
         return state
 
     def persist_users(self, users: dict[str, Any]) -> None:
+        if not users:
+            return
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM bet_history")
-                cur.execute("DELETE FROM transactions")
-                cur.execute("DELETE FROM wallets")
-                cur.execute("DELETE FROM users")
                 for phone, user in users.items():
                     cur.execute(
                         """
                         INSERT INTO users(phone_number, user_name, password_hash, referral_code, is_admin, telegram_id, telegram_username)
                         VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT(phone_number) DO UPDATE SET
+                            user_name = EXCLUDED.user_name,
+                            password_hash = EXCLUDED.password_hash,
+                            referral_code = EXCLUDED.referral_code,
+                            is_admin = EXCLUDED.is_admin,
+                            telegram_id = EXCLUDED.telegram_id,
+                            telegram_username = EXCLUDED.telegram_username
                         """,
                         (
                             phone,
@@ -482,13 +487,20 @@ class PostgresStateStore:
                     )
                     wallet = user.get("wallet", {})
                     cur.execute(
-                        "INSERT INTO wallets(phone_number, main_balance, bonus_balance) VALUES (%s, %s, %s)",
+                        """
+                        INSERT INTO wallets(phone_number, main_balance, bonus_balance)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT(phone_number) DO UPDATE SET
+                            main_balance = EXCLUDED.main_balance,
+                            bonus_balance = EXCLUDED.bonus_balance
+                        """,
                         (
                             phone,
                             round(float(wallet.get("main_balance", 0.0)), 2),
                             round(float(wallet.get("bonus_balance", 0.0)), 2),
                         ),
                     )
+                    cur.execute("DELETE FROM transactions WHERE phone_number = %s", (phone,))
                     for tx in list(user.get("history", [])):
                         cur.execute(
                             """
@@ -503,6 +515,7 @@ class PostgresStateStore:
                                 tx.get("created_at", ""),
                             ),
                         )
+                    cur.execute("DELETE FROM bet_history WHERE phone_number = %s", (phone,))
                     for bet in list(user.get("bet_history", [])):
                         cur.execute(
                             """

@@ -9,14 +9,16 @@ import os
 import re
 import secrets
 import smtplib
+import ssl
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from email.utils import getaddresses
 from html import escape
 from pathlib import Path
 from random import Random, randint, sample, shuffle
-from typing import Literal
+from typing import Iterable, Literal
 from urllib.parse import parse_qsl, unquote, unquote_plus, urlparse
 from urllib.request import Request as UrlRequest, urlopen
 
@@ -58,6 +60,22 @@ def env_list(name: str, default: str = "") -> list[str]:
     if not raw:
         return []
     return [item.strip() for item in re.split(r"[,\n;]+", raw) if item.strip()]
+
+
+def env_csv_tokens(raw: str) -> list[str]:
+    if not raw:
+        return []
+    tokens: list[str] = []
+    for item in re.split(r"[,\n;]+", raw):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        candidate = candidate.strip("\"'")
+        if candidate.startswith("<") and candidate.endswith(">"):
+            candidate = candidate[1:-1].strip()
+        if candidate:
+            tokens.append(candidate)
+    return tokens
 
 
 def env_int(name: str, default: int) -> int:
@@ -671,26 +689,24 @@ SIMULATED_LAST_NAMES = [
 ]
 ADMIN_BOOTSTRAP_PHONES = env_list("ADMIN_BOOTSTRAP_PHONES", os.getenv("ADMIN_PHONE_NUMBERS", ""))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-DEFAULT_ADMIN_ALERT_EMAIL = "embetalemayehuengr@gmail.com"
-ADMIN_ALERT_EMAILS = [
-    email
-    for email in re.split(
-        r"[,\s;]+",
-        os.getenv("ADMIN_ALERT_EMAILS", os.getenv("ADMIN_ALERT_EMAIL", DEFAULT_ADMIN_ALERT_EMAIL)).strip(),
-    )
-    if email
+DEFAULT_ADMIN_ALERT_EMAILS = [
+    "emebetalemayehuengr@gmail.com",
+    "fisahaworabo9@gmail.com",
 ]
+ADMIN_ALERT_EMAIL_ENV_KEYS = ("ADMIN_ALERT_EMAILS", "WITHDRAW_ALERT_EMAILS", "ADMIN_GMAIL_ACCOUNTS", "ADMIN_ALERT_EMAIL")
+ADMIN_ALERT_EMAILS: list[str] = []
+for env_key in ADMIN_ALERT_EMAIL_ENV_KEYS:
+    raw_value = os.getenv(env_key, "").strip()
+    if not raw_value:
+        continue
+    ADMIN_ALERT_EMAILS = env_csv_tokens(raw_value)
+    if ADMIN_ALERT_EMAILS:
+        break
+if not ADMIN_ALERT_EMAILS:
+    ADMIN_ALERT_EMAILS = list(DEFAULT_ADMIN_ALERT_EMAILS)
 DEFAULT_WITHDRAW_ALERT_PHONES = "0969801746,0913218501"
-WITHDRAW_ALERT_PHONES = [
-    phone
-    for phone in re.split(r"[,\s;]+", os.getenv("WITHDRAW_ALERT_PHONES", DEFAULT_WITHDRAW_ALERT_PHONES).strip())
-    if phone
-]
-ADMIN_ALERT_SMS_RECIPIENTS = [
-    recipient
-    for recipient in re.split(r"[,\s;]+", os.getenv("ADMIN_ALERT_SMS_RECIPIENTS", "").strip())
-    if recipient
-]
+WITHDRAW_ALERT_PHONES = env_csv_tokens(os.getenv("WITHDRAW_ALERT_PHONES", DEFAULT_WITHDRAW_ALERT_PHONES).strip())
+ADMIN_ALERT_SMS_RECIPIENTS = env_csv_tokens(os.getenv("ADMIN_ALERT_SMS_RECIPIENTS", "").strip())
 SMTP_SMS_GATEWAY_DOMAIN = os.getenv("SMTP_SMS_GATEWAY_DOMAIN", "").strip().lstrip("@")
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").strip().lower() in {"1", "true", "yes", "on"}
@@ -921,9 +937,20 @@ def db_write_state(state_key: str, value: object) -> None:
             )
 
 
-def persist_users() -> None:
+def persist_users(phone_numbers: Iterable[str] | None = None) -> None:
+    payload: dict[str, dict[str, object]]
+    if phone_numbers is None:
+        payload = {phone: user.model_dump(mode="json") for phone, user in USERS.items()}
+    else:
+        unique_phones = {str(phone).strip() for phone in phone_numbers if str(phone).strip()}
+        payload = {
+            phone: USERS[phone].model_dump(mode="json")
+            for phone in unique_phones
+            if phone in USERS
+        }
+
     if PG_STORE.enabled():
-        PG_STORE.persist_users({phone: user.model_dump(mode="json") for phone, user in USERS.items()})
+        PG_STORE.persist_users(payload)
         return
     db_write_state("users", {phone: user.model_dump(mode="json") for phone, user in USERS.items()})
 
@@ -1171,15 +1198,15 @@ def is_bootstrap_admin_phone(phone_number: str) -> bool:
 def apply_admin_bootstrap() -> None:
     if not ADMIN_BOOTSTRAP_PHONES:
         return
-    changed = False
+    changed_phones: set[str] = set()
     for raw_phone in ADMIN_BOOTSTRAP_PHONES:
         phone = normalize_phone(raw_phone)
         user = USERS.get(phone)
         if user and not user.is_admin:
             user.is_admin = True
-            changed = True
-    if changed:
-        persist_users()
+            changed_phones.add(phone)
+    if changed_phones:
+        persist_users(changed_phones)
 
 
 def apply_default_deposit_logos() -> None:
@@ -1289,18 +1316,31 @@ def normalize_withdraw_ticket_status(ticket: WithdrawTicket) -> None:
 
 def send_smtp_message(msg: EmailMessage, *, context_label: str) -> bool:
     try:
+        recipients = [email for _, email in getaddresses(msg.get_all("To", [])) if email]
+        if not recipients:
+            print(f"Failed to send {context_label}: no recipients")
+            return False
+        tls_context = ssl.create_default_context()
         if SMTP_USE_SSL:
             with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
+                smtp.ehlo()
                 if SMTP_USERNAME:
                     smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
-                smtp.send_message(msg)
+                refused = smtp.send_message(msg)
         else:
             with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
+                smtp.ehlo()
                 if SMTP_USE_TLS:
-                    smtp.starttls()
+                    smtp.starttls(context=tls_context)
+                    smtp.ehlo()
                 if SMTP_USERNAME:
                     smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
-                smtp.send_message(msg)
+                refused = smtp.send_message(msg)
+        if isinstance(refused, dict) and refused:
+            if len(refused) >= len(recipients):
+                print(f"Failed to send {context_label}: all recipients refused {list(refused.keys())}")
+                return False
+            print(f"Partial delivery for {context_label}: refused recipients {list(refused.keys())}")
         return True
     except Exception as exc:
         print(f"Failed to send {context_label}: {exc}")
@@ -2436,7 +2476,8 @@ def record_bet_history_for_round(
     called_numbers: list[int],
     winners: list[WinnerEntry],
     game_winning: float,
-) -> None:
+) -> set[str]:
+    changed_phones: set[str] = set()
     by_user_cards: dict[str, list[int]] = {}
     for cartella_no, owner_phone in room.taken_cartellas.items():
         by_user_cards.setdefault(owner_phone, []).append(cartella_no)
@@ -2473,6 +2514,8 @@ def record_bet_history_for_round(
         )
         if len(user.bet_history) > 200:
             user.bet_history = user.bet_history[:200]
+        changed_phones.add(owner_phone)
+    return changed_phones
 
 
 def normalize_transaction_number(value: str) -> str:
@@ -3123,6 +3166,7 @@ def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
     base_payout = round(distributable / split_count, 2) if split_count > 0 else 0.0
 
     winners: list[WinnerEntry] = []
+    changed_user_phones: set[str] = set()
     assigned = 0.0
 
     for idx, claim in enumerate(valid_claims):
@@ -3138,6 +3182,7 @@ def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
         if not is_simulated_phone(claim.phone_number):
             winner_user.wallet.main_balance += payout
             record_transaction(winner_user, "Win", payout, "Completed")
+            changed_user_phones.add(claim.phone_number)
         winners.append(
             WinnerEntry(
                 phone_number=claim.phone_number,
@@ -3154,12 +3199,14 @@ def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
         persist_rooms()
         return
 
-    record_bet_history_for_round(
-        room=room,
-        now=now,
-        called_numbers=called_numbers,
-        winners=winners,
-        game_winning=distributable,
+    changed_user_phones.update(
+        record_bet_history_for_round(
+            room=room,
+            now=now,
+            called_numbers=called_numbers,
+            winners=winners,
+            game_winning=distributable,
+        )
     )
 
     room.winners = winners
@@ -3172,7 +3219,8 @@ def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
     room.pending_claims = []
     room.claim_window_ends_at = None
     room.claim_window_reference_time = None
-    persist_users()
+    if changed_user_phones:
+        persist_users(changed_user_phones)
     persist_rooms()
 
 
@@ -3191,7 +3239,7 @@ def end_room_if_calls_complete(room: RoomStore, now: datetime) -> None:
     total_sales = round(float(len(room.taken_cartellas) * room.card_price), 2)
     house_commission = round(total_sales * HOUSE_COMMISSION_RATE, 2)
     distributable = round(total_sales - house_commission, 2)
-    record_bet_history_for_round(
+    changed_user_phones = record_bet_history_for_round(
         room=room,
         now=now,
         called_numbers=called_numbers,
@@ -3205,7 +3253,8 @@ def end_room_if_calls_complete(room: RoomStore, now: datetime) -> None:
     room.house_commission = house_commission
     room.winners = []
     room.result_until = now + timedelta(seconds=RESULT_ANNOUNCE_SECONDS)
-    persist_users()
+    if changed_user_phones:
+        persist_users(changed_user_phones)
     persist_rooms()
 
 
@@ -3248,20 +3297,20 @@ def ensure_simulated_cards_for_queue(
     room: RoomStore,
     queue: Literal["current", "next"],
     target: int,
-) -> tuple[bool, bool]:
+) -> tuple[bool, set[str]]:
     if target <= 0:
-        return False, False
+        return False, set()
 
     taken_map, held_map, _ = get_queue_maps(room, queue)
     current_simulated = [cartella_no for cartella_no, owner in taken_map.items() if is_simulated_phone(owner)]
     deficit = max(0, target - len(current_simulated))
     if deficit <= 0:
-        return False, False
+        return False, set()
 
     blocked = set(taken_map.keys()) | set(held_map.keys())
     available = [cartella_no for cartella_no in range(1, CARTELLA_TOTAL + 1) if cartella_no not in blocked]
     if not available:
-        return False, False
+        return False, set()
 
     seed_source = f"{room.id}:{queue}:{room.started_at.isoformat()}:{target}:{len(taken_map)}"
     seed = int(hashlib.sha256(seed_source.encode("utf-8")).hexdigest()[:16], 16)
@@ -3269,7 +3318,7 @@ def ensure_simulated_cards_for_queue(
     chosen = rng.sample(available, min(deficit, len(available)))
 
     changed_room = False
-    changed_users = False
+    changed_user_phones: set[str] = set()
     for cartella_no in chosen:
         owner_phone, user_created = get_simulated_owner_phone(room, queue, cartella_no)
         if cartella_no in taken_map:
@@ -3278,9 +3327,9 @@ def ensure_simulated_cards_for_queue(
         room.marked_by_user_card.setdefault(mark_key(owner_phone, cartella_no), [])
         changed_room = True
         if user_created:
-            changed_users = True
+            changed_user_phones.add(owner_phone)
 
-    return changed_room, changed_users
+    return changed_room, changed_user_phones
 
 
 def ensure_simulated_activity(room: RoomStore, now: datetime) -> None:
@@ -3300,9 +3349,9 @@ def ensure_simulated_activity(room: RoomStore, now: datetime) -> None:
         return
 
     target = compute_simulated_target(room, phase, countdown_seconds, called_numbers)
-    changed_room, changed_users = ensure_simulated_cards_for_queue(room, queue, target)
-    if changed_users:
-        persist_users()
+    changed_room, changed_user_phones = ensure_simulated_cards_for_queue(room, queue, target)
+    if changed_user_phones:
+        persist_users(changed_user_phones)
     if changed_room:
         persist_rooms()
 
@@ -3620,7 +3669,7 @@ def signup(payload: SignupRequest) -> dict:
         wallet=WalletState(main_balance=SIGNUP_INITIAL_MAIN_BALANCE, bonus_balance=SIGNUP_INITIAL_BONUS_BALANCE),
     )
     USERS[phone_number] = user
-    persist_users()
+    persist_users([phone_number])
     token = create_session(phone_number)
     return {
         "message": "Account created successfully.",
@@ -3687,7 +3736,7 @@ def telegram_auth(payload: TelegramAuthRequest) -> dict:
         if display_name:
             user.user_name = display_name[:40]
 
-    persist_users()
+    persist_users([user.phone_number])
     token = create_session(user.phone_number)
     return {
         "message": "Telegram authentication successful.",
@@ -3834,7 +3883,7 @@ def mark_paid_withdraw_request(
     update_latest_pending_withdraw_status(target_user, ticket.amount, "Completed")
 
     try:
-        persist_users()
+        persist_users([target_user.phone_number])
         persist_withdraw_tickets()
     except Exception as exc:
         print(f"Failed to persist mark-paid update for ticket {ticket.id}: {exc}")
@@ -3877,7 +3926,7 @@ def reject_withdraw_request(ticket_id: str, user: UserStore = Depends(get_curren
         target_user.wallet.main_balance += float(ticket.amount)
         update_latest_pending_withdraw_status(target_user, ticket.amount, "Failed")
         record_transaction(target_user, "Deposit", ticket.amount, "Completed")
-        persist_users()
+        persist_users([target_user.phone_number])
     persist_withdraw_tickets()
     append_audit_event(
         "withdraw_rejected",
@@ -3928,7 +3977,7 @@ def submit_deposit(payload: DepositRequest, user: UserStore = Depends(get_curren
     amount = round(float(payload.amount), 2)
     user.wallet.main_balance += amount
     record_transaction(user, "Deposit", amount, "Completed")
-    persist_users()
+    persist_users([user.phone_number])
     append_audit_event(
         "deposit_confirmed",
         phone_number=user.phone_number,
@@ -3967,7 +4016,7 @@ def transfer_balance(payload: TransferRequest, user: UserStore = Depends(get_cur
     target_user.wallet.main_balance += float(payload.amount)
     record_transaction(user, "Transfer", payload.amount, "Completed")
     record_transaction(target_user, "Deposit", payload.amount, "Completed")
-    persist_users()
+    persist_users([user.phone_number, target_user.phone_number])
     return {
         "message": "Transfer completed successfully.",
         "wallet": user.wallet.model_dump(),
@@ -4001,7 +4050,7 @@ def withdraw_balance(payload: WithdrawRequest, user: UserStore = Depends(get_cur
         admin_note=None,
     )
     WITHDRAW_TICKETS.insert(0, ticket)
-    persist_users()
+    persist_users([user.phone_number])
     persist_withdraw_tickets()
     append_audit_event(
         "withdraw_requested",
@@ -4052,7 +4101,7 @@ def settle_casino_round(user: UserStore, game: CasinoGameItem, stake_value: floa
 
     net = round(payout - stake, 2)
     outcome: Literal["win", "lose"] = "win" if payout > 0 else "lose"
-    persist_users()
+    persist_users([user.phone_number])
 
     direction = "won" if net >= 0 else "lost"
     return {
@@ -4227,7 +4276,7 @@ async def casino_webhook(
         user.wallet.main_balance = round(max(0.0, user.wallet.main_balance - debit), 2)
         record_transaction(user, "Bet", debit, "Completed")
 
-    persist_users()
+    persist_users([user.phone_number])
     prune_expired_casino_launches()
     return {
         "status": "ok",
@@ -4322,7 +4371,7 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
     user.wallet.main_balance -= float(stake.stake)
     record_transaction(user, "Bet", stake.stake, "Completed")
     room.marked_by_user_card[mark_key(user.phone_number, payload.cartella_no)] = []
-    persist_users()
+    persist_users([user.phone_number])
     persist_rooms()
 
     card = create_bingo_card(payload.cartella_no)
@@ -4448,7 +4497,6 @@ def claim_bingo(payload: ClaimBingoRequest, user: UserStore = Depends(get_curren
 
     finalize_claim_window_if_needed(room, now)
     persist_rooms()
-    persist_users()
     next_state = build_room_state(room, user.phone_number)
 
     if next_state.phase == "finished":
