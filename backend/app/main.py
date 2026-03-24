@@ -93,7 +93,7 @@ if not CORS_ALLOWED_ORIGIN_REGEX and APP_ENV in {"dev", "development", "local", 
         r"172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$"
     )
 
-app = FastAPI(title="Ethio Bingo API", version="2.0.0")
+app = FastAPI(title="40bingo API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -378,7 +378,7 @@ class RoomStore(BaseModel):
 
 
 BRAND = {
-    "name": "Ethio Bingo",
+    "name": "40bingo",
     "tagline": "Play smart. Win fair.",
     "primary": "#391066",
     "accent": "#ffd400",
@@ -403,7 +403,7 @@ DEPOSIT_METHODS = [
             "Open Telebirr app and dial *127#.",
             "Transfer to one of the listed account numbers.",
             "Copy the transaction number from your receipt.",
-            "Submit it in Ethio Bingo Transaction Checker.",
+            "Submit it in 40bingo Transaction Checker.",
         ],
         receipt_example="CA999DASAD",
     ),
@@ -419,7 +419,7 @@ DEPOSIT_METHODS = [
             "Open CBE Birr app and dial *847#.",
             "Transfer to one of the listed account numbers.",
             "Copy the transaction number from your receipt.",
-            "Submit it in Ethio Bingo Transaction Checker.",
+            "Submit it in 40bingo Transaction Checker.",
         ],
         receipt_example="CAA2K819ZY",
     ),
@@ -622,7 +622,7 @@ except ValueError:
     SMTP_PORT = 587
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
-SMTP_FROM = os.getenv("SMTP_FROM", "").strip() or SMTP_USERNAME or "noreply@ethiobingo.local"
+SMTP_FROM = os.getenv("SMTP_FROM", "").strip() or SMTP_USERNAME or "noreply@40bingo.local"
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").strip().lower() in {"1", "true", "yes", "on"}
 try:
     SESSION_TTL_SECONDS = max(300, int(os.getenv("SESSION_TTL_SECONDS", "86400").strip() or "86400"))
@@ -646,7 +646,7 @@ except ValueError:
 CASINO_PROVIDER_NAME = os.getenv("CASINO_PROVIDER_NAME", "Booming").strip() or "Booming"
 CASINO_PROVIDER_MODE = os.getenv("CASINO_PROVIDER_MODE", "selfhosted").strip().lower()
 CASINO_LAUNCH_API_URL = os.getenv("CASINO_LAUNCH_API_URL", "").strip()
-CASINO_PROVIDER_OPERATOR_ID = os.getenv("CASINO_PROVIDER_OPERATOR_ID", "ethio-bingo").strip() or "ethio-bingo"
+CASINO_PROVIDER_OPERATOR_ID = os.getenv("CASINO_PROVIDER_OPERATOR_ID", "40bingo").strip() or "40bingo"
 CASINO_PROVIDER_API_KEY = os.getenv("CASINO_PROVIDER_API_KEY", "").strip()
 CASINO_PROVIDER_SECRET = os.getenv("CASINO_PROVIDER_SECRET", "").strip()
 CASINO_WEBHOOK_SECRET = os.getenv("CASINO_WEBHOOK_SECRET", "").strip()
@@ -669,15 +669,24 @@ DEPOSIT_SOURCE_DOMAINS: dict[str, set[str]] = {
 }
 
 DEFAULT_SQLITE_PATH = (
-    Path("/var/data/ethio_bingo.db")
+    Path("/var/data/40bingo.db")
     if IS_PRODUCTION_ENV
-    else (Path(__file__).resolve().parent.parent / "data" / "ethio_bingo.db")
+    else (Path(__file__).resolve().parent.parent / "data" / "40bingo.db")
 )
+PRIMARY_DB_ENV_KEYS = ("FORTY_BINGO_DB_PATH", "ETHIO_BINGO_DB_PATH")
+FALLBACK_DB_ENV_KEYS = ("FORTY_BINGO_FALLBACK_DB_PATH", "ETHIO_BINGO_FALLBACK_DB_PATH")
+
+
+def get_env_first(keys: tuple[str, ...], default: str = "") -> str:
+    for key in keys:
+        raw = os.getenv(key, "").strip()
+        if raw:
+            return raw
+    return default
+
+
 DB_PATH = Path(
-    os.getenv(
-        "ETHIO_BINGO_DB_PATH",
-        str(DEFAULT_SQLITE_PATH),
-    )
+    get_env_first(PRIMARY_DB_ENV_KEYS, str(DEFAULT_SQLITE_PATH))
 ).expanduser()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 PG_STORE = PostgresStateStore(DATABASE_URL)
@@ -713,23 +722,24 @@ def ensure_db_ready() -> None:
         return
     if IS_PRODUCTION_ENV and not ALLOW_EPHEMERAL_DB and not sqlite_path_looks_persistent(DB_PATH):
         raise RuntimeError(
-            f"APP_ENV=production requires persistent storage. Current ETHIO_BINGO_DB_PATH '{DB_PATH}' is not under "
-            "/var/data. Attach a Render persistent disk at /var/data or set DATABASE_URL."
+            f"APP_ENV=production requires persistent storage. Current FORTY_BINGO_DB_PATH '{DB_PATH}' is not under "
+            "/var/data. Set FORTY_BINGO_DB_PATH (or legacy ETHIO_BINGO_DB_PATH), attach persistent storage, "
+            "or set DATABASE_URL."
         )
     try:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     except PermissionError:
-        fallback_raw = os.getenv("ETHIO_BINGO_FALLBACK_DB_PATH", "").strip()
+        fallback_raw = get_env_first(FALLBACK_DB_ENV_KEYS)
         if not fallback_raw:
             raise RuntimeError(
                 f"DB path '{DB_PATH}' is not writable. Attach a persistent disk, set DATABASE_URL, "
-                "or set ETHIO_BINGO_FALLBACK_DB_PATH explicitly."
+                "or set FORTY_BINGO_FALLBACK_DB_PATH (legacy ETHIO_BINGO_FALLBACK_DB_PATH is also supported)."
             ) from None
         fallback_path = Path(fallback_raw).expanduser()
         if IS_PRODUCTION_ENV and not ALLOW_EPHEMERAL_DB and not sqlite_path_looks_persistent(fallback_path):
             raise RuntimeError(
-                f"Fallback DB path '{fallback_path}' is not persistent for production. Use /var/data/ethio_bingo.db "
-                "with an attached Render disk or set DATABASE_URL."
+                f"Fallback DB path '{fallback_path}' is not persistent for production. Use /var/data/40bingo.db "
+                "with attached persistent storage or set DATABASE_URL."
             ) from None
         print(
             f"DB path '{DB_PATH}' is not writable. Falling back to '{fallback_path}'."
@@ -1134,7 +1144,7 @@ def send_admin_withdraw_email(ticket: WithdrawTicket) -> bool:
     if not ADMIN_ALERT_EMAILS or not SMTP_HOST:
         return False
 
-    subject = f"[Ethio Bingo] Withdraw request {ticket.id} needs manual payout"
+    subject = f"[40bingo] Withdraw request {ticket.id} needs manual payout"
     body = (
         "A user submitted a withdraw request.\n\n"
         f"Request ID: {ticket.id}\n"
@@ -1174,7 +1184,7 @@ def send_admin_withdraw_paid_email(ticket: WithdrawTicket) -> bool:
     if not ADMIN_ALERT_EMAILS or not SMTP_HOST:
         return False
 
-    subject = f"[Ethio Bingo] Withdraw payout completed: {ticket.id}"
+    subject = f"[40bingo] Withdraw payout completed: {ticket.id}"
     body = (
         "A withdraw request has been marked as PAID.\n\n"
         f"Request ID: {ticket.id}\n"
@@ -1712,7 +1722,7 @@ def build_selfhosted_game_html(game: CasinoGameItem, launch_id: str) -> str:
       <div id="resultLine" class="result-line">Waiting for your first round...</div>
     </section>
 
-    <div class="foot">Self-hosted mode. Payout settles from Ethio Bingo wallet in real-time.</div>
+    <div class="foot">Self-hosted mode. Payout settles from 40bingo wallet in real-time.</div>
   </div>
   <script>
     const launchId = "__LAUNCH_ID__";
@@ -3265,7 +3275,7 @@ def seed_demo_users() -> None:
             ],
         },
         {
-            "user_name": "Ethio Admin",
+            "user_name": "40bingo Admin",
             "phone_number": "0969801746",
             "password": "123456",
             "referral_code": "680174",
@@ -3339,7 +3349,7 @@ async def stop_room_ticker() -> None:
 def health() -> dict:
     return {
         "status": "ok",
-        "service": "ethio-bingo-api",
+        "service": "40bingo-api",
         "time": utc_now().isoformat(),
         "storage": "postgres" if PG_STORE.enabled() else "sqlite",
         "email_alerts_ready": is_email_alerts_configured(),

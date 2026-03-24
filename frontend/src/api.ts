@@ -18,9 +18,16 @@ import type {
 const envApiBase = import.meta.env.VITE_API_BASE as string | undefined;
 const inferredApiBase = `${window.location.protocol}//${window.location.hostname}:8012`;
 const API_BASE = envApiBase?.trim() ? envApiBase : inferredApiBase;
-const TOKEN_KEY = "ethio_bingo_token";
+const TOKEN_KEY = "40bingo_token";
+const LEGACY_TOKEN_KEY = "ethio_bingo_token";
 
-let authToken = window.localStorage.getItem(TOKEN_KEY) ?? "";
+const tokenFromStorage =
+  window.localStorage.getItem(TOKEN_KEY) ?? window.localStorage.getItem(LEGACY_TOKEN_KEY) ?? "";
+if (tokenFromStorage && !window.localStorage.getItem(TOKEN_KEY)) {
+  window.localStorage.setItem(TOKEN_KEY, tokenFromStorage);
+  window.localStorage.removeItem(LEGACY_TOKEN_KEY);
+}
+let authToken = tokenFromStorage;
 
 export function getAuthToken() {
   return authToken;
@@ -30,8 +37,10 @@ export function setAuthToken(token: string | null) {
   authToken = token ?? "";
   if (authToken) {
     window.localStorage.setItem(TOKEN_KEY, authToken);
+    window.localStorage.removeItem(LEGACY_TOKEN_KEY);
   } else {
     window.localStorage.removeItem(TOKEN_KEY);
+    window.localStorage.removeItem(LEGACY_TOKEN_KEY);
   }
 }
 

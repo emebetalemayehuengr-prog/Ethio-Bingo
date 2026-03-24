@@ -1,4 +1,4 @@
-# Ethio Bingo Node Architecture (Task 1 + Task 2)
+# 40bingo Node Architecture (Task 1 + Task 2)
 
 This folder contains the requested architecture artifacts for:
 

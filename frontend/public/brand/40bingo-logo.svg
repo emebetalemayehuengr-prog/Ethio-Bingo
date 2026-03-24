@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" fill="none">
+  <rect width="96" height="96" rx="18" fill="url(#g1)"/>
+  <circle cx="74" cy="22" r="9" fill="#FFD447" fill-opacity="0.95"/>
+  <text x="48" y="53" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="800" fill="#F8FAFF">40</text>
+  <text x="48" y="73" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.5" fill="#F8FAFF">BINGO</text>
+  <defs>
+    <linearGradient id="g1" x1="6" y1="8" x2="84" y2="90" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5A22A8"/>
+      <stop offset="1" stop-color="#2A0B54"/>
+    </linearGradient>
+  </defs>
+</svg>

@@ -1,13 +1,13 @@
 services:
   - type: web
-    name: ethio-bingo-backend
+    name: 40bingo-backend
     runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     disk:
-      name: ethio-bingo-data
+      name: 40bingo-data
       mountPath: /var/data
       sizeGB: 1
     envVars:
@@ -25,14 +25,14 @@ services:
         value: "0"
       - key: SIGNUP_INITIAL_BONUS_BALANCE
         value: "0"
-      - key: ETHIO_BINGO_DB_PATH
-        value: /var/data/ethio_bingo.db
+      - key: FORTY_BINGO_DB_PATH
+        value: /var/data/40bingo.db
       - key: DATABASE_URL
         sync: false
       - key: ADMIN_ALERT_EMAILS
         value: embetalemayehuengr@gmail.com
       - key: CORS_ALLOWED_ORIGINS
-        value: https://ethio-bingo-frontend.onrender.com
+        value: https://40bingo-frontend.onrender.com
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: SMTP_HOST
@@ -49,7 +49,7 @@ services:
         value: "true"
 
   - type: web
-    name: ethio-bingo-frontend
+    name: 40bingo-frontend
     runtime: static
     rootDir: frontend
     buildCommand: npm ci && npm run build
@@ -60,4 +60,4 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_BASE
-        value: https://ethio-bingo-backend.onrender.com
+        value: https://40bingo-backend.onrender.com

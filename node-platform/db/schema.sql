@@ -1,4 +1,4 @@
--- Ethio Bingo PostgreSQL schema
+-- 40bingo PostgreSQL schema
 -- Stack: Node.js + Socket.io + Redis + PostgreSQL
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;

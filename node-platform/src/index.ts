@@ -5,4 +5,4 @@ void BingoGameEngine;
 void issueJwtSession;
 void validateTelegramInitData;
 
-console.log("Ethio Bingo Node platform scaffold ready.");
+console.log("40bingo Node platform scaffold ready.");

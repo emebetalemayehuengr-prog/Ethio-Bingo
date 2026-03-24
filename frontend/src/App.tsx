@@ -49,10 +49,16 @@ type CartellaStep = "pick" | "preview";
 type WalletTab = "deposit" | "withdraw" | "transfer" | "history" | "admin";
 type CasinoDisplayGame = CasinoGame & { image_url: string; exclusive?: boolean };
 
-const AUTH_PHONE_STORAGE_KEY = "ethio_bingo_auth_phone";
-const AUTH_PASSWORD_STORAGE_KEY = "ethio_bingo_auth_password";
-const AUTH_REMEMBER_STORAGE_KEY = "ethio_bingo_auth_remember_password";
-const THEME_STORAGE_KEY = "ethio_bingo_theme_mode";
+const AUTH_PHONE_STORAGE_KEY = "40bingo_auth_phone";
+const AUTH_PASSWORD_STORAGE_KEY = "40bingo_auth_password";
+const AUTH_REMEMBER_STORAGE_KEY = "40bingo_auth_remember_password";
+const THEME_STORAGE_KEY = "40bingo_theme_mode";
+const BRAND_MODAL_STORAGE_KEY = "40bingo_brand_modal_seen_at";
+const LEGACY_AUTH_PHONE_STORAGE_KEY = "ethio_bingo_auth_phone";
+const LEGACY_AUTH_PASSWORD_STORAGE_KEY = "ethio_bingo_auth_password";
+const LEGACY_AUTH_REMEMBER_STORAGE_KEY = "ethio_bingo_auth_remember_password";
+const LEGACY_THEME_STORAGE_KEY = "ethio_bingo_theme_mode";
+const LEGACY_BRAND_MODAL_STORAGE_KEY = "ethio_bingo_brand_modal_seen_at";
 const CASINO_ENABLED = false;
 
 const services: Array<{ view: ServiceView; label: string }> = [
@@ -71,7 +77,7 @@ const calledBoard = Array.from({ length: 75 }, (_, idx) => idx + 1);
 const callerLetters = ["B", "I", "N", "G", "O"] as const;
 const callerRows = Array.from({ length: 15 }, (_, idx) => [idx + 1, idx + 16, idx + 31, idx + 46, idx + 61]);
 const fallbackBrand = {
-  name: "Ethio Bingo",
+  name: "40bingo",
   tagline: "Play smart. Win fair.",
   primary: "#391066",
   accent: "#ffd400",
@@ -463,8 +469,8 @@ function AuthScreen({
     <div className="auth-shell">
       <div className="auth-card">
         <div className="auth-brand">
-          <img src="/brand/ethio-bingo-logo.svg" alt="Ethio Bingo logo" className="auth-brand-logo" />
-          <h1>Ethio Bingo</h1>
+          <img src="/brand/40bingo-logo.svg" alt="40bingo logo" className="auth-brand-logo" />
+          <h1>40bingo</h1>
         </div>
         <p>{mode === "signup" ? "Create account to continue." : "Sign in to continue."}</p>
         <div className="auth-switch">
@@ -605,7 +611,7 @@ export default function App() {
 
   useEffect(() => {
     try {
-      const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+      const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_THEME_STORAGE_KEY);
       if (storedTheme === "dark") {
         setIsDarkMode(true);
         return;
@@ -626,6 +632,7 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", mode);
     try {
       window.localStorage.setItem(THEME_STORAGE_KEY, mode);
+      window.localStorage.removeItem(LEGACY_THEME_STORAGE_KEY);
     } catch {
       // ignore storage errors
     }
@@ -633,9 +640,17 @@ export default function App() {
 
   useEffect(() => {
     try {
-      const remembered = window.localStorage.getItem(AUTH_REMEMBER_STORAGE_KEY) === "1";
-      const savedPhone = window.localStorage.getItem(AUTH_PHONE_STORAGE_KEY) ?? "";
-      const savedPassword = window.localStorage.getItem(AUTH_PASSWORD_STORAGE_KEY) ?? "";
+      const remembered =
+        (window.localStorage.getItem(AUTH_REMEMBER_STORAGE_KEY) ??
+          window.localStorage.getItem(LEGACY_AUTH_REMEMBER_STORAGE_KEY)) === "1";
+      const savedPhone =
+        window.localStorage.getItem(AUTH_PHONE_STORAGE_KEY) ??
+        window.localStorage.getItem(LEGACY_AUTH_PHONE_STORAGE_KEY) ??
+        "";
+      const savedPassword =
+        window.localStorage.getItem(AUTH_PASSWORD_STORAGE_KEY) ??
+        window.localStorage.getItem(LEGACY_AUTH_PASSWORD_STORAGE_KEY) ??
+        "";
       setRememberPassword(remembered);
       if (savedPhone) setAuthPhone(savedPhone);
       if (remembered && savedPassword) setAuthPassword(savedPassword);
@@ -648,10 +663,14 @@ export default function App() {
     try {
       window.localStorage.setItem(AUTH_REMEMBER_STORAGE_KEY, rememberPassword ? "1" : "0");
       window.localStorage.setItem(AUTH_PHONE_STORAGE_KEY, authPhone);
+      window.localStorage.removeItem(LEGACY_AUTH_REMEMBER_STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_AUTH_PHONE_STORAGE_KEY);
       if (rememberPassword) {
         window.localStorage.setItem(AUTH_PASSWORD_STORAGE_KEY, authPassword);
+        window.localStorage.removeItem(LEGACY_AUTH_PASSWORD_STORAGE_KEY);
       } else {
         window.localStorage.removeItem(AUTH_PASSWORD_STORAGE_KEY);
+        window.localStorage.removeItem(LEGACY_AUTH_PASSWORD_STORAGE_KEY);
       }
     } catch {
       // ignore storage errors
@@ -706,8 +725,9 @@ export default function App() {
 
   useEffect(() => {
     if (!profile) return;
-    const storageKey = "ethio_bingo_brand_modal_seen_at";
-    const raw = window.localStorage.getItem(storageKey);
+    const raw =
+      window.localStorage.getItem(BRAND_MODAL_STORAGE_KEY) ??
+      window.localStorage.getItem(LEGACY_BRAND_MODAL_STORAGE_KEY);
     const lastSeen = raw ? Number(raw) : 0;
     const cooldownMs = 1000 * 60 * 60 * 6;
     if (!Number.isFinite(lastSeen) || Date.now() - lastSeen >= cooldownMs) {
@@ -1341,7 +1361,8 @@ export default function App() {
   };
 
   const onCloseBrandModal = () => {
-    window.localStorage.setItem("ethio_bingo_brand_modal_seen_at", String(Date.now()));
+    window.localStorage.setItem(BRAND_MODAL_STORAGE_KEY, String(Date.now()));
+    window.localStorage.removeItem(LEGACY_BRAND_MODAL_STORAGE_KEY);
     setShowBrandModal(false);
   };
 
@@ -1419,9 +1440,9 @@ export default function App() {
 
   if (!ready) {
     return (
-      <div className="ethio-loading">
+      <div className="fortybingo-loading">
         <div className="loader-ring" />
-        <p>Loading Ethio Bingo...</p>
+        <p>Loading 40bingo...</p>
       </div>
     );
   }
@@ -1541,7 +1562,7 @@ export default function App() {
   const isCasinoLaunchView = service === "casino-launch" && Boolean(casinoLaunch);
 
   return (
-    <div className={`ethio-app ${isCasinoLaunchView ? "casino-launch-active" : ""}`}>
+    <div className={`fortybingo-app ${isCasinoLaunchView ? "casino-launch-active" : ""}`}>
       {!isCasinoLaunchView && (
         <>
           <div className={`drawer-overlay ${drawerOpen ? "show" : ""}`} onClick={() => setDrawerOpen(false)} />
@@ -1573,8 +1594,8 @@ export default function App() {
           <header className="top-header">
             <div className="top-strip">
               <div className="brand-inline">
-                <img src="/brand/ethio-bingo-logo.svg" alt="Ethio Bingo logo" className="brand-inline-logo" />
-                <span>Ethio Bingo</span>
+                <img src="/brand/40bingo-logo.svg" alt="40bingo logo" className="brand-inline-logo" />
+                <span>40bingo</span>
               </div>
               <button className="menu-toggle" type="button" onClick={() => setDrawerOpen((state) => !state)}>
                 =
@@ -1630,7 +1651,7 @@ export default function App() {
               {CASINO_ENABLED && (
                 <article className="service-card">
                   <h3>Casino Games</h3>
-                  <p>Play quick casino rounds with the same Ethio Bingo wallet balance.</p>
+                  <p>Play quick casino rounds with the same 40bingo wallet balance.</p>
                   <button className="primary-btn" type="button" onClick={() => openService("casino")}>
                     Open
                   </button>
@@ -2434,7 +2455,7 @@ export default function App() {
               <>
                 <div className="cartella-stage">
                   <aside className="cartella-stage-ads" aria-hidden="true">
-                    <div className="cartella-ad">Ethio Bingo</div>
+                    <div className="cartella-ad">40bingo</div>
                     <div className="cartella-ad alt">Held Cartellas</div>
                   </aside>
                   <section className="cartella-stage-main">
@@ -2719,7 +2740,7 @@ export default function App() {
         <div className="modal-overlay show" onClick={onCloseBrandModal}>
           <div className="modal-card brand-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <h3>Ethio Bingo Updates</h3>
+              <h3>40bingo Updates</h3>
               <button type="button" onClick={onCloseBrandModal}>
                 x
               </button>

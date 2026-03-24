@@ -52,13 +52,13 @@ select {
   font: inherit;
 }
 
-.ethio-app {
+.fortybingo-app {
   min-height: 100vh;
   position: relative;
   overflow-x: hidden;
 }
 
-.ethio-loading {
+.fortybingo-loading {
   min-height: 100vh;
   display: grid;
   place-content: center;
@@ -2322,7 +2322,7 @@ body {
   width: 100%;
 }
 
-.ethio-app.casino-launch-active {
+.fortybingo-app.casino-launch-active {
   background: #03060d;
 }
 
