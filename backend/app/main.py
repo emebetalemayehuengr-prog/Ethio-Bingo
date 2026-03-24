@@ -2583,9 +2583,9 @@ def get_current_user(authorization: str | None = Header(default=None)) -> UserSt
     record = normalize_session_record(SESSIONS.get(token))
 
     # Passenger can serve requests from different workers. If a token is not
-    # found in this worker memory, reload the persisted session snapshot once.
+    # found in this worker memory, reload persisted state once and retry.
     if not record:
-        load_sessions()
+        load_persisted_state()
         record = normalize_session_record(SESSIONS.get(token))
 
     if not record:
