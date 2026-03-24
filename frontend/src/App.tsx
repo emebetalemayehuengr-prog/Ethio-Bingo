@@ -1684,6 +1684,7 @@ export default function App() {
   const isCasinoLaunchView = service === "casino-launch" && Boolean(casinoLaunch);
 
   const profileInitials = (profile.user_name.trim().slice(0, 2) || "40").toUpperCase();
+  const selectedMethodDraftAccounts = selectedMethod ? adminDraftAccounts[selectedMethod.code] ?? [] : [];
 
   return (
     <div className={`fortybingo-app ${isCasinoLaunchView ? "casino-launch-active" : ""}`}>
@@ -2777,16 +2778,86 @@ export default function App() {
                   ))}
                 </ol>
                 <div className="accounts">
-                  {selectedMethod.transfer_accounts.map((account) => (
-                    <div key={`${selectedMethod.code}-${account.phone_number}`} className="account-box">
-                      <span>{account.phone_number}</span>
-                      <small>{account.owner_name}</small>
-                      <button className="secondary-btn copy-btn" type="button" onClick={() => void onCopyPhone(account.phone_number)}>
-                        {copiedPhone === account.phone_number ? "Copied" : "Copy"}
-                      </button>
-                    </div>
-                  ))}
+                  {profile.is_admin
+                    ? selectedMethodDraftAccounts.map((account, idx) => (
+                        <div key={`${selectedMethod.code}-draft-${idx}`} className="account-box admin-edit">
+                          <input
+                            value={account.phone_number}
+                            onChange={(event) =>
+                              setAdminDraftAccounts((prev) => ({
+                                ...prev,
+                                [selectedMethod.code]: (prev[selectedMethod.code] ?? []).map((item, rowIdx) =>
+                                  rowIdx === idx ? { ...item, phone_number: event.target.value } : item,
+                                ),
+                              }))
+                            }
+                            placeholder="09XXXXXXXX"
+                          />
+                          <input
+                            value={account.owner_name}
+                            onChange={(event) =>
+                              setAdminDraftAccounts((prev) => ({
+                                ...prev,
+                                [selectedMethod.code]: (prev[selectedMethod.code] ?? []).map((item, rowIdx) =>
+                                  rowIdx === idx ? { ...item, owner_name: event.target.value } : item,
+                                ),
+                              }))
+                            }
+                            placeholder="Owner name"
+                          />
+                          <div className="admin-inline-actions">
+                            <button
+                              className="secondary-btn copy-btn"
+                              type="button"
+                              disabled={!account.phone_number.trim()}
+                              onClick={() => void onCopyPhone(account.phone_number.trim())}
+                            >
+                              {copiedPhone === account.phone_number.trim() ? "Copied" : "Copy"}
+                            </button>
+                            <button
+                              className="secondary-btn"
+                              type="button"
+                              onClick={() =>
+                                setAdminDraftAccounts((prev) => ({
+                                  ...prev,
+                                  [selectedMethod.code]: (prev[selectedMethod.code] ?? []).filter((_, rowIdx) => rowIdx !== idx),
+                                }))
+                              }
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    : selectedMethod.transfer_accounts.map((account) => (
+                        <div key={`${selectedMethod.code}-${account.phone_number}`} className="account-box">
+                          <span>{account.phone_number}</span>
+                          <small>{account.owner_name}</small>
+                          <button className="secondary-btn copy-btn" type="button" onClick={() => void onCopyPhone(account.phone_number)}>
+                            {copiedPhone === account.phone_number ? "Copied" : "Copy"}
+                          </button>
+                        </div>
+                      ))}
                 </div>
+                {profile.is_admin && (
+                  <div className="deposit-admin-actions">
+                    <button
+                      className="secondary-btn"
+                      type="button"
+                      onClick={() =>
+                        setAdminDraftAccounts((prev) => ({
+                          ...prev,
+                          [selectedMethod.code]: [...(prev[selectedMethod.code] ?? []), { phone_number: "", owner_name: "" }],
+                        }))
+                      }
+                    >
+                      Add Number
+                    </button>
+                    <button className="primary-btn" type="button" disabled={working} onClick={() => void onSaveDepositAccounts(selectedMethod.code)}>
+                      {working ? "Saving..." : "Save Numbers"}
+                    </button>
+                  </div>
+                )}
                 <form className="wallet-form" onSubmit={onDeposit}>
                   <label>
                     Amount

@@ -56,7 +56,11 @@ Minimum required:
 - `ENABLE_DEMO_SEED=false`
 - `SIGNUP_INITIAL_MAIN_BALANCE=0`
 - `SIGNUP_INITIAL_BONUS_BALANCE=0`
-- `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `ADMIN_ALERT_EMAILS`
+- `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`
+- One alert recipient path:
+  - `ADMIN_ALERT_EMAILS` (email recipients), or
+  - `ADMIN_ALERT_SMS_RECIPIENTS` (email-to-SMS addresses), or
+  - `WITHDRAW_ALERT_PHONES` + `SMTP_SMS_GATEWAY_DOMAIN` (phone-to-email gateway route)
 
 Optional:
 

@@ -163,6 +163,22 @@ class PostgresStateStore:
                         position INTEGER NOT NULL DEFAULT 0
                     );
                     CREATE UNIQUE INDEX IF NOT EXISTS uq_deposit_accounts_method_position ON deposit_accounts(method_code, position);
+                    CREATE TABLE IF NOT EXISTS audit_events (
+                        id TEXT PRIMARY KEY,
+                        event_type TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        phone_number TEXT NOT NULL,
+                        amount NUMERIC(18,2) NOT NULL,
+                        status TEXT NOT NULL,
+                        method TEXT NULL,
+                        transaction_number TEXT NULL,
+                        withdraw_ticket_id TEXT NULL,
+                        bank TEXT NULL,
+                        account_number TEXT NULL,
+                        account_holder TEXT NULL,
+                        actor_phone TEXT NULL,
+                        note TEXT NULL
+                    );
                     """
                 )
                 cur.execute("ALTER TABLE withdraw_requests ADD COLUMN IF NOT EXISTS processing_at TEXT NULL")
@@ -193,6 +209,7 @@ class PostgresStateStore:
                 "used_receipt_links": None,
                 "withdraw_tickets": None,
                 "deposit_methods": None,
+                "audit_events": None,
             }
 
         state: dict[str, Any] = {
@@ -203,6 +220,7 @@ class PostgresStateStore:
             "used_receipt_links": {},
             "withdraw_tickets": [],
             "deposit_methods": [],
+            "audit_events": [],
         }
 
         with psycopg.connect(self.dsn, row_factory=dict_row) as conn:
@@ -326,6 +344,25 @@ class PostgresStateStore:
                             ],
                         }
                     )
+                state["audit_events"] = [
+                    {
+                        "id": str(row["id"]),
+                        "event_type": str(row["event_type"]),
+                        "created_at": str(row["created_at"]),
+                        "phone_number": str(row["phone_number"]),
+                        "amount": float(row["amount"]),
+                        "status": str(row["status"]),
+                        "method": str(row["method"]) if row["method"] is not None else None,
+                        "transaction_number": str(row["transaction_number"]) if row["transaction_number"] is not None else None,
+                        "withdraw_ticket_id": str(row["withdraw_ticket_id"]) if row["withdraw_ticket_id"] is not None else None,
+                        "bank": str(row["bank"]) if row["bank"] is not None else None,
+                        "account_number": str(row["account_number"]) if row["account_number"] is not None else None,
+                        "account_holder": str(row["account_holder"]) if row["account_holder"] is not None else None,
+                        "actor_phone": str(row["actor_phone"]) if row["actor_phone"] is not None else None,
+                        "note": str(row["note"]) if row["note"] is not None else None,
+                    }
+                    for row in cur.execute("SELECT * FROM audit_events ORDER BY created_at DESC").fetchall()
+                ]
 
                 rooms = cur.execute("SELECT * FROM rooms ORDER BY stake_id ASC").fetchall()
                 for room in rooms:
@@ -701,6 +738,38 @@ class PostgresStateStore:
                         )
             conn.commit()
 
+    def persist_audit_events(self, events: list[dict[str, Any]]) -> None:
+        with psycopg.connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM audit_events")
+                for event in events:
+                    cur.execute(
+                        """
+                        INSERT INTO audit_events(
+                            id, event_type, created_at, phone_number, amount, status, method, transaction_number,
+                            withdraw_ticket_id, bank, account_number, account_holder, actor_phone, note
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            event.get("id"),
+                            event.get("event_type"),
+                            event.get("created_at"),
+                            event.get("phone_number"),
+                            round(float(event.get("amount", 0.0)), 2),
+                            event.get("status"),
+                            event.get("method"),
+                            event.get("transaction_number"),
+                            event.get("withdraw_ticket_id"),
+                            event.get("bank"),
+                            event.get("account_number"),
+                            event.get("account_holder"),
+                            event.get("actor_phone"),
+                            event.get("note"),
+                        ),
+                    )
+            conn.commit()
+
 
 def read_sqlite_state(sqlite_path: Path) -> dict[str, Any]:
     if not sqlite_path.exists():
@@ -713,11 +782,12 @@ def read_sqlite_state(sqlite_path: Path) -> dict[str, Any]:
         "used_receipt_links",
         "withdraw_tickets",
         "deposit_methods",
+        "audit_events",
     ]
     output: dict[str, Any] = {}
     with sqlite3.connect(str(sqlite_path)) as conn:
         rows = conn.execute(
-            "SELECT state_key, state_value FROM app_state WHERE state_key IN (?,?,?,?,?,?,?)",
+            "SELECT state_key, state_value FROM app_state WHERE state_key IN (?,?,?,?,?,?,?,?)",
             tuple(keys),
         ).fetchall()
     for key, value in rows:

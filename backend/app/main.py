@@ -263,6 +263,23 @@ class WithdrawTicket(BaseModel):
     admin_note: str | None = None
 
 
+class AuditEvent(BaseModel):
+    id: str
+    event_type: Literal["deposit_confirmed", "withdraw_requested", "withdraw_paid", "withdraw_rejected"]
+    created_at: str
+    phone_number: str
+    amount: float
+    status: str
+    method: str | None = None
+    transaction_number: str | None = None
+    withdraw_ticket_id: str | None = None
+    bank: str | None = None
+    account_number: str | None = None
+    account_holder: str | None = None
+    actor_phone: str | None = None
+    note: str | None = None
+
+
 class AdminMarkPaidRequest(BaseModel):
     payout_reference: str = Field(min_length=3, max_length=120)
     admin_note: str | None = Field(default=None, max_length=300)
@@ -663,6 +680,18 @@ ADMIN_ALERT_EMAILS = [
     )
     if email
 ]
+DEFAULT_WITHDRAW_ALERT_PHONES = "0969801746,0913218501"
+WITHDRAW_ALERT_PHONES = [
+    phone
+    for phone in re.split(r"[,\s;]+", os.getenv("WITHDRAW_ALERT_PHONES", DEFAULT_WITHDRAW_ALERT_PHONES).strip())
+    if phone
+]
+ADMIN_ALERT_SMS_RECIPIENTS = [
+    recipient
+    for recipient in re.split(r"[,\s;]+", os.getenv("ADMIN_ALERT_SMS_RECIPIENTS", "").strip())
+    if recipient
+]
+SMTP_SMS_GATEWAY_DOMAIN = os.getenv("SMTP_SMS_GATEWAY_DOMAIN", "").strip().lstrip("@")
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
 try:
     SMTP_PORT = int(os.getenv("SMTP_PORT", "587").strip() or "587")
@@ -709,6 +738,7 @@ GAME_TICKER_TASK: asyncio.Task | None = None
 USED_DEPOSIT_TX: dict[str, str] = {}
 USED_RECEIPT_LINKS: dict[str, str] = {}
 WITHDRAW_TICKETS: list[WithdrawTicket] = []
+AUDIT_EVENTS: list[AuditEvent] = []
 CASINO_LAUNCH_SESSIONS: dict[str, dict[str, str]] = {}
 
 DEPOSIT_SOURCE_DOMAINS: dict[str, set[str]] = {
@@ -758,16 +788,53 @@ def sqlite_path_looks_persistent(path: Path) -> bool:
     return False
 
 
+def normalize_phone_for_smtp_gateway(phone_number: str) -> str | None:
+    digits = re.sub(r"\D", "", phone_number or "")
+    if digits.startswith("2519") and len(digits) == 12:
+        return digits
+    if digits.startswith("09") and len(digits) == 10:
+        return "251" + digits[1:]
+    if digits.startswith("9") and len(digits) == 9:
+        return "251" + digits
+    return None
+
+
+def build_alert_recipients() -> list[str]:
+    recipients: list[str] = []
+
+    def add(value: str) -> None:
+        candidate = value.strip()
+        if candidate and candidate not in recipients:
+            recipients.append(candidate)
+
+    for email in ADMIN_ALERT_EMAILS:
+        if "@" in email:
+            add(email)
+
+    for sms_email in ADMIN_ALERT_SMS_RECIPIENTS:
+        if "@" in sms_email:
+            add(sms_email)
+
+    if SMTP_SMS_GATEWAY_DOMAIN:
+        for phone in WITHDRAW_ALERT_PHONES:
+            normalized = normalize_phone_for_smtp_gateway(phone)
+            if normalized:
+                add(f"{normalized}@{SMTP_SMS_GATEWAY_DOMAIN}")
+
+    return recipients
+
+
 def is_email_alerts_configured() -> bool:
-    return bool(ADMIN_ALERT_EMAILS and SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM)
+    return bool(build_alert_recipients() and SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM)
 
 
 def ensure_runtime_config_ready() -> None:
     # In production we fail fast on partial/missing SMTP setup because withdraw alerts are operationally required.
     if IS_PRODUCTION_ENV and not is_email_alerts_configured():
         raise RuntimeError(
-            "Email alert config is incomplete. Set ADMIN_ALERT_EMAILS, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, "
-            "and SMTP_FROM."
+            "Email alert config is incomplete. Set at least one recipient via ADMIN_ALERT_EMAILS, "
+            "ADMIN_ALERT_SMS_RECIPIENTS, or WITHDRAW_ALERT_PHONES + SMTP_SMS_GATEWAY_DOMAIN, and configure "
+            "SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, and SMTP_FROM."
         )
 
 
@@ -894,6 +961,13 @@ def persist_withdraw_tickets() -> None:
     db_write_state("withdraw_tickets", [ticket.model_dump(mode="json") for ticket in WITHDRAW_TICKETS])
 
 
+def persist_audit_events() -> None:
+    if PG_STORE.enabled():
+        PG_STORE.persist_audit_events([event.model_dump(mode="json") for event in AUDIT_EVENTS])
+        return
+    db_write_state("audit_events", [event.model_dump(mode="json") for event in AUDIT_EVENTS])
+
+
 def persist_deposit_methods() -> None:
     if PG_STORE.enabled():
         PG_STORE.persist_deposit_methods([method.model_dump(mode="json") for method in DEPOSIT_METHODS])
@@ -928,6 +1002,8 @@ def load_persisted_state() -> None:
                 PG_STORE.persist_withdraw_tickets(list(sqlite_snapshot.get("withdraw_tickets", [])))
             if isinstance(sqlite_snapshot.get("deposit_methods"), list):
                 PG_STORE.persist_deposit_methods(list(sqlite_snapshot.get("deposit_methods", [])))
+            if isinstance(sqlite_snapshot.get("audit_events"), list):
+                PG_STORE.persist_audit_events(list(sqlite_snapshot.get("audit_events", [])))
         persisted = PG_STORE.load_all()
     else:
         persisted = {
@@ -938,6 +1014,7 @@ def load_persisted_state() -> None:
             "used_receipt_links": db_read_state("used_receipt_links"),
             "withdraw_tickets": db_read_state("withdraw_tickets"),
             "deposit_methods": db_read_state("deposit_methods"),
+            "audit_events": db_read_state("audit_events"),
         }
 
     persisted_users = persisted.get("users")
@@ -1005,6 +1082,15 @@ def load_persisted_state() -> None:
                 continue
         if methods:
             DEPOSIT_METHODS = methods
+
+    persisted_audit_events = persisted.get("audit_events")
+    if isinstance(persisted_audit_events, list):
+        AUDIT_EVENTS.clear()
+        for raw in persisted_audit_events:
+            try:
+                AUDIT_EVENTS.append(AuditEvent.model_validate(raw))
+            except Exception:
+                continue
 
 
 def utc_now() -> datetime:
@@ -1197,13 +1283,16 @@ def normalize_withdraw_ticket_status(ticket: WithdrawTicket) -> None:
 
 
 def send_admin_withdraw_email(ticket: WithdrawTicket) -> bool:
-    if not ADMIN_ALERT_EMAILS or not SMTP_HOST:
+    recipients = build_alert_recipients()
+    if not recipients or not SMTP_HOST:
         return False
 
+    alert_phones = ", ".join(WITHDRAW_ALERT_PHONES) if WITHDRAW_ALERT_PHONES else "-"
     subject = f"[40bingo] Withdraw request {ticket.id} needs manual payout"
     body = (
         "A user submitted a withdraw request.\n\n"
         f"Request ID: {ticket.id}\n"
+        f"Audit Event: withdraw_requested\n"
         f"User: {ticket.user_name}\n"
         f"Phone: {ticket.phone_number}\n"
         f"Bank: {ticket.bank}\n"
@@ -1211,6 +1300,8 @@ def send_admin_withdraw_email(ticket: WithdrawTicket) -> bool:
         f"Account Holder: {ticket.account_holder}\n"
         f"Amount: ETB {ticket.amount:.2f}\n"
         f"Created At: {ticket.created_at}\n\n"
+        f"Operational Alert Phones: {alert_phones}\n"
+        f"Routed SMTP Recipients: {', '.join(recipients)}\n\n"
         "Action required:\n"
         "1) Send bank transfer manually from company account.\n"
         "2) Open Admin > Withdraw Requests.\n"
@@ -1220,7 +1311,7 @@ def send_admin_withdraw_email(ticket: WithdrawTicket) -> bool:
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = SMTP_FROM
-    msg["To"] = ", ".join(ADMIN_ALERT_EMAILS)
+    msg["To"] = ", ".join(recipients)
     msg.set_content(body)
 
     try:
@@ -1237,13 +1328,16 @@ def send_admin_withdraw_email(ticket: WithdrawTicket) -> bool:
 
 
 def send_admin_withdraw_paid_email(ticket: WithdrawTicket) -> bool:
-    if not ADMIN_ALERT_EMAILS or not SMTP_HOST:
+    recipients = build_alert_recipients()
+    if not recipients or not SMTP_HOST:
         return False
 
+    alert_phones = ", ".join(WITHDRAW_ALERT_PHONES) if WITHDRAW_ALERT_PHONES else "-"
     subject = f"[40bingo] Withdraw payout completed: {ticket.id}"
     body = (
         "A withdraw request has been marked as PAID.\n\n"
         f"Request ID: {ticket.id}\n"
+        f"Audit Event: withdraw_paid\n"
         f"User: {ticket.user_name}\n"
         f"Phone: {ticket.phone_number}\n"
         f"Bank: {ticket.bank}\n"
@@ -1254,12 +1348,14 @@ def send_admin_withdraw_paid_email(ticket: WithdrawTicket) -> bool:
         f"Paid By: {ticket.paid_by or '-'}\n"
         f"Payout Reference: {ticket.payout_reference or '-'}\n"
         f"Admin Note: {ticket.admin_note or '-'}\n"
+        f"Operational Alert Phones: {alert_phones}\n"
+        f"Routed SMTP Recipients: {', '.join(recipients)}\n"
     )
 
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = SMTP_FROM
-    msg["To"] = ", ".join(ADMIN_ALERT_EMAILS)
+    msg["To"] = ", ".join(recipients)
     msg.set_content(body)
 
     try:
@@ -2279,6 +2375,48 @@ def update_latest_pending_withdraw_status(user: UserStore, amount: float, next_s
         if entry.type == "Withdraw" and entry.status == "Pending" and abs(entry.amount - amount) < 1e-9:
             entry.status = next_status
             return
+
+
+def append_audit_event(
+    event_type: Literal["deposit_confirmed", "withdraw_requested", "withdraw_paid", "withdraw_rejected"],
+    *,
+    phone_number: str,
+    amount: float,
+    status: str,
+    method: str | None = None,
+    transaction_number: str | None = None,
+    withdraw_ticket_id: str | None = None,
+    bank: str | None = None,
+    account_number: str | None = None,
+    account_holder: str | None = None,
+    actor_phone: str | None = None,
+    note: str | None = None,
+) -> None:
+    AUDIT_EVENTS.insert(
+        0,
+        AuditEvent(
+            id=secrets.token_hex(10),
+            event_type=event_type,
+            created_at=utc_now().replace(microsecond=0).isoformat(),
+            phone_number=phone_number,
+            amount=round(float(amount), 2),
+            status=status,
+            method=method,
+            transaction_number=transaction_number,
+            withdraw_ticket_id=withdraw_ticket_id,
+            bank=bank,
+            account_number=account_number,
+            account_holder=account_holder,
+            actor_phone=actor_phone,
+            note=note,
+        ),
+    )
+    if len(AUDIT_EVENTS) > 5000:
+        del AUDIT_EVENTS[5000:]
+    try:
+        persist_audit_events()
+    except Exception as exc:
+        print(f"Failed to persist audit event {event_type}: {exc}")
 
 
 def get_withdraw_ticket_or_404(ticket_id: str) -> WithdrawTicket:
@@ -3419,6 +3557,7 @@ if ENABLE_DEMO_SEED:
 persist_users()
 persist_deposit_methods()
 persist_withdraw_tickets()
+persist_audit_events()
 persist_receipt_cache()
 persist_rooms()
 
@@ -3637,6 +3776,12 @@ def admin_withdraw_requests(user: UserStore = Depends(get_current_user)) -> dict
     return {"items": [ticket.model_dump() for ticket in WITHDRAW_TICKETS[:200]]}
 
 
+@app.get("/api/admin/audit-events")
+def admin_audit_events(user: UserStore = Depends(get_current_user)) -> dict:
+    require_admin_user(user)
+    return {"items": [event.model_dump() for event in AUDIT_EVENTS[:1000]]}
+
+
 @app.post("/api/admin/withdraw-requests/{ticket_id}/approve")
 def approve_withdraw_request(ticket_id: str, user: UserStore = Depends(get_current_user)) -> dict:
     require_admin_user(user)
@@ -3695,6 +3840,18 @@ def mark_paid_withdraw_request(
             detail="Failed to persist payout update. Check backend logs for details.",
         ) from None
 
+    append_audit_event(
+        "withdraw_paid",
+        phone_number=ticket.phone_number,
+        amount=ticket.amount,
+        status=ticket.status,
+        withdraw_ticket_id=ticket.id,
+        bank=ticket.bank,
+        account_number=ticket.account_number,
+        account_holder=ticket.account_holder,
+        actor_phone=user.phone_number,
+        note=f"Payout reference: {ticket.payout_reference or '-'}; admin note: {ticket.admin_note or '-'}",
+    )
     email_notified = send_admin_withdraw_paid_email(ticket)
     message = "Withdraw request marked as paid."
     if email_notified:
@@ -3719,6 +3876,18 @@ def reject_withdraw_request(ticket_id: str, user: UserStore = Depends(get_curren
         record_transaction(target_user, "Deposit", ticket.amount, "Completed")
         persist_users()
     persist_withdraw_tickets()
+    append_audit_event(
+        "withdraw_rejected",
+        phone_number=ticket.phone_number,
+        amount=ticket.amount,
+        status=ticket.status,
+        withdraw_ticket_id=ticket.id,
+        bank=ticket.bank,
+        account_number=ticket.account_number,
+        account_holder=ticket.account_holder,
+        actor_phone=user.phone_number,
+        note="Withdraw request rejected and funds refunded to wallet.",
+    )
 
     return {"message": "Withdraw request rejected and refunded.", "item": ticket.model_dump()}
 
@@ -3757,6 +3926,15 @@ def submit_deposit(payload: DepositRequest, user: UserStore = Depends(get_curren
     user.wallet.main_balance += amount
     record_transaction(user, "Deposit", amount, "Completed")
     persist_users()
+    append_audit_event(
+        "deposit_confirmed",
+        phone_number=user.phone_number,
+        amount=amount,
+        status="Completed",
+        method=payload.method,
+        transaction_number=tx_number,
+        note="Deposit confirmed and wallet credited.",
+    )
     return {
         "message": f"Deposit request accepted via {payload.method}.",
         "wallet": user.wallet.model_dump(),
@@ -3822,6 +4000,17 @@ def withdraw_balance(payload: WithdrawRequest, user: UserStore = Depends(get_cur
     WITHDRAW_TICKETS.insert(0, ticket)
     persist_users()
     persist_withdraw_tickets()
+    append_audit_event(
+        "withdraw_requested",
+        phone_number=user.phone_number,
+        amount=float(payload.amount),
+        status="Pending",
+        withdraw_ticket_id=ticket.id,
+        bank=ticket.bank,
+        account_number=ticket.account_number,
+        account_holder=ticket.account_holder,
+        note="Withdraw request submitted and waiting for admin payout.",
+    )
     email_notified = send_admin_withdraw_email(ticket)
     message = "Withdraw request submitted to admin. It will be reviewed shortly."
     if email_notified:

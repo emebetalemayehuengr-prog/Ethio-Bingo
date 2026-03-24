@@ -491,6 +491,31 @@ select {
   padding: 8px 12px;
 }
 
+.account-box.admin-edit {
+  grid-template-columns: 1fr;
+}
+
+.account-box.admin-edit input {
+  border-radius: 8px;
+  border: 1px solid rgba(108, 132, 158, 0.32);
+  padding: 8px 10px;
+  font-size: 0.86rem;
+  background: #ffffff;
+  color: #143454;
+}
+
+.admin-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.deposit-admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .deposit-provider-logo {
   width: 180px;
   max-width: 60%;
@@ -5067,6 +5092,10 @@ body {
   border: 1px solid rgba(164, 195, 223, 0.32);
   background: rgba(21, 45, 69, 0.92);
   color: #edf7ff;
+  min-width: 94px;
+  padding: 0 16px;
+  white-space: nowrap;
+  background-image: none !important;
 }
 
 .refresh-btn::before {
@@ -5086,6 +5115,7 @@ body {
   border-color: rgba(96, 131, 163, 0.3);
   background: #ffffff;
   color: #254a70;
+  background-image: none !important;
 }
 
 @media (max-width: 900px) {
@@ -5162,9 +5192,11 @@ body {
 
   .refresh-btn {
     min-width: 0 !important;
+    width: auto !important;
     height: 32px;
     min-height: 32px;
-    padding: 0 8px;
+    min-width: 82px !important;
+    padding: 0 12px;
     font-size: 0.7rem;
   }
 
@@ -5228,7 +5260,9 @@ body {
   }
 
   .refresh-btn {
-    padding: 0 6px;
+    width: auto !important;
+    min-width: 74px !important;
+    padding: 0 9px;
     font-size: 0.66rem;
   }
 }
