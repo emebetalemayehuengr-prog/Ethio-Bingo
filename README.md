@@ -55,6 +55,7 @@ Wallet persistence:
 - Preferred SQLite env vars:
   - `FORTY_BINGO_DB_PATH=/var/data/40bingo.db`
   - `FORTY_BINGO_FALLBACK_DB_PATH=<optional>`
+  - `PERSISTENT_SQLITE_ROOTS=/var/data,/home`
 - `DATABASE_URL` (Postgres) is also supported.
 - Legacy env vars `ETHIO_BINGO_DB_PATH` and `ETHIO_BINGO_FALLBACK_DB_PATH` are still accepted for compatibility.
 

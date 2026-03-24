@@ -675,6 +675,7 @@ DEFAULT_SQLITE_PATH = (
 )
 PRIMARY_DB_ENV_KEYS = ("FORTY_BINGO_DB_PATH", "ETHIO_BINGO_DB_PATH")
 FALLBACK_DB_ENV_KEYS = ("FORTY_BINGO_FALLBACK_DB_PATH", "ETHIO_BINGO_FALLBACK_DB_PATH")
+PERSISTENT_SQLITE_ROOTS = env_list("PERSISTENT_SQLITE_ROOTS", "/var/data,/home")
 
 
 def get_env_first(keys: tuple[str, ...], default: str = "") -> str:
@@ -696,10 +697,17 @@ ALLOW_EPHEMERAL_DB = env_flag("ALLOW_EPHEMERAL_DB", False)
 
 def sqlite_path_looks_persistent(path: Path) -> bool:
     if os.name == "nt":
-        # Render-style mount path checks are Linux-specific.
+        # Linux mount checks are not relevant on Windows.
         return True
-    normalized = path.expanduser().resolve().as_posix().lower()
-    return normalized == "/var/data" or normalized.startswith("/var/data/")
+    normalized = path.expanduser().resolve(strict=False).as_posix().lower()
+    for raw_root in PERSISTENT_SQLITE_ROOTS:
+        root = raw_root.strip()
+        if not root:
+            continue
+        root_norm = Path(root).expanduser().resolve(strict=False).as_posix().lower()
+        if normalized == root_norm or normalized.startswith(f"{root_norm}/"):
+            return True
+    return False
 
 
 def is_email_alerts_configured() -> bool:
@@ -723,8 +731,8 @@ def ensure_db_ready() -> None:
     if IS_PRODUCTION_ENV and not ALLOW_EPHEMERAL_DB and not sqlite_path_looks_persistent(DB_PATH):
         raise RuntimeError(
             f"APP_ENV=production requires persistent storage. Current FORTY_BINGO_DB_PATH '{DB_PATH}' is not under "
-            "/var/data. Set FORTY_BINGO_DB_PATH (or legacy ETHIO_BINGO_DB_PATH), attach persistent storage, "
-            "or set DATABASE_URL."
+            f"allowed persistent roots {PERSISTENT_SQLITE_ROOTS}. Set FORTY_BINGO_DB_PATH (or legacy "
+            "ETHIO_BINGO_DB_PATH), set PERSISTENT_SQLITE_ROOTS, attach persistent storage, or set DATABASE_URL."
         )
     try:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -738,8 +746,8 @@ def ensure_db_ready() -> None:
         fallback_path = Path(fallback_raw).expanduser()
         if IS_PRODUCTION_ENV and not ALLOW_EPHEMERAL_DB and not sqlite_path_looks_persistent(fallback_path):
             raise RuntimeError(
-                f"Fallback DB path '{fallback_path}' is not persistent for production. Use /var/data/40bingo.db "
-                "with attached persistent storage or set DATABASE_URL."
+                f"Fallback DB path '{fallback_path}' is not under allowed persistent roots "
+                f"{PERSISTENT_SQLITE_ROOTS} for production. Set PERSISTENT_SQLITE_ROOTS or set DATABASE_URL."
             ) from None
         print(
             f"DB path '{DB_PATH}' is not writable. Falling back to '{fallback_path}'."
