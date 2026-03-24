@@ -1706,18 +1706,36 @@ export default function App() {
                 Menu
               </button>
               <button
-                className={`theme-toggle ${isDarkMode ? "dark" : "light"}`}
+                className={`theme-toggle ${isDarkMode ? "on" : "off"}`}
                 type="button"
                 aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
                 onClick={() => setIsDarkMode((current) => !current)}
               >
-                <span>{isDarkMode ? "Dark" : "Light"}</span>
+                <span className="theme-toggle-track" aria-hidden="true">
+                  <span className="theme-toggle-thumb" />
+                </span>
+                <span className="theme-toggle-label">{isDarkMode ? "On" : "Off"}</span>
               </button>
               <button className="refresh-btn" type="button" onClick={() => void loadData()}>
                 Refresh
               </button>
               <div className="wallet-pill">{fmtEtb(wallet.main_balance)}</div>
             </div>
+            <nav className="header-menu-bar" aria-label="Primary menu">
+              {services.map((item) => (
+                <button
+                  key={`header-${item.view}`}
+                  className={`header-menu-item ${service === item.view ? "active" : ""}`}
+                  type="button"
+                  onClick={() => openService(item.view)}
+                >
+                  {item.label}
+                </button>
+              ))}
+              <button className="header-menu-item danger" type="button" onClick={() => void onLogout()}>
+                Logout
+              </button>
+            </nav>
           </header>
         </>
       )}

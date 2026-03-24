@@ -4977,3 +4977,247 @@ body {
     padding: 0 5px;
   }
 }
+
+/* Header UX refresh */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.theme-toggle-track {
+  width: 34px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(162, 192, 220, 0.35);
+  background: rgba(11, 23, 37, 0.75);
+  display: inline-flex;
+  align-items: center;
+  padding: 1px;
+}
+
+.theme-toggle-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #e6f3ff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  transform: translateX(0);
+  transition: transform 0.16s ease;
+}
+
+.theme-toggle.on .theme-toggle-thumb {
+  transform: translateX(15px);
+}
+
+.theme-toggle-label {
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.header-menu-bar {
+  max-width: 1320px;
+  margin-inline: auto;
+  padding: 8px clamp(12px, 2.4vw, 24px) 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  border-top: 1px solid rgba(156, 186, 214, 0.2);
+}
+
+.header-menu-item {
+  border: 1px solid rgba(178, 205, 229, 0.26);
+  border-radius: 999px;
+  background: rgba(14, 33, 52, 0.85);
+  color: #e7f4ff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding: 7px 12px;
+  white-space: nowrap;
+}
+
+.header-menu-item.active {
+  border-color: rgba(255, 214, 45, 0.52);
+  background: rgba(255, 214, 45, 0.16);
+}
+
+.header-menu-item.danger {
+  border-color: rgba(221, 88, 106, 0.35);
+  color: #ffcad4;
+}
+
+:root[data-theme="light"] .theme-toggle-track {
+  border-color: rgba(94, 129, 162, 0.3);
+  background: rgba(208, 223, 238, 0.85);
+}
+
+:root[data-theme="light"] .theme-toggle-thumb {
+  background: #1f456d;
+}
+
+:root[data-theme="light"] .header-menu-bar {
+  border-top-color: rgba(87, 122, 156, 0.22);
+}
+
+:root[data-theme="light"] .header-menu-item {
+  border-color: rgba(94, 129, 161, 0.28);
+  background: rgba(255, 255, 255, 0.9);
+  color: #24486d;
+}
+
+:root[data-theme="light"] .header-menu-item.active {
+  border-color: rgba(225, 178, 14, 0.52);
+  background: rgba(255, 215, 87, 0.34);
+}
+
+:root[data-theme="light"] .header-menu-item.danger {
+  border-color: rgba(191, 79, 98, 0.34);
+  color: #9e2c3e;
+}
+
+@media (max-width: 900px) {
+  .header-menu-bar {
+    gap: 7px;
+    padding-top: 7px;
+  }
+
+  .header-menu-item {
+    font-size: 0.74rem;
+    padding: 6px 11px;
+  }
+}
+
+@media (max-width: 760px) {
+  .top-strip {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center;
+    gap: 5px;
+    padding: 8px 8px;
+    overflow: hidden;
+  }
+
+  .brand-inline {
+    gap: 4px;
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+
+  .brand-inline span {
+    display: none;
+  }
+
+  .brand-inline-logo {
+    width: 36px;
+    height: 36px;
+    filter: drop-shadow(0 2px 7px rgba(0, 0, 0, 0.32));
+  }
+
+  .menu-toggle {
+    min-width: 58px !important;
+    height: 32px;
+    min-height: 32px;
+    font-size: 0.72rem;
+    padding: 0 8px;
+    white-space: nowrap;
+  }
+
+  .theme-toggle {
+    min-width: 68px !important;
+    height: 32px;
+    min-height: 32px;
+    padding: 0 6px;
+    gap: 5px;
+  }
+
+  .theme-toggle-track {
+    width: 30px;
+    height: 16px;
+  }
+
+  .theme-toggle-thumb {
+    width: 12px;
+    height: 12px;
+  }
+
+  .theme-toggle.on .theme-toggle-thumb {
+    transform: translateX(13px);
+  }
+
+  .theme-toggle-label {
+    font-size: 0.68rem;
+  }
+
+  .refresh-btn {
+    min-width: 0 !important;
+    height: 32px;
+    min-height: 32px;
+    padding: 0 8px;
+    font-size: 0.7rem;
+  }
+
+  .refresh-btn::before,
+  .menu-toggle::before,
+  .theme-toggle::before {
+    content: none !important;
+  }
+
+  .wallet-pill {
+    margin-left: auto !important;
+    flex: 0 0 auto;
+    min-height: 32px;
+    max-width: 96px;
+    min-width: 72px;
+    padding: 0 6px;
+    font-size: 0.62rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .header-menu-bar {
+    padding: 7px 8px 9px;
+    gap: 6px;
+  }
+
+  .header-menu-item {
+    font-size: 0.7rem;
+    padding: 6px 10px;
+  }
+}
+
+@media (max-width: 440px) {
+  .wallet-pill {
+    max-width: 88px;
+    min-width: 66px;
+    font-size: 0.58rem;
+    padding: 0 5px;
+  }
+
+  .brand-inline-logo {
+    width: 34px;
+    height: 34px;
+  }
+
+  .menu-toggle {
+    min-width: 54px !important;
+    padding: 0 7px;
+  }
+
+  .theme-toggle {
+    min-width: 62px !important;
+    padding: 0 5px;
+  }
+
+  .theme-toggle-label {
+    font-size: 0.64rem;
+  }
+
+  .refresh-btn {
+    padding: 0 6px;
+    font-size: 0.66rem;
+  }
+}
