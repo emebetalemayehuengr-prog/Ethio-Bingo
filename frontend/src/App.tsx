@@ -1520,6 +1520,12 @@ export default function App() {
   const insufficientCardBalance = cardBuyAmount > 0 && wallet.main_balance < cardBuyAmount;
   const latestBallLetter = typeof room?.latest_number === "number" ? toBingoLetter(room.latest_number) : null;
   const latestBallClass = latestBallLetter ? `call-${latestBallLetter.toLowerCase()}` : "call-idle";
+  const stakeOptions = dashboard?.stake_options ?? [];
+  const liveRoomsCount = stakeOptions.filter((stake) => stake.room_phase === "playing" || stake.status === "playing").length;
+  const queueRoomsCount = stakeOptions.filter((stake) => stake.room_phase === "selecting" || stake.status === "countdown").length;
+  const topStake = stakeOptions.reduce((max, stake) => Math.max(max, stake.stake), 0);
+  const highestPossibleWin = stakeOptions.reduce((max, stake) => Math.max(max, stake.possible_win ?? 0), 0);
+  const supportTopicsCount = dashboard?.faq.length ?? 0;
   const renderBoughtCard = (ownedCard: BingoCard, rail: "desktop" | "panel" = "desktop") => {
     const isActive = selectedCardNo === ownedCard.card_no;
     const marksForOwnedCard = marksForCard(room, ownedCard.card_no);
@@ -1598,7 +1604,7 @@ export default function App() {
                 <span>40bingo</span>
               </div>
               <button className="menu-toggle" type="button" onClick={() => setDrawerOpen((state) => !state)}>
-                =
+                Menu
               </button>
               <button
                 className={`theme-toggle ${isDarkMode ? "dark" : "light"}`}
@@ -1623,41 +1629,112 @@ export default function App() {
         {!isCasinoLaunchView && notice && <div className="notice success">{notice}</div>}
 
         {service === "home" && (
-          <section className="panel">
-            <h2>Services</h2>
-            <p>Use the hamburger menu to open services that do not fit in one page.</p>
-            <div className="home-grid">
-              <article className="service-card">
-                <h3>Bingo Rooms</h3>
-                <p>Choose stake and buy cartella.</p>
-                <button className="primary-btn" type="button" onClick={() => openService("stakes")}>
-                  Open
-                </button>
-              </article>
-              <article className="service-card">
-                <h3>Wallet</h3>
-                <p>Manage your balance, deposits, withdrawals, and transfer history.</p>
-                <button className="primary-btn" type="button" onClick={() => openService("wallet")}>
-                  Open
-                </button>
-              </article>
-              <article className="service-card">
-                <h3>Live Game</h3>
-                <p>After countdown, players mark called numbers by clicking.</p>
-                <button className="primary-btn" type="button" onClick={() => openService("game")}>
-                  Open
-                </button>
-              </article>
-              {CASINO_ENABLED && (
-                <article className="service-card">
-                  <h3>Casino Games</h3>
-                  <p>Play quick casino rounds with the same 40bingo wallet balance.</p>
-                  <button className="primary-btn" type="button" onClick={() => openService("casino")}>
-                    Open
+          <section className="home-landing fade-up">
+            <article className="home-hero-panel">
+              <div className="home-hero-copy">
+                <p className="home-eyebrow">{dashboard?.brand.name ?? fallbackBrand.name}</p>
+                <h2>Play live bingo with transparent payouts and full wallet control.</h2>
+                <p className="home-lead">
+                  Track active rooms in real time, join your preferred stake in seconds, and keep every transaction visible in one secure dashboard.
+                </p>
+                <div className="home-cta-row">
+                  <button className="home-btn primary" type="button" onClick={() => openService("stakes")}>
+                    Join Bingo Rooms
                   </button>
+                  <button className="home-btn secondary" type="button" onClick={() => openService("wallet")}>
+                    Manage Wallet
+                  </button>
+                  <button className="home-btn ghost" type="button" onClick={() => openService("history")}>
+                    See Bet History
+                  </button>
+                </div>
+              </div>
+              <div className="home-hero-metrics">
+                <article className="home-stat-card">
+                  <span>Available Balance</span>
+                  <strong>{fmtEtb(wallet.main_balance)}</strong>
+                  <small>Main wallet ready for active stakes.</small>
                 </article>
-              )}
+                <article className="home-stat-card">
+                  <span>Live Rooms</span>
+                  <strong>{liveRoomsCount}</strong>
+                  <small>Rooms currently calling numbers.</small>
+                </article>
+                <article className="home-stat-card">
+                  <span>Countdown Rooms</span>
+                  <strong>{queueRoomsCount}</strong>
+                  <small>Rooms open for card selection.</small>
+                </article>
+              </div>
+            </article>
+
+            <div className="home-feature-grid">
+              <article className="home-feature-card">
+                <div className="home-feature-top">
+                  <span className="home-feature-icon">01</span>
+                  <h3>Bingo Rooms</h3>
+                </div>
+                <p>Pick your stake, secure a cartella, and move directly into the next active round.</p>
+                <button className="primary-btn" type="button" onClick={() => openService("stakes")}>
+                  Open Rooms
+                </button>
+              </article>
+
+              <article className="home-feature-card">
+                <div className="home-feature-top">
+                  <span className="home-feature-icon">02</span>
+                  <h3>Wallet Center</h3>
+                </div>
+                <p>Manage deposit, withdraw, transfer, and transaction history from one controlled panel.</p>
+                <button className="primary-btn" type="button" onClick={() => openService("wallet")}>
+                  Open Wallet
+                </button>
+              </article>
+
+              <article className="home-feature-card">
+                <div className="home-feature-top">
+                  <span className="home-feature-icon">03</span>
+                  <h3>Live Game</h3>
+                </div>
+                <p>Follow called numbers in real time and mark your purchased cards during active play.</p>
+                <button className="primary-btn" type="button" onClick={() => openService("game")}>
+                  Open Live Game
+                </button>
+              </article>
+
+              <article className="home-feature-card">
+                <div className="home-feature-top">
+                  <span className="home-feature-icon">04</span>
+                  <h3>How To Play</h3>
+                </div>
+                <p>Review rules, payout flow, and support guidance before joining your next game.</p>
+                <button className="primary-btn" type="button" onClick={() => openService("how")}>
+                  Open Guide
+                </button>
+              </article>
             </div>
+
+            <article className="home-trust-panel">
+              <h3>Operational Snapshot</h3>
+              <div className="home-trust-grid">
+                <div>
+                  <span className="home-trust-label">Top Listed Stake</span>
+                  <strong>{topStake > 0 ? `ETB ${topStake}` : "Not Set"}</strong>
+                </div>
+                <div>
+                  <span className="home-trust-label">Highest Possible Win</span>
+                  <strong>{highestPossibleWin > 0 ? fmtEtb(highestPossibleWin) : "Pending"}</strong>
+                </div>
+                <div>
+                  <span className="home-trust-label">Support Topics</span>
+                  <strong>{supportTopicsCount}</strong>
+                </div>
+                <div>
+                  <span className="home-trust-label">Brand Promise</span>
+                  <strong>{dashboard?.brand.tagline ?? fallbackBrand.tagline}</strong>
+                </div>
+              </div>
+            </article>
           </section>
         )}
 
