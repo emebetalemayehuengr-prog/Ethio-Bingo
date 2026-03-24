@@ -753,6 +753,23 @@ export default function App() {
   }, [service]);
 
   useEffect(() => {
+    if (!drawerOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setDrawerOpen(false);
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [drawerOpen]);
+
+  useEffect(() => {
     if (service !== "stakes") return;
     const tick = () => setStakeCountdownNow(Date.now());
     tick();
@@ -1666,6 +1683,8 @@ export default function App() {
   };
   const isCasinoLaunchView = service === "casino-launch" && Boolean(casinoLaunch);
 
+  const profileInitials = (profile.user_name.trim().slice(0, 2) || "40").toUpperCase();
+
   return (
     <div className={`fortybingo-app ${isCasinoLaunchView ? "casino-launch-active" : ""}`}>
       {!isCasinoLaunchView && (
@@ -1673,11 +1692,14 @@ export default function App() {
           <div className={`drawer-overlay ${drawerOpen ? "show" : ""}`} onClick={() => setDrawerOpen(false)} />
           <aside className={`side-drawer ${drawerOpen ? "open" : ""}`}>
             <div className="drawer-profile">
-              <div className="avatar">EB</div>
-              <div>
-                <h3>HEY, PLAYER</h3>
-                <p>{profile.user_name}</p>
+              <div className="avatar">{profileInitials}</div>
+              <div className="drawer-profile-meta">
+                <h3>{profile.user_name}</h3>
+                <p>{profile.phone_number}</p>
               </div>
+              <button className="drawer-close" type="button" onClick={() => setDrawerOpen(false)} aria-label="Close menu">
+                x
+              </button>
             </div>
             <nav>
               {services.map((item) => (
@@ -1721,21 +1743,6 @@ export default function App() {
               </button>
               <div className="wallet-pill">{fmtEtb(wallet.main_balance)}</div>
             </div>
-            <nav className="header-menu-bar" aria-label="Primary menu">
-              {services.map((item) => (
-                <button
-                  key={`header-${item.view}`}
-                  className={`header-menu-item ${service === item.view ? "active" : ""}`}
-                  type="button"
-                  onClick={() => openService(item.view)}
-                >
-                  {item.label}
-                </button>
-              ))}
-              <button className="header-menu-item danger" type="button" onClick={() => void onLogout()}>
-                Logout
-              </button>
-            </nav>
           </header>
         </>
       )}
