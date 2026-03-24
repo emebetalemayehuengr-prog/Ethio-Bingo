@@ -57,6 +57,9 @@ Minimum required:
 - `SIGNUP_INITIAL_MAIN_BALANCE=0`
 - `SIGNUP_INITIAL_BONUS_BALANCE=0`
 - `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`
+- SMTP transport flags:
+  - For implicit SSL (`SMTP_PORT=465`): `SMTP_USE_SSL=true`, `SMTP_USE_TLS=false`
+  - For STARTTLS (`SMTP_PORT=587`): `SMTP_USE_SSL=false`, `SMTP_USE_TLS=true`
 - One alert recipient path:
   - `ADMIN_ALERT_EMAILS` (email recipients), or
   - `ADMIN_ALERT_SMS_RECIPIENTS` (email-to-SMS addresses), or

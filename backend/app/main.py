@@ -693,10 +693,15 @@ ADMIN_ALERT_SMS_RECIPIENTS = [
 ]
 SMTP_SMS_GATEWAY_DOMAIN = os.getenv("SMTP_SMS_GATEWAY_DOMAIN", "").strip().lstrip("@")
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
-try:
-    SMTP_PORT = int(os.getenv("SMTP_PORT", "587").strip() or "587")
-except ValueError:
-    SMTP_PORT = 587
+SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").strip().lower() in {"1", "true", "yes", "on"}
+raw_smtp_port = os.getenv("SMTP_PORT", "").strip()
+if not raw_smtp_port:
+    SMTP_PORT = 465 if SMTP_USE_SSL else 587
+else:
+    try:
+        SMTP_PORT = int(raw_smtp_port)
+    except ValueError:
+        SMTP_PORT = 465 if SMTP_USE_SSL else 587
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
 SMTP_FROM = os.getenv("SMTP_FROM", "").strip() or SMTP_USERNAME or "noreply@40bingo.local"
@@ -1282,6 +1287,26 @@ def normalize_withdraw_ticket_status(ticket: WithdrawTicket) -> None:
         ticket.status = "Paid"
 
 
+def send_smtp_message(msg: EmailMessage, *, context_label: str) -> bool:
+    try:
+        if SMTP_USE_SSL:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
+                if SMTP_USERNAME:
+                    smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
+                if SMTP_USE_TLS:
+                    smtp.starttls()
+                if SMTP_USERNAME:
+                    smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+                smtp.send_message(msg)
+        return True
+    except Exception as exc:
+        print(f"Failed to send {context_label}: {exc}")
+        return False
+
+
 def send_admin_withdraw_email(ticket: WithdrawTicket) -> bool:
     recipients = build_alert_recipients()
     if not recipients or not SMTP_HOST:
@@ -1313,18 +1338,7 @@ def send_admin_withdraw_email(ticket: WithdrawTicket) -> bool:
     msg["From"] = SMTP_FROM
     msg["To"] = ", ".join(recipients)
     msg.set_content(body)
-
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
-            if SMTP_USE_TLS:
-                smtp.starttls()
-            if SMTP_USERNAME:
-                smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
-            smtp.send_message(msg)
-        return True
-    except Exception as exc:
-        print(f"Failed to send withdraw alert email for ticket {ticket.id}: {exc}")
-        return False
+    return send_smtp_message(msg, context_label=f"withdraw alert email for ticket {ticket.id}")
 
 
 def send_admin_withdraw_paid_email(ticket: WithdrawTicket) -> bool:
@@ -1357,18 +1371,7 @@ def send_admin_withdraw_paid_email(ticket: WithdrawTicket) -> bool:
     msg["From"] = SMTP_FROM
     msg["To"] = ", ".join(recipients)
     msg.set_content(body)
-
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
-            if SMTP_USE_TLS:
-                smtp.starttls()
-            if SMTP_USERNAME:
-                smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
-            smtp.send_message(msg)
-        return True
-    except Exception as exc:
-        print(f"Failed to send withdraw paid email for ticket {ticket.id}: {exc}")
-        return False
+    return send_smtp_message(msg, context_label=f"withdraw paid email for ticket {ticket.id}")
 
 
 def hash_password(raw_password: str) -> str:
