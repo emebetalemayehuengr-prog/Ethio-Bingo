@@ -2581,14 +2581,17 @@ def get_auth_token(authorization: str | None) -> str:
 def get_current_user(authorization: str | None = Header(default=None)) -> UserStore:
     token = get_auth_token(authorization)
     record = normalize_session_record(SESSIONS.get(token))
+
+    # Passenger can serve requests from different workers. If a token is not
+    # found in this worker memory, reload the persisted session snapshot once.
     if not record:
-        SESSIONS.pop(token, None)
-        persist_sessions()
+        load_sessions()
+        record = normalize_session_record(SESSIONS.get(token))
+
+    if not record:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
     expires_at = parse_iso_datetime(record.get("expires_at"))
     if expires_at is None or utc_now() >= expires_at:
-        SESSIONS.pop(token, None)
-        persist_sessions()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
     phone_number = record["phone_number"]
     SESSIONS[token] = record
