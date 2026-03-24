@@ -187,6 +187,12 @@ const fallbackCasinoGames: CasinoGame[] = [
 const fmtEtb = (value: number) => `ETB ${value.toFixed(2)}`;
 const fmtDate = (value: string) => new Date(value).toLocaleString();
 const fmtShortDate = (value: string) => new Date(value).toLocaleDateString("en-GB");
+const fmtClock = (value: number) => {
+  const safe = Math.max(0, Math.floor(value));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+};
 const maskPhone = (value: string) => {
   if (value.length < 4) return value;
   return `${value.slice(0, 3)}***${value.slice(-2)}`;
@@ -608,6 +614,8 @@ export default function App() {
   const [adminPayoutRefs, setAdminPayoutRefs] = useState<Record<string, string>>({});
   const [copiedPhone, setCopiedPhone] = useState("");
   const [showBrandModal, setShowBrandModal] = useState(false);
+  const [stakeCountdownNow, setStakeCountdownNow] = useState(() => Date.now());
+  const [stakeCountdownDeadlines, setStakeCountdownDeadlines] = useState<Record<string, number>>({});
 
   const [selectedStake, setSelectedStake] = useState<StakeOption | null>(null);
   const [cartellaOpen, setCartellaOpen] = useState(false);
@@ -743,6 +751,39 @@ export default function App() {
       setNotice("Casino games are temporarily unavailable while design is finalized.");
     }
   }, [service]);
+
+  useEffect(() => {
+    if (service !== "stakes") return;
+    const tick = () => setStakeCountdownNow(Date.now());
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [service]);
+
+  useEffect(() => {
+    const stakeOptions = dashboard?.stake_options ?? [];
+    if (!stakeOptions.length) {
+      setStakeCountdownDeadlines({});
+      return;
+    }
+
+    const syncedAt = Date.now();
+    setStakeCountdownDeadlines((prev) => {
+      const next: Record<string, number> = {};
+      for (const option of stakeOptions) {
+        if (option.countdown_seconds == null) continue;
+        const safeSeconds = Math.max(0, option.countdown_seconds);
+        const serverDeadline = syncedAt + safeSeconds * 1000;
+        const previousDeadline = prev[option.id];
+        if (previousDeadline && Math.abs(previousDeadline - serverDeadline) <= 1500 && safeSeconds > 0) {
+          next[option.id] = previousDeadline;
+          continue;
+        }
+        next[option.id] = serverDeadline;
+      }
+      return next;
+    });
+  }, [dashboard?.stake_options]);
 
   useEffect(() => {
     if (!dashboard?.deposit_methods?.length) return;
@@ -958,8 +999,9 @@ export default function App() {
 
   useEffect(() => {
     if (!profile) return;
-    if (cartellaOpen || service === "game" || service === "stakes") return;
+    if (cartellaOpen || service === "game") return;
     let inFlight = false;
+    const pollIntervalMs = service === "stakes" ? 1000 : 1800;
     const pollDashboard = () => {
       if (inFlight) return;
       inFlight = true;
@@ -978,7 +1020,7 @@ export default function App() {
     pollDashboard();
     const timer = window.setInterval(() => {
       pollDashboard();
-    }, 1800);
+    }, pollIntervalMs);
     return () => window.clearInterval(timer);
   }, [profile?.phone_number, service, cartellaOpen]);
 
@@ -1529,6 +1571,14 @@ export default function App() {
     );
   }
 
+  const getStakeCountdownSeconds = (stake: StakeOption) => {
+    if (stake.countdown_seconds == null) return 0;
+    const fallback = Math.max(0, stake.countdown_seconds);
+    const deadline = stakeCountdownDeadlines[stake.id];
+    if (!deadline) return fallback;
+    return Math.max(0, Math.ceil((deadline - stakeCountdownNow) / 1000));
+  };
+
   const bingoClaimable = room?.phase === "playing" && !!card ? hasBingo(card, room?.called_numbers ?? [], markedNumbers) : false;
   const gameCountdownValue =
     room?.phase === "selecting"
@@ -1575,12 +1625,6 @@ export default function App() {
   const insufficientCardBalance = cardBuyAmount > 0 && wallet.main_balance < cardBuyAmount;
   const latestBallLetter = typeof room?.latest_number === "number" ? toBingoLetter(room.latest_number) : null;
   const latestBallClass = latestBallLetter ? `call-${latestBallLetter.toLowerCase()}` : "call-idle";
-  const stakeOptions = dashboard?.stake_options ?? [];
-  const liveRoomsCount = stakeOptions.filter((stake) => stake.room_phase === "playing" || stake.status === "playing").length;
-  const queueRoomsCount = stakeOptions.filter((stake) => stake.room_phase === "selecting" || stake.status === "countdown").length;
-  const topStake = stakeOptions.reduce((max, stake) => Math.max(max, stake.stake), 0);
-  const highestPossibleWin = stakeOptions.reduce((max, stake) => Math.max(max, stake.possible_win ?? 0), 0);
-  const supportTopicsCount = dashboard?.faq.length ?? 0;
   const renderBoughtCard = (ownedCard: BingoCard, rail: "desktop" | "panel" = "desktop") => {
     const isActive = selectedCardNo === ownedCard.card_no;
     const marksForOwnedCard = marksForCard(room, ownedCard.card_no);
@@ -1685,44 +1729,6 @@ export default function App() {
 
         {service === "home" && (
           <section className="home-landing fade-up">
-            <article className="home-hero-panel">
-              <div className="home-hero-copy">
-                <p className="home-eyebrow">{dashboard?.brand.name ?? fallbackBrand.name}</p>
-                <h2>Play live bingo with transparent payouts and full wallet control.</h2>
-                <p className="home-lead">
-                  Track active rooms in real time, join your preferred stake in seconds, and keep every transaction visible in one secure dashboard.
-                </p>
-                <div className="home-cta-row">
-                  <button className="home-btn primary" type="button" onClick={() => openService("stakes")}>
-                    Join Bingo Rooms
-                  </button>
-                  <button className="home-btn secondary" type="button" onClick={() => openService("wallet")}>
-                    Manage Wallet
-                  </button>
-                  <button className="home-btn ghost" type="button" onClick={() => openService("history")}>
-                    See Bet History
-                  </button>
-                </div>
-              </div>
-              <div className="home-hero-metrics">
-                <article className="home-stat-card">
-                  <span>Available Balance</span>
-                  <strong>{fmtEtb(wallet.main_balance)}</strong>
-                  <small>Main wallet ready for active stakes.</small>
-                </article>
-                <article className="home-stat-card">
-                  <span>Live Rooms</span>
-                  <strong>{liveRoomsCount}</strong>
-                  <small>Rooms currently calling numbers.</small>
-                </article>
-                <article className="home-stat-card">
-                  <span>Countdown Rooms</span>
-                  <strong>{queueRoomsCount}</strong>
-                  <small>Rooms open for card selection.</small>
-                </article>
-              </div>
-            </article>
-
             <div className="home-feature-grid">
               <article className="home-feature-card">
                 <div className="home-feature-top">
@@ -1768,28 +1774,6 @@ export default function App() {
                 </button>
               </article>
             </div>
-
-            <article className="home-trust-panel">
-              <h3>Operational Snapshot</h3>
-              <div className="home-trust-grid">
-                <div>
-                  <span className="home-trust-label">Top Listed Stake</span>
-                  <strong>{topStake > 0 ? `ETB ${topStake}` : "Not Set"}</strong>
-                </div>
-                <div>
-                  <span className="home-trust-label">Highest Possible Win</span>
-                  <strong>{highestPossibleWin > 0 ? fmtEtb(highestPossibleWin) : "Pending"}</strong>
-                </div>
-                <div>
-                  <span className="home-trust-label">Support Topics</span>
-                  <strong>{supportTopicsCount}</strong>
-                </div>
-                <div>
-                  <span className="home-trust-label">Brand Promise</span>
-                  <strong>{dashboard?.brand.tagline ?? fallbackBrand.tagline}</strong>
-                </div>
-              </div>
-            </article>
           </section>
         )}
 
@@ -1805,13 +1789,14 @@ export default function App() {
             <div className="stake-list">
               {(dashboard?.stake_options ?? []).map((stake) => {
                 const isPlaying = stake.room_phase === "playing" || stake.status === "playing";
+                const liveCountdown = getStakeCountdownSeconds(stake);
                 const active =
                   stake.room_phase === "selecting" || (stake.status === "countdown" && stake.room_phase !== "finished")
-                    ? `0:${String(stake.countdown_seconds ?? 0).padStart(2, "0")}`
+                    ? fmtClock(liveCountdown)
                     : isPlaying
                       ? "Playing"
                       : stake.room_phase === "finished"
-                        ? `0:${String(stake.countdown_seconds ?? 0).padStart(2, "0")}`
+                        ? fmtClock(liveCountdown)
                         : "None";
                 const canOpen = Boolean(stake.open_available && (stake.my_cards_current ?? 0) > 0);
                 return (

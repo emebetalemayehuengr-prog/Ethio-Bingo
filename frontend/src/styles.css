@@ -4784,3 +4784,196 @@ body {
     width: 100%;
   }
 }
+
+/* Mobile header: keep all controls on one line */
+@media (max-width: 760px) {
+  .top-strip {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .brand-inline {
+    flex: 0 0 auto;
+    margin-right: 0;
+    min-width: 0;
+  }
+
+  .brand-inline span {
+    display: none;
+  }
+
+  .brand-inline-logo {
+    width: 28px;
+    height: 28px;
+  }
+
+  .menu-toggle,
+  .theme-toggle,
+  .refresh-btn {
+    min-width: 0 !important;
+    min-height: 34px;
+    height: 34px;
+    padding: 0 10px;
+    font-size: 0.74rem;
+    line-height: 1;
+    border-radius: 8px;
+    white-space: nowrap;
+  }
+
+  .theme-toggle {
+    padding: 0 8px;
+  }
+
+  .wallet-pill {
+    margin-left: 0 !important;
+    min-height: 34px;
+    padding: 0 8px;
+    font-size: 0.72rem;
+    white-space: nowrap;
+    flex: 1 1 auto;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 460px) {
+  .menu-toggle {
+    padding: 0 8px;
+  }
+
+  .theme-toggle {
+    min-width: 56px !important;
+    padding: 0 6px;
+  }
+
+  .refresh-btn {
+    width: 34px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .refresh-btn::before {
+    content: "↻";
+    font-size: 0.95rem;
+    line-height: 1;
+  }
+
+  .wallet-pill {
+    font-size: 0.68rem;
+    min-width: 84px;
+    padding: 0 7px;
+  }
+}
+
+/* Mobile header override: keep one row and prevent wrap on small devices */
+@media (max-width: 760px) {
+  .top-strip {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    overflow: hidden;
+  }
+
+  .brand-inline {
+    flex: 0 0 auto;
+    margin-right: 0;
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .brand-inline span {
+    display: none;
+  }
+
+  .brand-inline-logo {
+    width: 26px;
+    height: 26px;
+  }
+
+  .menu-toggle,
+  .theme-toggle,
+  .refresh-btn {
+    flex: 0 0 auto;
+    min-width: 0 !important;
+    min-height: 32px;
+    height: 32px;
+    padding: 0 8px;
+    font-size: 0.72rem;
+    line-height: 1;
+    border-radius: 8px;
+    white-space: nowrap;
+  }
+
+  .wallet-pill {
+    margin-left: auto !important;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 32px;
+    padding: 0 8px;
+    font-size: 0.72rem;
+    white-space: nowrap;
+    justify-content: flex-end;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@media (max-width: 520px) {
+  .top-strip {
+    gap: 4px;
+    padding-inline: 8px;
+  }
+
+  .menu-toggle,
+  .theme-toggle,
+  .refresh-btn {
+    width: 30px;
+    min-width: 30px !important;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .menu-toggle::before {
+    content: "M";
+    font-size: 0.68rem;
+    font-weight: 800;
+    line-height: 1;
+  }
+
+  .theme-toggle::before {
+    content: "T";
+    font-size: 0.68rem;
+    font-weight: 800;
+    line-height: 1;
+  }
+
+  .refresh-btn::before {
+    content: "R";
+    font-size: 0.68rem;
+    font-weight: 800;
+    line-height: 1;
+  }
+
+  .wallet-pill {
+    flex: 1 1 auto;
+    min-width: 74px;
+    font-size: 0.66rem;
+    padding: 0 6px;
+  }
+}
+
+@media (max-width: 380px) {
+  .brand-inline-logo {
+    width: 22px;
+    height: 22px;
+  }
+
+  .wallet-pill {
+    min-width: 64px;
+    font-size: 0.62rem;
+    padding: 0 5px;
+  }
+}
