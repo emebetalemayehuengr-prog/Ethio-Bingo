@@ -15,6 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      RUNTIME_API_BASE: ${{ secrets.RUNTIME_API_BASE }}
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
+      SSH_PORT: ${{ secrets.SSH_PORT }}
+      SSH_FRONTEND_PATH: ${{ secrets.SSH_FRONTEND_PATH }}
+      SSH_BACKEND_PATH: ${{ secrets.SSH_BACKEND_PATH }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,46 +45,46 @@ jobs:
         run: npm run build
 
       - name: Override runtime API base (optional)
-        if: ${{ secrets.RUNTIME_API_BASE != '' }}
+        if: ${{ env.RUNTIME_API_BASE != '' }}
         run: |
-          echo "window.__RUNTIME_CONFIG__ = { API_BASE: \"${{ secrets.RUNTIME_API_BASE }}\" };" > frontend/dist/runtime-config.js
+          echo "window.__RUNTIME_CONFIG__ = { API_BASE: \"${{ env.RUNTIME_API_BASE }}\" };" > frontend/dist/runtime-config.js
 
       - name: Upload frontend to HahuCloud (SFTP)
-        if: ${{ secrets.SSH_HOST != '' && secrets.SSH_USER != '' && (secrets.SSH_PRIVATE_KEY != '' || secrets.SSH_KEY != '') && secrets.SSH_FRONTEND_PATH != '' }}
+        if: ${{ env.SSH_HOST != '' && env.SSH_USER != '' && env.SSH_KEY != '' && env.SSH_FRONTEND_PATH != '' }}
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT }}
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
+          port: ${{ env.SSH_PORT }}
           source: "frontend/dist/*"
-          target: ${{ secrets.SSH_FRONTEND_PATH }}
+          target: ${{ env.SSH_FRONTEND_PATH }}
 
       - name: Upload backend to HahuCloud (SFTP)
-        if: ${{ secrets.SSH_HOST != '' && secrets.SSH_USER != '' && (secrets.SSH_PRIVATE_KEY != '' || secrets.SSH_KEY != '') && secrets.SSH_BACKEND_PATH != '' }}
+        if: ${{ env.SSH_HOST != '' && env.SSH_USER != '' && env.SSH_KEY != '' && env.SSH_BACKEND_PATH != '' }}
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT }}
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
+          port: ${{ env.SSH_PORT }}
           source: "backend/**"
-          target: ${{ secrets.SSH_BACKEND_PATH }}
+          target: ${{ env.SSH_BACKEND_PATH }}
           strip_components: 1
           overwrite: true
           exclude: ".env,**/__pycache__/**,**/*.pyc,**/.venv/**,**/data/**,**/*.db"
 
       - name: Restart backend app (Passenger)
-        if: ${{ secrets.SSH_HOST != '' && secrets.SSH_USER != '' && (secrets.SSH_PRIVATE_KEY != '' || secrets.SSH_KEY != '') && secrets.SSH_BACKEND_PATH != '' }}
+        if: ${{ env.SSH_HOST != '' && env.SSH_USER != '' && env.SSH_KEY != '' && env.SSH_BACKEND_PATH != '' }}
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT }}
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
+          port: ${{ env.SSH_PORT }}
           script: |
             set -e
-            BACKEND_PATH="${{ secrets.SSH_BACKEND_PATH }}"
+            BACKEND_PATH="${{ env.SSH_BACKEND_PATH }}"
             if [ ! -d "$BACKEND_PATH" ]; then
               echo "Backend path not found: $BACKEND_PATH"
               exit 1
