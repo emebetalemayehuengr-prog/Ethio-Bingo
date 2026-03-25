@@ -495,6 +495,77 @@ class PostgresStateStore:
 
         return state
 
+    def load_user(self, phone_number: str) -> dict[str, Any] | None:
+        if not self.enabled():
+            return None
+
+        phone = str(phone_number).strip()
+        if not phone:
+            return None
+
+        with psycopg.connect(self.dsn, row_factory=dict_row, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                row = cur.execute("SELECT * FROM users WHERE phone_number = %s", (phone,)).fetchone()
+                if not row:
+                    return None
+                wallet = cur.execute(
+                    "SELECT main_balance, bonus_balance FROM wallets WHERE phone_number = %s",
+                    (phone,),
+                ).fetchone()
+                tx_rows = cur.execute(
+                    "SELECT type, amount, status, created_at FROM transactions WHERE phone_number = %s ORDER BY id DESC",
+                    (phone,),
+                ).fetchall()
+                bet_rows = cur.execute(
+                    """
+                    SELECT id, stake, game_winning, winner_cards, your_cards, date, result, payout, called_numbers, preview_card
+                    FROM bet_history
+                    WHERE phone_number = %s
+                    ORDER BY date DESC
+                    """,
+                    (phone,),
+                ).fetchall()
+
+        return {
+            "user_name": str(row["user_name"]),
+            "phone_number": phone,
+            "password_hash": str(row["password_hash"]),
+            "referral_code": str(row["referral_code"]),
+            "is_admin": bool(row["is_admin"]),
+            "telegram_id": int(row["telegram_id"]) if row["telegram_id"] is not None else None,
+            "telegram_username": str(row["telegram_username"]) if row["telegram_username"] is not None else None,
+            "wallet": {
+                "main_balance": float(wallet["main_balance"]) if wallet else 0.0,
+                "bonus_balance": float(wallet["bonus_balance"]) if wallet else 0.0,
+                "currency": "ETB",
+            },
+            "history": [
+                {
+                    "type": str(tx["type"]),
+                    "amount": float(tx["amount"]),
+                    "status": str(tx["status"]),
+                    "created_at": str(tx["created_at"]),
+                }
+                for tx in tx_rows
+            ],
+            "bet_history": [
+                {
+                    "id": str(bet["id"]),
+                    "stake": int(bet["stake"]),
+                    "game_winning": float(bet["game_winning"]),
+                    "winner_cards": list(bet["winner_cards"] or []),
+                    "your_cards": list(bet["your_cards"] or []),
+                    "date": str(bet["date"]),
+                    "result": str(bet["result"]),
+                    "payout": float(bet["payout"]),
+                    "called_numbers": list(bet["called_numbers"] or []),
+                    "preview_card": bet["preview_card"],
+                }
+                for bet in bet_rows
+            ],
+            "joined_rooms": {},
+        }
+
     def persist_users(self, users: dict[str, Any]) -> None:
         if not users:
             return

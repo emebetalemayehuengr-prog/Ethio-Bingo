@@ -1233,16 +1233,30 @@ def phone_variants(phone_number: str) -> list[str]:
 
 
 def find_user_by_phone(phone_number: str) -> UserStore | None:
+    matched: UserStore | None = None
     for candidate in phone_variants(phone_number):
         user = USERS.get(candidate)
         if user is not None:
-            return user
+            matched = user
+            break
 
-    normalized = normalize_phone(phone_number)
-    for user in USERS.values():
-        if normalize_phone(user.phone_number) == normalized:
-            return user
-    return None
+    if matched is None:
+        normalized = normalize_phone(phone_number)
+        for user in USERS.values():
+            if normalize_phone(user.phone_number) == normalized:
+                matched = user
+                break
+
+    if matched is None:
+        return None
+
+    if IS_PRODUCTION_ENV:
+        latest_user = load_latest_user_from_persisted_state(matched.phone_number)
+        if latest_user is not None:
+            USERS[latest_user.phone_number] = latest_user
+            return latest_user
+
+    return matched
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
@@ -2841,10 +2855,16 @@ def get_auth_token(authorization: str | None) -> str:
 
 
 def load_latest_user_from_persisted_state(phone_number: str) -> UserStore | None:
+    if PG_STORE.enabled():
+        try:
+            raw_user = PG_STORE.load_user(phone_number)
+            if raw_user is None:
+                return None
+            return UserStore.model_validate(raw_user)
+        except Exception:
+            return None
     # In SQLite multi-worker Passenger setups, each worker can keep stale in-memory
     # user objects. Load latest persisted user snapshot to avoid wallet flip-flops.
-    if PG_STORE.enabled():
-        return None
     persisted_users = db_read_state("users")
     if not isinstance(persisted_users, dict):
         return None
@@ -2877,7 +2897,7 @@ def get_current_user(authorization: str | None = Header(default=None)) -> UserSt
     user = USERS.get(phone_number)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    if IS_PRODUCTION_ENV and not PG_STORE.enabled():
+    if IS_PRODUCTION_ENV:
         latest_user = load_latest_user_from_persisted_state(phone_number)
         if latest_user is not None:
             USERS[phone_number] = latest_user
@@ -3271,7 +3291,7 @@ def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
             continue
 
         if not is_simulated_phone(claim.phone_number):
-            winner_user.wallet.main_balance += payout
+            winner_user.wallet.main_balance = round(winner_user.wallet.main_balance + payout, 2)
             record_transaction(winner_user, "Win", payout, "Completed")
             changed_user_phones.add(claim.phone_number)
         winners.append(
@@ -3964,7 +3984,7 @@ def mark_paid_withdraw_request(
     ticket.reviewed_at = ticket.paid_at
     ticket.reviewed_by = user.phone_number
 
-    target_user = USERS.get(ticket.phone_number)
+    target_user = find_user_by_phone(ticket.phone_number)
     if not target_user:
         raise HTTPException(
             status_code=409,
@@ -4012,9 +4032,9 @@ def reject_withdraw_request(ticket_id: str, user: UserStore = Depends(get_curren
     ticket.reviewed_at = utc_now().replace(microsecond=0).isoformat()
     ticket.reviewed_by = user.phone_number
 
-    target_user = USERS.get(ticket.phone_number)
+    target_user = find_user_by_phone(ticket.phone_number)
     if target_user:
-        target_user.wallet.main_balance += float(ticket.amount)
+        target_user.wallet.main_balance = round(target_user.wallet.main_balance + float(ticket.amount), 2)
         update_latest_pending_withdraw_status(target_user, ticket.amount, "Failed")
         record_transaction(target_user, "Deposit", ticket.amount, "Completed")
         persist_users([target_user.phone_number])
@@ -4066,7 +4086,7 @@ def submit_deposit(payload: DepositRequest, user: UserStore = Depends(get_curren
     reserve_deposit_receipt(tx_number, user.phone_number, links)
 
     amount = round(float(payload.amount), 2)
-    user.wallet.main_balance += amount
+    user.wallet.main_balance = round(user.wallet.main_balance + amount, 2)
     record_transaction(user, "Deposit", amount, "Completed")
     persist_users([user.phone_number])
     append_audit_event(
@@ -4097,16 +4117,17 @@ def transfer_balance(payload: TransferRequest, user: UserStore = Depends(get_cur
     target_phone = normalize_phone(payload.phone_number)
     if target_phone == user.phone_number:
         raise HTTPException(status_code=400, detail="You cannot transfer to your own account")
-    target_user = USERS.get(target_phone)
+    target_user = find_user_by_phone(target_phone)
     if not target_user:
         raise HTTPException(status_code=404, detail="Receiver account not found")
-    if user.wallet.main_balance < payload.amount:
+    amount = round(float(payload.amount), 2)
+    if user.wallet.main_balance < amount:
         raise HTTPException(status_code=400, detail="Insufficient balance")
 
-    user.wallet.main_balance -= float(payload.amount)
-    target_user.wallet.main_balance += float(payload.amount)
-    record_transaction(user, "Transfer", payload.amount, "Completed")
-    record_transaction(target_user, "Deposit", payload.amount, "Completed")
+    user.wallet.main_balance = round(user.wallet.main_balance - amount, 2)
+    target_user.wallet.main_balance = round(target_user.wallet.main_balance + amount, 2)
+    record_transaction(user, "Transfer", amount, "Completed")
+    record_transaction(target_user, "Deposit", amount, "Completed")
     persist_users([user.phone_number, target_user.phone_number])
     return {
         "message": "Transfer completed successfully.",
@@ -4116,13 +4137,14 @@ def transfer_balance(payload: TransferRequest, user: UserStore = Depends(get_cur
 
 @app.post("/api/wallet/withdraw")
 def withdraw_balance(payload: WithdrawRequest, user: UserStore = Depends(get_current_user)) -> dict:
-    if payload.amount < 100:
+    amount = round(float(payload.amount), 2)
+    if amount < 100:
         raise HTTPException(status_code=400, detail="Minimum withdraw amount is 100 ETB")
-    if user.wallet.main_balance < payload.amount:
+    if user.wallet.main_balance < amount:
         raise HTTPException(status_code=400, detail="Insufficient balance")
 
-    user.wallet.main_balance -= float(payload.amount)
-    record_transaction(user, "Withdraw", payload.amount, "Pending")
+    user.wallet.main_balance = round(user.wallet.main_balance - amount, 2)
+    record_transaction(user, "Withdraw", amount, "Pending")
     ticket = WithdrawTicket(
         id=secrets.token_hex(8),
         phone_number=user.phone_number,
@@ -4130,7 +4152,7 @@ def withdraw_balance(payload: WithdrawRequest, user: UserStore = Depends(get_cur
         bank=payload.bank.strip(),
         account_number=payload.account_number.strip(),
         account_holder=payload.account_holder.strip(),
-        amount=float(payload.amount),
+        amount=amount,
         status="Pending",
         created_at=utc_now().replace(microsecond=0).isoformat(),
         processing_at=None,
@@ -4146,7 +4168,7 @@ def withdraw_balance(payload: WithdrawRequest, user: UserStore = Depends(get_cur
     append_audit_event(
         "withdraw_requested",
         phone_number=user.phone_number,
-        amount=float(payload.amount),
+        amount=amount,
         status="Pending",
         withdraw_ticket_id=ticket.id,
         bank=ticket.bank,
@@ -4448,7 +4470,8 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
     if len(user_cards_in_queue) >= MAX_CARDS_PER_USER:
         raise HTTPException(status_code=400, detail=f"Maximum {MAX_CARDS_PER_USER} cards per user in one game queue")
 
-    if user.wallet.main_balance < stake.stake:
+    stake_amount = round(float(stake.stake), 2)
+    if user.wallet.main_balance < stake_amount:
         raise HTTPException(status_code=400, detail="Insufficient balance")
 
     previous_hold = get_user_held_cartella_from_map(held_map, user.phone_number)
@@ -4459,8 +4482,8 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
     taken_map[payload.cartella_no] = user.phone_number
     held_map.pop(payload.cartella_no, None)
     held_updated_at.pop(payload.cartella_no, None)
-    user.wallet.main_balance -= float(stake.stake)
-    record_transaction(user, "Bet", stake.stake, "Completed")
+    user.wallet.main_balance = round(user.wallet.main_balance - stake_amount, 2)
+    record_transaction(user, "Bet", stake_amount, "Completed")
     room.marked_by_user_card[mark_key(user.phone_number, payload.cartella_no)] = []
     persist_users([user.phone_number])
     persist_rooms()
