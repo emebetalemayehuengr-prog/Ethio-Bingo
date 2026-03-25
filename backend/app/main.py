@@ -3728,12 +3728,15 @@ apply_default_deposit_logos()
 apply_admin_bootstrap()
 if ENABLE_DEMO_SEED:
     seed_demo_users()
-persist_users()
-persist_deposit_methods()
-persist_withdraw_tickets()
-persist_audit_events()
-persist_receipt_cache()
-persist_rooms()
+# Avoid rewriting full state on every boot when Postgres is the primary store.
+# Runtime handlers persist mutations explicitly.
+if not PG_STORE.enabled():
+    persist_users()
+    persist_deposit_methods()
+    persist_withdraw_tickets()
+    persist_audit_events()
+    persist_receipt_cache()
+    persist_rooms()
 
 
 async def room_tick_loop() -> None:
