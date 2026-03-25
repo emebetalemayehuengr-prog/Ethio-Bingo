@@ -822,7 +822,18 @@ def get_env_first(keys: tuple[str, ...], default: str = "") -> str:
 DB_PATH = Path(
     get_env_first(PRIMARY_DB_ENV_KEYS, str(DEFAULT_SQLITE_PATH))
 ).expanduser()
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+
+def normalize_database_url(raw: str) -> str:
+    if not raw:
+        return ""
+    if "supabase.co" in raw and not re.search(r"[?&]sslmode=", raw, flags=re.IGNORECASE):
+        separator = "&" if "?" in raw else "?"
+        return f"{raw}{separator}sslmode=require"
+    return raw
+
+
+DATABASE_URL = normalize_database_url(os.getenv("DATABASE_URL", "").strip())
 PG_STORE = PostgresStateStore(DATABASE_URL)
 DB_LOCK = threading.Lock()
 ALLOW_EPHEMERAL_DB = env_flag("ALLOW_EPHEMERAL_DB", False)
@@ -896,12 +907,8 @@ def ensure_runtime_config_ready() -> None:
 def ensure_db_ready() -> None:
     global DB_PATH
     if PG_STORE.enabled():
-        try:
-            PG_STORE.ensure_schema()
-            return
-        except Exception as exc:
-            PG_STORE.disable(f"connection failed: {exc}")
-            # Fall back to sqlite when Postgres is unavailable.
+        PG_STORE.ensure_schema()
+        return
     if IS_PRODUCTION_ENV and not ALLOW_EPHEMERAL_DB and not sqlite_path_looks_persistent(DB_PATH):
         raise RuntimeError(
             f"APP_ENV=production requires persistent storage. Current FORTY_BINGO_DB_PATH '{DB_PATH}' is not under "
