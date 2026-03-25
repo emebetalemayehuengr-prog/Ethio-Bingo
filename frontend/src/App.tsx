@@ -1419,7 +1419,12 @@ export default function App() {
       setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
       setPickerRoom(res.room);
       setRoom(res.room);
-      setCards(res.cards ?? (res.card ? [res.card] : []));
+      const returnedCards = res.cards ?? (res.card ? [res.card] : []);
+      const mergedCards =
+        res.card && !returnedCards.some((item) => item.card_no === res.card.card_no)
+          ? [...returnedCards, res.card]
+          : returnedCards;
+      setCards(mergedCards);
       setSelectedCardNo(res.card?.card_no ?? selectedCartella);
       setNotice(res.message);
       void refreshHistory();

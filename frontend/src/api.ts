@@ -93,6 +93,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     if (err instanceof DOMException && err.name === "AbortError") {
       throw new Error("Request timed out. Check your connection.");
     }
+    if (err instanceof TypeError || (err instanceof Error && /failed to fetch|networkerror|load failed/i.test(err.message))) {
+      const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+      throw new Error(
+        offline
+          ? "You're offline. Check your connection and try again."
+          : "Network error. Unable to reach the server. Check your connection and try again.",
+      );
+    }
     throw err;
   } finally {
     window.clearTimeout(timeoutId);
