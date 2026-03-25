@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -1105,6 +1106,13 @@ class PostgresStateStore:
                 ),
             )
 
+    def _advisory_key(self, stake_id: str) -> int:
+        digest = hashlib.sha256(str(stake_id).encode("utf-8")).digest()[:8]
+        key = int.from_bytes(digest, "big", signed=False)
+        if key >= 2**63:
+            key -= 2**64
+        return key
+
     def persist_rooms(self, rooms: dict[str, Any]) -> None:
         with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
@@ -1121,6 +1129,7 @@ class PostgresStateStore:
     def persist_room(self, stake_id: str, room: dict[str, Any]) -> None:
         with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_xact_lock(%s)", (self._advisory_key(stake_id),))
                 self._persist_room(cur, stake_id, room, clear_existing=True)
             conn.commit()
 
