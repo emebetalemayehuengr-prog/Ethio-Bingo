@@ -77,7 +77,9 @@ except Exception:  # pragma: no cover - optional in constrained environments
 if "DATABASE_URL" in os.environ and not os.environ.get("DATABASE_URL", "").strip():
     os.environ.pop("DATABASE_URL", None)
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
+# Load local .env without overriding real environment (e.g., cPanel).
+# This lets cPanel/prod env win while still supporting local dev defaults.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 
 
 def env_flag(name: str, default: bool = False) -> bool:

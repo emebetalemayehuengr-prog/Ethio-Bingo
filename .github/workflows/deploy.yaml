@@ -93,6 +93,5 @@ jobs:
               echo "Backend path not found: $BACKEND_PATH"
               exit 1
             fi
-            rm -f "$BACKEND_PATH/.env"
             mkdir -p "$BACKEND_PATH/tmp"
             touch "$BACKEND_PATH/tmp/restart.txt"
