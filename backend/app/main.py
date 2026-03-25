@@ -42,7 +42,34 @@ try:
     from dotenv import load_dotenv
 except Exception:  # pragma: no cover - optional in constrained environments
     def load_dotenv(*args, **kwargs) -> bool:
-        return False
+        # Minimal fallback loader when python-dotenv is unavailable.
+        path_arg = args[0] if args else ".env"
+        path = Path(path_arg)
+        if not path.exists():
+            return False
+        override = bool(kwargs.get("override", False))
+        loaded_any = False
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export ") :].strip()
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if not key:
+                continue
+            if (value.startswith('"') and value.endswith('"')) or (
+                value.startswith("'") and value.endswith("'")
+            ):
+                value = value[1:-1]
+            if override or key not in os.environ or os.environ.get(key, "") == "":
+                os.environ[key] = value
+                loaded_any = True
+        return loaded_any
 
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")

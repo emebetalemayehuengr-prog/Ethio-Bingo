@@ -11,7 +11,6 @@ os.environ.setdefault("APP_ENV", "production")
 os.environ.setdefault("ALLOW_EPHEMERAL_DB", "true")
 os.environ.setdefault("PERSISTENT_SQLITE_ROOTS", "/var/data,/home")
 os.environ.setdefault("ENABLE_SIMULATED_ACTIVITY", "false")
-os.environ.setdefault("DATABASE_URL", "")
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
