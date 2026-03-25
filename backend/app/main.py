@@ -796,6 +796,7 @@ USED_RECEIPT_LINKS: dict[str, str] = {}
 WITHDRAW_TICKETS: list[WithdrawTicket] = []
 AUDIT_EVENTS: list[AuditEvent] = []
 CASINO_LAUNCH_SESSIONS: dict[str, dict[str, str]] = {}
+USER_REFRESH_AT: dict[str, datetime] = {}
 
 DEPOSIT_SOURCE_DOMAINS: dict[str, set[str]] = {
     "telebirr": {"telebirr.et", "telebirr.com.et", "ethiotelecom.et"},
@@ -810,6 +811,7 @@ DEFAULT_SQLITE_PATH = (
 PRIMARY_DB_ENV_KEYS = ("FORTY_BINGO_DB_PATH", "ETHIO_BINGO_DB_PATH")
 FALLBACK_DB_ENV_KEYS = ("FORTY_BINGO_FALLBACK_DB_PATH", "ETHIO_BINGO_FALLBACK_DB_PATH")
 PERSISTENT_SQLITE_ROOTS = env_list("PERSISTENT_SQLITE_ROOTS", "/var/data,/home")
+USER_REFRESH_TTL_SECONDS = max(1, env_int("USER_REFRESH_TTL_SECONDS", 5))
 
 
 def get_env_first(keys: tuple[str, ...], default: str = "") -> str:
@@ -2950,9 +2952,13 @@ def get_current_user(authorization: str | None = Header(default=None)) -> UserSt
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     if IS_PRODUCTION_ENV:
-        latest_user = refresh_user_from_primary_store(phone_number)
-        if latest_user is not None:
-            user = latest_user
+        last_refresh = USER_REFRESH_AT.get(phone_number)
+        now = utc_now()
+        if last_refresh is None or (now - last_refresh).total_seconds() >= USER_REFRESH_TTL_SECONDS:
+            latest_user = refresh_user_from_primary_store(phone_number)
+            USER_REFRESH_AT[phone_number] = now
+            if latest_user is not None:
+                user = latest_user
     return user
 
 

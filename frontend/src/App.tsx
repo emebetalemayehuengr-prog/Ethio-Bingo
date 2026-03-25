@@ -959,21 +959,35 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const [dash, hist, betHist, casino] = await Promise.all([
-        fetchDashboard(),
-        fetchHistory(),
-        safeFetchBetHistory(),
-        fetchCasinoGames().catch(() => ({ items: fallbackCasinoGames })),
-      ]);
+      const dash = await fetchDashboard();
       setDashboard(dash);
       setProfile(dash.user);
-      setHistory(hist.items);
-      setBetHistory(betHist.items);
-      setCasinoGames(casino.items.length > 0 ? casino.items : fallbackCasinoGames);
-      setCasinoCatalogNotice(casino.items.length > 0 ? "" : "Showing cached casino lineup.");
       if (dash.deposit_methods.length > 0) {
         setMethodCode(dash.deposit_methods[0].code);
       }
+
+      void fetchHistory()
+        .then((hist) => setHistory(hist.items))
+        .catch(() => {
+          // Avoid blocking core dashboard data on history failures.
+        });
+
+      void safeFetchBetHistory()
+        .then((betHist) => setBetHistory(betHist.items))
+        .catch(() => {
+          // keep existing history if it fails
+        });
+
+      void fetchCasinoGames()
+        .then((casino) => {
+          const items = casino.items.length > 0 ? casino.items : fallbackCasinoGames;
+          setCasinoGames(items);
+          setCasinoCatalogNotice(casino.items.length > 0 ? "" : "Showing cached casino lineup.");
+        })
+        .catch(() => {
+          setCasinoGames(fallbackCasinoGames);
+          setCasinoCatalogNotice("Showing cached casino lineup.");
+        });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to load data";
       setError(message);
