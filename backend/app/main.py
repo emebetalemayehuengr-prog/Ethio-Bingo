@@ -72,6 +72,11 @@ except Exception:  # pragma: no cover - optional in constrained environments
         return loaded_any
 
 
+# Some cPanel Python app setups define DATABASE_URL as an empty app-level env var.
+# When that happens, python-dotenv treats it as "already set" and won't load .env value.
+if "DATABASE_URL" in os.environ and not os.environ.get("DATABASE_URL", "").strip():
+    os.environ.pop("DATABASE_URL", None)
+
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
