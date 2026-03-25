@@ -937,6 +937,40 @@ def db_write_state(state_key: str, value: object) -> None:
             )
 
 
+def db_merge_users_state(changed_users: dict[str, dict[str, object]]) -> None:
+    if not changed_users:
+        return
+    ensure_db_ready()
+    now = utc_now().replace(microsecond=0).isoformat()
+    with DB_LOCK:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT state_value FROM app_state WHERE state_key = ?",
+                ("users",),
+            ).fetchone()
+            current_users: dict[str, object] = {}
+            if row and row[0]:
+                try:
+                    loaded = json.loads(str(row[0]))
+                    if isinstance(loaded, dict):
+                        current_users = loaded
+                except json.JSONDecodeError:
+                    current_users = {}
+            current_users.update(changed_users)
+            payload = json.dumps(current_users, separators=(",", ":"), ensure_ascii=False)
+            conn.execute(
+                """
+                INSERT INTO app_state (state_key, state_value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(state_key) DO UPDATE SET
+                    state_value = excluded.state_value,
+                    updated_at = excluded.updated_at
+                """,
+                ("users", payload, now),
+            )
+
+
 def persist_users(phone_numbers: Iterable[str] | None = None) -> None:
     payload: dict[str, dict[str, object]]
     if phone_numbers is None:
@@ -951,6 +985,9 @@ def persist_users(phone_numbers: Iterable[str] | None = None) -> None:
 
     if PG_STORE.enabled():
         PG_STORE.persist_users(payload)
+        return
+    if phone_numbers is not None:
+        db_merge_users_state(payload)
         return
     db_write_state("users", {phone: user.model_dump(mode="json") for phone, user in USERS.items()})
 
