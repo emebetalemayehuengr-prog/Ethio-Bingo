@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import smtplib
+import socket
 import ssl
 import sqlite3
 import threading
@@ -19,7 +20,7 @@ from html import escape
 from pathlib import Path
 from random import Random, randint, sample, shuffle
 from typing import Iterable, Literal
-from urllib.parse import parse_qsl, unquote, unquote_plus, urlparse
+from urllib.parse import parse_qsl, unquote, unquote_plus, urlencode, urlparse
 from urllib.request import Request as UrlRequest, urlopen
 
 try:
@@ -827,10 +828,35 @@ DB_PATH = Path(
 def normalize_database_url(raw: str) -> str:
     if not raw:
         return ""
-    if "supabase.co" in raw and not re.search(r"[?&]sslmode=", raw, flags=re.IGNORECASE):
-        separator = "&" if "?" in raw else "?"
-        return f"{raw}{separator}sslmode=require"
-    return raw
+    updated = raw
+    if "supabase.co" in updated and not re.search(r"[?&]sslmode=", updated, flags=re.IGNORECASE):
+        separator = "&" if "?" in updated else "?"
+        updated = f"{updated}{separator}sslmode=require"
+    try:
+        parsed = urlparse(updated)
+        if parsed.scheme.startswith("postgres") and parsed.hostname:
+            query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+            query = {key: value for key, value in query_pairs}
+            if "hostaddr" not in query:
+                hostaddr = os.getenv("PG_HOSTADDR", "").strip()
+                if not hostaddr:
+                    try:
+                        infos = socket.getaddrinfo(
+                            parsed.hostname,
+                            parsed.port or 5432,
+                            socket.AF_INET,
+                            socket.SOCK_STREAM,
+                        )
+                        if infos:
+                            hostaddr = infos[0][4][0]
+                    except OSError:
+                        hostaddr = ""
+                if hostaddr:
+                    query["hostaddr"] = hostaddr
+                    updated = parsed._replace(query=urlencode(query)).geturl()
+    except Exception:
+        return updated
+    return updated
 
 
 DATABASE_URL = normalize_database_url(os.getenv("DATABASE_URL", "").strip())
