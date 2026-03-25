@@ -61,9 +61,15 @@ def _utc_now_iso() -> str:
 class PostgresStateStore:
     def __init__(self, dsn: str) -> None:
         self.dsn = dsn.strip()
+        self.available = True
 
     def enabled(self) -> bool:
-        return bool(self.dsn)
+        return bool(self.dsn) and psycopg is not None and self.available
+
+    def disable(self, reason: str) -> None:
+        self.available = False
+        if reason:
+            print(f"[postgres] disabled: {reason}")
 
     def ensure_schema(self) -> None:
         if not self.enabled():

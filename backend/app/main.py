@@ -896,8 +896,12 @@ def ensure_runtime_config_ready() -> None:
 def ensure_db_ready() -> None:
     global DB_PATH
     if PG_STORE.enabled():
-        PG_STORE.ensure_schema()
-        return
+        try:
+            PG_STORE.ensure_schema()
+            return
+        except Exception as exc:
+            PG_STORE.disable(f"connection failed: {exc}")
+            # Fall back to sqlite when Postgres is unavailable.
     if IS_PRODUCTION_ENV and not ALLOW_EPHEMERAL_DB and not sqlite_path_looks_persistent(DB_PATH):
         raise RuntimeError(
             f"APP_ENV=production requires persistent storage. Current FORTY_BINGO_DB_PATH '{DB_PATH}' is not under "
