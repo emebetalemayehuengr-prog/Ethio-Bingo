@@ -17,7 +17,12 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.main import app as asgi_app
+_STARTUP_ERROR: str | None = None
+try:
+    from app.main import app as asgi_app
+except Exception:  # pragma: no cover - surfaced via /api/health
+    _STARTUP_ERROR = traceback.format_exc()
+    asgi_app = None
 
 
 def _headers_from_environ(environ):
@@ -54,6 +59,29 @@ def _cors_headers_for_environ(environ):
     return []
 
 
+def _sanitize_startup_error(error: str) -> str:
+    if not error:
+        return "Startup error."
+    # Redact credentials inside common Postgres DSN formats.
+    error = re.sub(r"(postgres(?:ql)?://)([^:@/]+):([^@/]+)@", r"\1***:***@", error)
+    return error
+
+
+def _startup_error_response(environ, start_response):
+    path = environ.get("PATH_INFO") or "/"
+    if path == "/api/health":
+        body = _sanitize_startup_error(_STARTUP_ERROR or "Startup error.").encode("utf-8", "replace")
+    else:
+        body = b"Internal Server Error"
+    headers = [
+        ("Content-Type", "text/plain; charset=utf-8"),
+        ("Content-Length", str(len(body))),
+    ]
+    headers.extend(_cors_headers_for_environ(environ))
+    start_response("500 Internal Server Error", headers)
+    return [body]
+
+
 async def _run_asgi(scope, body):
     started = {"status": 500, "headers": []}
     chunks = []
@@ -80,6 +108,8 @@ async def _run_asgi(scope, body):
 
 
 def application(environ, start_response):
+    if _STARTUP_ERROR or asgi_app is None:
+        return _startup_error_response(environ, start_response)
     try:
         try:
             length = int(environ.get("CONTENT_LENGTH") or "0")
