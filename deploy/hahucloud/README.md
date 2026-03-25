@@ -42,8 +42,14 @@ npm run build
 ```
 
 2. Upload contents of `frontend/dist/` into `public_html/`.
-3. Keep `.htaccess` in the web root (generated from `frontend/public/.htaccess`) for SPA fallback routes.
-4. Open `https://40bingo.com` and test login/game/wallet flows.
+3. Optional: update `public_html/runtime-config.js` to point at your API domain without rebuilding:
+
+```js
+window.__RUNTIME_CONFIG__ = { API_BASE: "https://api.40bingo.com" };
+```
+
+4. Keep `.htaccess` in the web root (generated from `frontend/public/.htaccess`) for SPA fallback routes.
+5. Open `https://40bingo.com` and test login/game/wallet flows.
 
 ## 3) Required Backend Env Vars
 

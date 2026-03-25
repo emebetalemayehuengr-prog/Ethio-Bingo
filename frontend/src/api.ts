@@ -15,9 +15,30 @@ import type {
   WithdrawTicket,
 } from "./types";
 
-const envApiBase = import.meta.env.VITE_API_BASE as string | undefined;
-const inferredApiBase = `${window.location.protocol}//${window.location.hostname}:8012`;
-const API_BASE = envApiBase?.trim() ? envApiBase : inferredApiBase;
+type RuntimeConfig = {
+  API_BASE?: string;
+};
+
+const runtimeApiBase = (window as Window & { __RUNTIME_CONFIG__?: RuntimeConfig }).__RUNTIME_CONFIG__?.API_BASE?.trim();
+const normalizedRuntimeApiBase = runtimeApiBase ? runtimeApiBase.replace(/\/+$/, "") : "";
+
+const envApiBase = (import.meta.env.VITE_API_BASE as string | undefined)?.trim();
+const normalizedEnvApiBase = envApiBase ? envApiBase.replace(/\/+$/, "") : "";
+
+const LOCAL_HOST_PATTERN =
+  /^(localhost|127\.0\.0\.1|0\.0\.0\.0|::1)$|^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/;
+
+const inferApiBase = () => {
+  const { protocol, hostname } = window.location;
+  if (LOCAL_HOST_PATTERN.test(hostname) || hostname.endsWith(".local")) {
+    return `${protocol}//${hostname}:8012`;
+  }
+  const baseHost = hostname.replace(/^www\./, "");
+  const apiHost = baseHost.startsWith("api.") ? baseHost : `api.${baseHost}`;
+  return `${protocol}//${apiHost}`;
+};
+
+const API_BASE = normalizedRuntimeApiBase || normalizedEnvApiBase || inferApiBase();
 const TOKEN_KEY = "40bingo_token";
 const LEGACY_TOKEN_KEY = "ethio_bingo_token";
 const REQUEST_TIMEOUT_MS = 12000;
