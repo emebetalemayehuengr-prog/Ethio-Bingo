@@ -4621,13 +4621,41 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
         raise HTTPException(status_code=400, detail="Insufficient balance")
 
     previous_hold = get_user_held_cartella_from_map(held_map, user.phone_number)
+
+    snapshot = room.model_dump(mode="json")
+    if queue == "next":
+        taken_key = "next_taken_cartellas"
+        held_key = "next_held_cartellas"
+        held_updated_key = "next_held_updated_at"
+    else:
+        taken_key = "taken_cartellas"
+        held_key = "held_cartellas"
+        held_updated_key = "held_updated_at"
+
+    snapshot_taken = dict(snapshot.get(taken_key, {}))
+    snapshot_held = dict(snapshot.get(held_key, {}))
+    snapshot_held_updated = dict(snapshot.get(held_updated_key, {}))
     if previous_hold is not None and previous_hold != payload.cartella_no:
-        held_map.pop(previous_hold, None)
-        held_updated_at.pop(previous_hold, None)
+        snapshot_held.pop(previous_hold, None)
+        snapshot_held.pop(str(previous_hold), None)
+        snapshot_held_updated.pop(previous_hold, None)
+        snapshot_held_updated.pop(str(previous_hold), None)
+
+    snapshot_taken[str(payload.cartella_no)] = user.phone_number
+    snapshot_held.pop(payload.cartella_no, None)
+    snapshot_held.pop(str(payload.cartella_no), None)
+    snapshot_held_updated.pop(payload.cartella_no, None)
+    snapshot_held_updated.pop(str(payload.cartella_no), None)
+    snapshot_marks = dict(snapshot.get("marked_by_user_card", {}))
+    snapshot_marks[mark_key(user.phone_number, payload.cartella_no)] = []
+    snapshot[taken_key] = snapshot_taken
+    snapshot[held_key] = snapshot_held
+    snapshot[held_updated_key] = snapshot_held_updated
+    snapshot["marked_by_user_card"] = snapshot_marks
 
     if PG_STORE.enabled():
         try:
-            PG_STORE.adjust_wallet_and_record_transaction(user.phone_number, -stake_amount, "Bet", "Completed")
+            PG_STORE.purchase_cartella(user.phone_number, str(stake.id), -stake_amount, snapshot)
         except ValueError as exc:
             if str(exc) == "insufficient_balance":
                 raise HTTPException(status_code=400, detail="Insufficient balance")
@@ -4640,11 +4668,15 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
         record_transaction(user, "Bet", stake_amount, "Completed")
         persist_users([user.phone_number])
 
+    if previous_hold is not None and previous_hold != payload.cartella_no:
+        held_map.pop(previous_hold, None)
+        held_updated_at.pop(previous_hold, None)
     taken_map[payload.cartella_no] = user.phone_number
     held_map.pop(payload.cartella_no, None)
     held_updated_at.pop(payload.cartella_no, None)
     room.marked_by_user_card[mark_key(user.phone_number, payload.cartella_no)] = []
-    persist_room(room)
+    if not PG_STORE.enabled():
+        persist_room(room)
 
     card = create_bingo_card(payload.cartella_no)
     current_cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in get_user_cartellas_from_map(room.taken_cartellas, user.phone_number)]

@@ -1133,6 +1133,61 @@ class PostgresStateStore:
                 self._persist_room(cur, stake_id, room, clear_existing=True)
             conn.commit()
 
+    def purchase_cartella(
+        self,
+        phone_number: str,
+        stake_id: str,
+        delta: float,
+        room: dict[str, Any],
+    ) -> float:
+        if not self.enabled():
+            raise RuntimeError("Postgres store is not enabled")
+
+        phone = str(phone_number).strip()
+        amount = round(abs(float(delta)), 2)
+        signed_delta = round(float(delta), 2)
+        if not phone:
+            raise ValueError("invalid_phone")
+        if amount <= 0:
+            raise ValueError("invalid_amount")
+
+        now_iso = _utc_now_iso()
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_xact_lock(%s)", (self._advisory_key(stake_id),))
+                cur.execute(
+                    """
+                    INSERT INTO wallets(phone_number, main_balance, bonus_balance)
+                    VALUES (%s, 0, 0)
+                    ON CONFLICT(phone_number) DO NOTHING
+                    """,
+                    (phone,),
+                )
+                row = cur.execute(
+                    """
+                    UPDATE wallets
+                    SET main_balance = ROUND(main_balance + %s, 2)
+                    WHERE phone_number = %s
+                      AND main_balance + %s >= 0
+                    RETURNING main_balance
+                    """,
+                    (signed_delta, phone, signed_delta),
+                ).fetchone()
+                if not row:
+                    raise ValueError("insufficient_balance")
+
+                cur.execute(
+                    """
+                    INSERT INTO transactions(phone_number, type, amount, status, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (phone, "Bet", amount, "Completed", now_iso),
+                )
+
+                self._persist_room(cur, stake_id, room, clear_existing=True)
+            conn.commit()
+        return float(row[0]) if row else 0.0
+
     def persist_receipts(self, used_deposit_tx: dict[str, str], used_receipt_links: dict[str, str]) -> None:
         with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
