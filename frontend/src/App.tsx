@@ -1374,7 +1374,11 @@ export default function App() {
       const ownedCards = res.cards ?? (res.card ? [res.card] : []);
       setCards(ownedCards);
       if (!ownedCards.length) {
-        setNotice("No active bought cartella for this live game.");
+        if ((res.room.next_my_cartellas?.length ?? 0) > 0) {
+          setNotice("You have cartella booked for the next game. Wait for this round to finish.");
+        } else {
+          setNotice("No active bought cartella for this live game.");
+        }
         return;
       }
       setSelectedCardNo((prev) => {
@@ -1417,6 +1421,18 @@ export default function App() {
     try {
       const res = await joinStake(selectedStake.id, selectedCartella);
       setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
+      setDashboard((prev) => {
+        if (!prev || !selectedStake) return prev;
+        const updatedOptions = (prev.stake_options ?? []).map((option) => {
+          if (option.id !== selectedStake.id) return option;
+          return {
+            ...option,
+            my_cards_current: res.room.my_cartellas?.length ?? option.my_cards_current,
+            my_cards_next: res.room.next_my_cartellas?.length ?? option.my_cards_next,
+          };
+        });
+        return { ...prev, stake_options: updatedOptions };
+      });
       setPickerRoom(res.room);
       setRoom(res.room);
       const returnedCards = res.cards ?? (res.card ? [res.card] : []);
