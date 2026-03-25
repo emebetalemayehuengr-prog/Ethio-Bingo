@@ -2890,8 +2890,11 @@ def get_current_user(authorization: str | None = Header(default=None)) -> UserSt
     # Passenger can serve requests from different workers. If a token is not
     # found in this worker memory, reload persisted state once and retry.
     if not record:
-        load_persisted_state()
-        record = normalize_session_record(SESSIONS.get(token))
+        if PG_STORE.enabled():
+            record = normalize_session_record(PG_STORE.load_session(token))
+        else:
+            load_persisted_state()
+            record = normalize_session_record(SESSIONS.get(token))
 
     if not record:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
@@ -2901,6 +2904,10 @@ def get_current_user(authorization: str | None = Header(default=None)) -> UserSt
     phone_number = record["phone_number"]
     SESSIONS[token] = record
     user = USERS.get(phone_number)
+    if not user and PG_STORE.enabled():
+        latest_user = refresh_user_from_primary_store(phone_number)
+        if latest_user is not None:
+            user = latest_user
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     if IS_PRODUCTION_ENV:

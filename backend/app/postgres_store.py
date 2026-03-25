@@ -571,6 +571,29 @@ class PostgresStateStore:
             "joined_rooms": {},
         }
 
+    def load_session(self, token: str) -> dict[str, str] | None:
+        if not self.enabled():
+            return None
+
+        clean_token = str(token).strip()
+        if not clean_token:
+            return None
+
+        with psycopg.connect(self.dsn, row_factory=dict_row, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                row = cur.execute(
+                    "SELECT token, phone_number, created_at, expires_at FROM sessions WHERE token = %s",
+                    (clean_token,),
+                ).fetchone()
+                if not row:
+                    return None
+
+        return {
+            "phone_number": str(row["phone_number"]),
+            "created_at": str(row["created_at"]) if row["created_at"] is not None else None,
+            "expires_at": str(row["expires_at"]) if row["expires_at"] is not None else None,
+        }
+
     def adjust_wallet_and_record_transaction(
         self,
         phone_number: str,
