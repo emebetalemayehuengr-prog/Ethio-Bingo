@@ -20,6 +20,7 @@ jobs:
       SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_USER: ${{ secrets.SSH_USER }}
       SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
+      SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
       SSH_PORT: ${{ secrets.SSH_PORT }}
       SSH_FRONTEND_PATH: ${{ secrets.SSH_FRONTEND_PATH }}
       SSH_BACKEND_PATH: ${{ secrets.SSH_BACKEND_PATH }}
@@ -56,6 +57,7 @@ jobs:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
           key: ${{ env.SSH_KEY }}
+          passphrase: ${{ env.SSH_PASSPHRASE }}
           port: ${{ env.SSH_PORT }}
           source: "frontend/dist/*"
           target: ${{ env.SSH_FRONTEND_PATH }}
@@ -67,6 +69,7 @@ jobs:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
           key: ${{ env.SSH_KEY }}
+          passphrase: ${{ env.SSH_PASSPHRASE }}
           port: ${{ env.SSH_PORT }}
           source: "backend/**"
           target: ${{ env.SSH_BACKEND_PATH }}
@@ -81,6 +84,7 @@ jobs:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
           key: ${{ env.SSH_KEY }}
+          passphrase: ${{ env.SSH_PASSPHRASE }}
           port: ${{ env.SSH_PORT }}
           script: |
             set -e
