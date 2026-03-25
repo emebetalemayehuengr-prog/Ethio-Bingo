@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,10 @@ def _split_sql_statements(sql: str) -> list[str]:
     if tail:
         statements.append(tail)
     return statements
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 class PostgresStateStore:
@@ -566,6 +571,240 @@ class PostgresStateStore:
             "joined_rooms": {},
         }
 
+    def adjust_wallet_and_record_transaction(
+        self,
+        phone_number: str,
+        delta: float,
+        tx_type: str,
+        status: str,
+    ) -> float:
+        if not self.enabled():
+            raise RuntimeError("Postgres store is not enabled")
+
+        phone = str(phone_number).strip()
+        amount = round(abs(float(delta)), 2)
+        signed_delta = round(float(delta), 2)
+        if not phone:
+            raise ValueError("invalid_phone")
+        if amount <= 0:
+            raise ValueError("invalid_amount")
+
+        now_iso = _utc_now_iso()
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO wallets(phone_number, main_balance, bonus_balance)
+                    VALUES (%s, 0, 0)
+                    ON CONFLICT(phone_number) DO NOTHING
+                    """,
+                    (phone,),
+                )
+                if signed_delta < 0:
+                    row = cur.execute(
+                        """
+                        UPDATE wallets
+                        SET main_balance = ROUND(main_balance + %s, 2)
+                        WHERE phone_number = %s
+                          AND main_balance + %s >= 0
+                        RETURNING main_balance
+                        """,
+                        (signed_delta, phone, signed_delta),
+                    ).fetchone()
+                    if not row:
+                        raise ValueError("insufficient_balance")
+                else:
+                    row = cur.execute(
+                        """
+                        UPDATE wallets
+                        SET main_balance = ROUND(main_balance + %s, 2)
+                        WHERE phone_number = %s
+                        RETURNING main_balance
+                        """,
+                        (signed_delta, phone),
+                    ).fetchone()
+
+                cur.execute(
+                    """
+                    INSERT INTO transactions(phone_number, type, amount, status, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (phone, tx_type, amount, status, now_iso),
+                )
+            conn.commit()
+        return float(row[0]) if row else 0.0
+
+    def transfer_wallet_balance(self, sender_phone: str, receiver_phone: str, amount: float) -> tuple[float, float]:
+        if not self.enabled():
+            raise RuntimeError("Postgres store is not enabled")
+
+        sender = str(sender_phone).strip()
+        receiver = str(receiver_phone).strip()
+        transfer_amount = round(float(amount), 2)
+        if not sender or not receiver or sender == receiver:
+            raise ValueError("invalid_transfer")
+        if transfer_amount <= 0:
+            raise ValueError("invalid_amount")
+
+        now_iso = _utc_now_iso()
+        lock_first, lock_second = sorted([sender, receiver])
+
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                for phone in (sender, receiver):
+                    cur.execute(
+                        """
+                        INSERT INTO wallets(phone_number, main_balance, bonus_balance)
+                        VALUES (%s, 0, 0)
+                        ON CONFLICT(phone_number) DO NOTHING
+                        """,
+                        (phone,),
+                    )
+                cur.execute(
+                    """
+                    SELECT phone_number
+                    FROM wallets
+                    WHERE phone_number IN (%s, %s)
+                    ORDER BY phone_number
+                    FOR UPDATE
+                    """,
+                    (lock_first, lock_second),
+                )
+
+                sender_row = cur.execute(
+                    """
+                    UPDATE wallets
+                    SET main_balance = ROUND(main_balance - %s, 2)
+                    WHERE phone_number = %s
+                      AND main_balance >= %s
+                    RETURNING main_balance
+                    """,
+                    (transfer_amount, sender, transfer_amount),
+                ).fetchone()
+                if not sender_row:
+                    raise ValueError("insufficient_balance")
+
+                receiver_row = cur.execute(
+                    """
+                    UPDATE wallets
+                    SET main_balance = ROUND(main_balance + %s, 2)
+                    WHERE phone_number = %s
+                    RETURNING main_balance
+                    """,
+                    (transfer_amount, receiver),
+                ).fetchone()
+
+                cur.execute(
+                    """
+                    INSERT INTO transactions(phone_number, type, amount, status, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (sender, "Transfer", transfer_amount, "Completed", now_iso),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO transactions(phone_number, type, amount, status, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (receiver, "Deposit", transfer_amount, "Completed", now_iso),
+                )
+            conn.commit()
+
+        sender_balance = float(sender_row[0]) if sender_row else 0.0
+        receiver_balance = float(receiver_row[0]) if receiver_row else 0.0
+        return sender_balance, receiver_balance
+
+    def update_latest_pending_withdraw(self, phone_number: str, amount: float, next_status: str) -> bool:
+        if not self.enabled():
+            raise RuntimeError("Postgres store is not enabled")
+
+        phone = str(phone_number).strip()
+        rounded_amount = round(float(amount), 2)
+        if not phone:
+            raise ValueError("invalid_phone")
+
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                row = cur.execute(
+                    """
+                    UPDATE transactions
+                    SET status = %s
+                    WHERE id = (
+                        SELECT id
+                        FROM transactions
+                        WHERE phone_number = %s
+                          AND type = 'Withdraw'
+                          AND status = 'Pending'
+                          AND amount = %s
+                        ORDER BY id DESC
+                        LIMIT 1
+                    )
+                    RETURNING id
+                    """,
+                    (next_status, phone, rounded_amount),
+                ).fetchone()
+            conn.commit()
+        return bool(row)
+
+    def refund_withdraw(self, phone_number: str, amount: float) -> float:
+        if not self.enabled():
+            raise RuntimeError("Postgres store is not enabled")
+
+        phone = str(phone_number).strip()
+        refund_amount = round(float(amount), 2)
+        if not phone:
+            raise ValueError("invalid_phone")
+        if refund_amount <= 0:
+            raise ValueError("invalid_amount")
+
+        now_iso = _utc_now_iso()
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO wallets(phone_number, main_balance, bonus_balance)
+                    VALUES (%s, 0, 0)
+                    ON CONFLICT(phone_number) DO NOTHING
+                    """,
+                    (phone,),
+                )
+                balance_row = cur.execute(
+                    """
+                    UPDATE wallets
+                    SET main_balance = ROUND(main_balance + %s, 2)
+                    WHERE phone_number = %s
+                    RETURNING main_balance
+                    """,
+                    (refund_amount, phone),
+                ).fetchone()
+                cur.execute(
+                    """
+                    UPDATE transactions
+                    SET status = 'Failed'
+                    WHERE id = (
+                        SELECT id
+                        FROM transactions
+                        WHERE phone_number = %s
+                          AND type = 'Withdraw'
+                          AND status = 'Pending'
+                          AND amount = %s
+                        ORDER BY id DESC
+                        LIMIT 1
+                    )
+                    """,
+                    (phone, refund_amount),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO transactions(phone_number, type, amount, status, created_at)
+                    VALUES (%s, 'Deposit', %s, 'Completed', %s)
+                    """,
+                    (phone, refund_amount, now_iso),
+                )
+            conn.commit()
+
+        return float(balance_row[0]) if balance_row else 0.0
+
     def persist_users(self, users: dict[str, Any]) -> None:
         if not users:
             return
@@ -599,9 +838,7 @@ class PostgresStateStore:
                         """
                         INSERT INTO wallets(phone_number, main_balance, bonus_balance)
                         VALUES (%s, %s, %s)
-                        ON CONFLICT(phone_number) DO UPDATE SET
-                            main_balance = EXCLUDED.main_balance,
-                            bonus_balance = EXCLUDED.bonus_balance
+                        ON CONFLICT(phone_number) DO NOTHING
                         """,
                         (
                             phone,
@@ -609,22 +846,6 @@ class PostgresStateStore:
                             round(float(wallet.get("bonus_balance", 0.0)), 2),
                         ),
                     )
-                    cur.execute("DELETE FROM transactions WHERE phone_number = %s", (phone,))
-                    for tx in list(user.get("history", [])):
-                        cur.execute(
-                            """
-                            INSERT INTO transactions(phone_number, type, amount, status, created_at)
-                            VALUES (%s, %s, %s, %s, %s)
-                            """,
-                            (
-                                phone,
-                                tx.get("type", "Deposit"),
-                                round(float(tx.get("amount", 0.0)), 2),
-                                tx.get("status", "Completed"),
-                                tx.get("created_at", ""),
-                            ),
-                        )
-                    cur.execute("DELETE FROM bet_history WHERE phone_number = %s", (phone,))
                     for bet in list(user.get("bet_history", [])):
                         cur.execute(
                             """
@@ -632,6 +853,17 @@ class PostgresStateStore:
                                 id, phone_number, stake, game_winning, winner_cards, your_cards, date, result, payout, called_numbers, preview_card
                             )
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT(id) DO UPDATE SET
+                                phone_number = EXCLUDED.phone_number,
+                                stake = EXCLUDED.stake,
+                                game_winning = EXCLUDED.game_winning,
+                                winner_cards = EXCLUDED.winner_cards,
+                                your_cards = EXCLUDED.your_cards,
+                                date = EXCLUDED.date,
+                                result = EXCLUDED.result,
+                                payout = EXCLUDED.payout,
+                                called_numbers = EXCLUDED.called_numbers,
+                                preview_card = EXCLUDED.preview_card
                             """,
                             (
                                 str(bet.get("id", "")),

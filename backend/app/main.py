@@ -1251,9 +1251,8 @@ def find_user_by_phone(phone_number: str) -> UserStore | None:
         return None
 
     if IS_PRODUCTION_ENV:
-        latest_user = load_latest_user_from_persisted_state(matched.phone_number)
+        latest_user = refresh_user_from_primary_store(matched.phone_number)
         if latest_user is not None:
-            USERS[latest_user.phone_number] = latest_user
             return latest_user
 
     return matched
@@ -2877,6 +2876,13 @@ def load_latest_user_from_persisted_state(phone_number: str) -> UserStore | None
         return None
 
 
+def refresh_user_from_primary_store(phone_number: str) -> UserStore | None:
+    latest_user = load_latest_user_from_persisted_state(phone_number)
+    if latest_user is not None:
+        USERS[latest_user.phone_number] = latest_user
+    return latest_user
+
+
 def get_current_user(authorization: str | None = Header(default=None)) -> UserStore:
     token = get_auth_token(authorization)
     record = normalize_session_record(SESSIONS.get(token))
@@ -2898,9 +2904,8 @@ def get_current_user(authorization: str | None = Header(default=None)) -> UserSt
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     if IS_PRODUCTION_ENV:
-        latest_user = load_latest_user_from_persisted_state(phone_number)
+        latest_user = refresh_user_from_primary_store(phone_number)
         if latest_user is not None:
-            USERS[phone_number] = latest_user
             user = latest_user
     return user
 
@@ -3291,8 +3296,14 @@ def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
             continue
 
         if not is_simulated_phone(claim.phone_number):
-            winner_user.wallet.main_balance = round(winner_user.wallet.main_balance + payout, 2)
-            record_transaction(winner_user, "Win", payout, "Completed")
+            if PG_STORE.enabled():
+                PG_STORE.adjust_wallet_and_record_transaction(claim.phone_number, payout, "Win", "Completed")
+                refreshed_winner = refresh_user_from_primary_store(claim.phone_number)
+                if refreshed_winner is not None:
+                    winner_user = refreshed_winner
+            else:
+                winner_user.wallet.main_balance = round(winner_user.wallet.main_balance + payout, 2)
+                record_transaction(winner_user, "Win", payout, "Completed")
             changed_user_phones.add(claim.phone_number)
         winners.append(
             WinnerEntry(
@@ -3991,10 +4002,15 @@ def mark_paid_withdraw_request(
             detail="Request owner account is missing. Cannot mark this request as paid.",
         )
 
-    update_latest_pending_withdraw_status(target_user, ticket.amount, "Completed")
-
     try:
-        persist_users([target_user.phone_number])
+        if PG_STORE.enabled():
+            PG_STORE.update_latest_pending_withdraw(target_user.phone_number, ticket.amount, "Completed")
+            refreshed_target = refresh_user_from_primary_store(target_user.phone_number)
+            if refreshed_target is not None:
+                target_user = refreshed_target
+        else:
+            update_latest_pending_withdraw_status(target_user, ticket.amount, "Completed")
+            persist_users([target_user.phone_number])
         persist_withdraw_tickets()
     except Exception as exc:
         print(f"Failed to persist mark-paid update for ticket {ticket.id}: {exc}")
@@ -4034,10 +4050,16 @@ def reject_withdraw_request(ticket_id: str, user: UserStore = Depends(get_curren
 
     target_user = find_user_by_phone(ticket.phone_number)
     if target_user:
-        target_user.wallet.main_balance = round(target_user.wallet.main_balance + float(ticket.amount), 2)
-        update_latest_pending_withdraw_status(target_user, ticket.amount, "Failed")
-        record_transaction(target_user, "Deposit", ticket.amount, "Completed")
-        persist_users([target_user.phone_number])
+        if PG_STORE.enabled():
+            PG_STORE.refund_withdraw(target_user.phone_number, float(ticket.amount))
+            refreshed_target = refresh_user_from_primary_store(target_user.phone_number)
+            if refreshed_target is not None:
+                target_user = refreshed_target
+        else:
+            target_user.wallet.main_balance = round(target_user.wallet.main_balance + float(ticket.amount), 2)
+            update_latest_pending_withdraw_status(target_user, ticket.amount, "Failed")
+            record_transaction(target_user, "Deposit", ticket.amount, "Completed")
+            persist_users([target_user.phone_number])
     persist_withdraw_tickets()
     append_audit_event(
         "withdraw_rejected",
@@ -4086,9 +4108,15 @@ def submit_deposit(payload: DepositRequest, user: UserStore = Depends(get_curren
     reserve_deposit_receipt(tx_number, user.phone_number, links)
 
     amount = round(float(payload.amount), 2)
-    user.wallet.main_balance = round(user.wallet.main_balance + amount, 2)
-    record_transaction(user, "Deposit", amount, "Completed")
-    persist_users([user.phone_number])
+    if PG_STORE.enabled():
+        PG_STORE.adjust_wallet_and_record_transaction(user.phone_number, amount, "Deposit", "Completed")
+        refreshed_user = refresh_user_from_primary_store(user.phone_number)
+        if refreshed_user is not None:
+            user = refreshed_user
+    else:
+        user.wallet.main_balance = round(user.wallet.main_balance + amount, 2)
+        record_transaction(user, "Deposit", amount, "Completed")
+        persist_users([user.phone_number])
     append_audit_event(
         "deposit_confirmed",
         phone_number=user.phone_number,
@@ -4121,14 +4149,28 @@ def transfer_balance(payload: TransferRequest, user: UserStore = Depends(get_cur
     if not target_user:
         raise HTTPException(status_code=404, detail="Receiver account not found")
     amount = round(float(payload.amount), 2)
-    if user.wallet.main_balance < amount:
-        raise HTTPException(status_code=400, detail="Insufficient balance")
+    if PG_STORE.enabled():
+        try:
+            PG_STORE.transfer_wallet_balance(user.phone_number, target_user.phone_number, amount)
+        except ValueError as exc:
+            if str(exc) == "insufficient_balance":
+                raise HTTPException(status_code=400, detail="Insufficient balance")
+            raise HTTPException(status_code=400, detail="Transfer request is invalid.") from None
+        refreshed_sender = refresh_user_from_primary_store(user.phone_number)
+        if refreshed_sender is not None:
+            user = refreshed_sender
+        refreshed_target = refresh_user_from_primary_store(target_user.phone_number)
+        if refreshed_target is not None:
+            target_user = refreshed_target
+    else:
+        if user.wallet.main_balance < amount:
+            raise HTTPException(status_code=400, detail="Insufficient balance")
 
-    user.wallet.main_balance = round(user.wallet.main_balance - amount, 2)
-    target_user.wallet.main_balance = round(target_user.wallet.main_balance + amount, 2)
-    record_transaction(user, "Transfer", amount, "Completed")
-    record_transaction(target_user, "Deposit", amount, "Completed")
-    persist_users([user.phone_number, target_user.phone_number])
+        user.wallet.main_balance = round(user.wallet.main_balance - amount, 2)
+        target_user.wallet.main_balance = round(target_user.wallet.main_balance + amount, 2)
+        record_transaction(user, "Transfer", amount, "Completed")
+        record_transaction(target_user, "Deposit", amount, "Completed")
+        persist_users([user.phone_number, target_user.phone_number])
     return {
         "message": "Transfer completed successfully.",
         "wallet": user.wallet.model_dump(),
@@ -4140,11 +4182,21 @@ def withdraw_balance(payload: WithdrawRequest, user: UserStore = Depends(get_cur
     amount = round(float(payload.amount), 2)
     if amount < 100:
         raise HTTPException(status_code=400, detail="Minimum withdraw amount is 100 ETB")
-    if user.wallet.main_balance < amount:
-        raise HTTPException(status_code=400, detail="Insufficient balance")
-
-    user.wallet.main_balance = round(user.wallet.main_balance - amount, 2)
-    record_transaction(user, "Withdraw", amount, "Pending")
+    if PG_STORE.enabled():
+        try:
+            PG_STORE.adjust_wallet_and_record_transaction(user.phone_number, -amount, "Withdraw", "Pending")
+        except ValueError as exc:
+            if str(exc) == "insufficient_balance":
+                raise HTTPException(status_code=400, detail="Insufficient balance")
+            raise HTTPException(status_code=400, detail="Withdraw request is invalid.") from None
+        refreshed_user = refresh_user_from_primary_store(user.phone_number)
+        if refreshed_user is not None:
+            user = refreshed_user
+    else:
+        if user.wallet.main_balance < amount:
+            raise HTTPException(status_code=400, detail="Insufficient balance")
+        user.wallet.main_balance = round(user.wallet.main_balance - amount, 2)
+        record_transaction(user, "Withdraw", amount, "Pending")
     ticket = WithdrawTicket(
         id=secrets.token_hex(8),
         phone_number=user.phone_number,
@@ -4163,7 +4215,8 @@ def withdraw_balance(payload: WithdrawRequest, user: UserStore = Depends(get_cur
         admin_note=None,
     )
     WITHDRAW_TICKETS.insert(0, ticket)
-    persist_users([user.phone_number])
+    if not PG_STORE.enabled():
+        persist_users([user.phone_number])
     persist_withdraw_tickets()
     append_audit_event(
         "withdraw_requested",
@@ -4200,21 +4253,32 @@ def settle_casino_round(user: UserStore, game: CasinoGameItem, stake_value: floa
             status_code=400,
             detail=f"Stake for {game.title} must be between ETB {game.min_bet:.2f} and ETB {game.max_bet:.2f}.",
         )
-    if user.wallet.main_balance < stake:
-        raise HTTPException(status_code=400, detail="Insufficient balance")
-
-    user.wallet.main_balance = round(user.wallet.main_balance - stake, 2)
-    record_transaction(user, "Bet", stake, "Completed")
-
     multiplier = round(roll_casino_multiplier(game.id), 4)
     payout = round(stake * multiplier, 2)
-    if payout > 0:
-        user.wallet.main_balance = round(user.wallet.main_balance + payout, 2)
-        record_transaction(user, "Win", payout, "Completed")
+    if PG_STORE.enabled():
+        try:
+            PG_STORE.adjust_wallet_and_record_transaction(user.phone_number, -stake, "Bet", "Completed")
+        except ValueError as exc:
+            if str(exc) == "insufficient_balance":
+                raise HTTPException(status_code=400, detail="Insufficient balance")
+            raise HTTPException(status_code=400, detail="Stake could not be processed.") from None
+        if payout > 0:
+            PG_STORE.adjust_wallet_and_record_transaction(user.phone_number, payout, "Win", "Completed")
+        refreshed_user = refresh_user_from_primary_store(user.phone_number)
+        if refreshed_user is not None:
+            user = refreshed_user
+    else:
+        if user.wallet.main_balance < stake:
+            raise HTTPException(status_code=400, detail="Insufficient balance")
+        user.wallet.main_balance = round(user.wallet.main_balance - stake, 2)
+        record_transaction(user, "Bet", stake, "Completed")
+        if payout > 0:
+            user.wallet.main_balance = round(user.wallet.main_balance + payout, 2)
+            record_transaction(user, "Win", payout, "Completed")
+        persist_users([user.phone_number])
 
     net = round(payout - stake, 2)
     outcome: Literal["win", "lose"] = "win" if payout > 0 else "lose"
-    persist_users([user.phone_number])
 
     direction = "won" if net >= 0 else "lost"
     return {
@@ -4381,15 +4445,29 @@ async def casino_webhook(
         return {"status": "ignored", "reason": "amount_missing"}
 
     normalized_amount = round(amount, 2)
-    if normalized_amount > 0:
-        user.wallet.main_balance = round(user.wallet.main_balance + normalized_amount, 2)
-        record_transaction(user, "Win", normalized_amount, "Completed")
-    elif normalized_amount < 0:
-        debit = abs(normalized_amount)
-        user.wallet.main_balance = round(max(0.0, user.wallet.main_balance - debit), 2)
-        record_transaction(user, "Bet", debit, "Completed")
+    if PG_STORE.enabled():
+        if normalized_amount > 0:
+            PG_STORE.adjust_wallet_and_record_transaction(user.phone_number, normalized_amount, "Win", "Completed")
+        elif normalized_amount < 0:
+            debit = abs(normalized_amount)
+            available = round(float(user.wallet.main_balance), 2)
+            applied_debit = min(debit, available)
+            if applied_debit > 0:
+                PG_STORE.adjust_wallet_and_record_transaction(user.phone_number, -applied_debit, "Bet", "Completed")
+            normalized_amount = -applied_debit
+        refreshed_user = refresh_user_from_primary_store(user.phone_number)
+        if refreshed_user is not None:
+            user = refreshed_user
+    else:
+        if normalized_amount > 0:
+            user.wallet.main_balance = round(user.wallet.main_balance + normalized_amount, 2)
+            record_transaction(user, "Win", normalized_amount, "Completed")
+        elif normalized_amount < 0:
+            debit = abs(normalized_amount)
+            user.wallet.main_balance = round(max(0.0, user.wallet.main_balance - debit), 2)
+            record_transaction(user, "Bet", debit, "Completed")
+        persist_users([user.phone_number])
 
-    persist_users([user.phone_number])
     prune_expired_casino_launches()
     return {
         "status": "ok",
@@ -4471,7 +4549,7 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
         raise HTTPException(status_code=400, detail=f"Maximum {MAX_CARDS_PER_USER} cards per user in one game queue")
 
     stake_amount = round(float(stake.stake), 2)
-    if user.wallet.main_balance < stake_amount:
+    if not PG_STORE.enabled() and user.wallet.main_balance < stake_amount:
         raise HTTPException(status_code=400, detail="Insufficient balance")
 
     previous_hold = get_user_held_cartella_from_map(held_map, user.phone_number)
@@ -4479,13 +4557,25 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
         held_map.pop(previous_hold, None)
         held_updated_at.pop(previous_hold, None)
 
+    if PG_STORE.enabled():
+        try:
+            PG_STORE.adjust_wallet_and_record_transaction(user.phone_number, -stake_amount, "Bet", "Completed")
+        except ValueError as exc:
+            if str(exc) == "insufficient_balance":
+                raise HTTPException(status_code=400, detail="Insufficient balance")
+            raise HTTPException(status_code=400, detail="Could not process the stake charge.") from None
+        refreshed_user = refresh_user_from_primary_store(user.phone_number)
+        if refreshed_user is not None:
+            user = refreshed_user
+    else:
+        user.wallet.main_balance = round(user.wallet.main_balance - stake_amount, 2)
+        record_transaction(user, "Bet", stake_amount, "Completed")
+        persist_users([user.phone_number])
+
     taken_map[payload.cartella_no] = user.phone_number
     held_map.pop(payload.cartella_no, None)
     held_updated_at.pop(payload.cartella_no, None)
-    user.wallet.main_balance = round(user.wallet.main_balance - stake_amount, 2)
-    record_transaction(user, "Bet", stake_amount, "Completed")
     room.marked_by_user_card[mark_key(user.phone_number, payload.cartella_no)] = []
-    persist_users([user.phone_number])
     persist_rooms()
 
     card = create_bingo_card(payload.cartella_no)
