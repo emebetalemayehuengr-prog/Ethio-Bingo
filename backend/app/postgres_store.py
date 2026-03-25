@@ -15,6 +15,44 @@ except Exception:  # pragma: no cover - optional dependency unless DATABASE_URL 
     Jsonb = None
 
 
+def _split_sql_statements(sql: str) -> list[str]:
+    statements: list[str] = []
+    current: list[str] = []
+    in_single = False
+    in_double = False
+    escape = False
+
+    for ch in sql:
+        if escape:
+            current.append(ch)
+            escape = False
+            continue
+        if ch == "\\":
+            current.append(ch)
+            escape = True
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+            current.append(ch)
+            continue
+        if ch == '"' and not in_single:
+            in_double = not in_double
+            current.append(ch)
+            continue
+        if ch == ";" and not in_single and not in_double:
+            statement = "".join(current).strip()
+            if statement:
+                statements.append(statement)
+            current = []
+            continue
+        current.append(ch)
+
+    tail = "".join(current).strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
 class PostgresStateStore:
     def __init__(self, dsn: str) -> None:
         self.dsn = dsn.strip()
@@ -25,10 +63,9 @@ class PostgresStateStore:
     def ensure_schema(self) -> None:
         if not self.enabled():
             return
-        with psycopg.connect(self.dsn) as conn:
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
+                schema_sql = """
                     CREATE TABLE IF NOT EXISTS users (
                         phone_number TEXT PRIMARY KEY,
                         user_name TEXT NOT NULL,
@@ -179,8 +216,9 @@ class PostgresStateStore:
                         actor_phone TEXT NULL,
                         note TEXT NULL
                     );
-                    """
-                )
+                """
+                for stmt in _split_sql_statements(schema_sql):
+                    cur.execute(stmt)
                 cur.execute("ALTER TABLE withdraw_requests ADD COLUMN IF NOT EXISTS processing_at TEXT NULL")
                 cur.execute("ALTER TABLE withdraw_requests ADD COLUMN IF NOT EXISTS processing_by TEXT NULL")
                 cur.execute("ALTER TABLE withdraw_requests ADD COLUMN IF NOT EXISTS paid_at TEXT NULL")
@@ -194,7 +232,7 @@ class PostgresStateStore:
     def is_empty(self) -> bool:
         if not self.enabled():
             return True
-        with psycopg.connect(self.dsn, row_factory=dict_row) as conn:
+        with psycopg.connect(self.dsn, row_factory=dict_row, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 row = cur.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
                 return int(row["cnt"]) == 0 if row else True
@@ -223,7 +261,7 @@ class PostgresStateStore:
             "audit_events": [],
         }
 
-        with psycopg.connect(self.dsn, row_factory=dict_row) as conn:
+        with psycopg.connect(self.dsn, row_factory=dict_row, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 users = cur.execute("SELECT * FROM users ORDER BY phone_number ASC").fetchall()
                 for row in users:
@@ -460,7 +498,7 @@ class PostgresStateStore:
     def persist_users(self, users: dict[str, Any]) -> None:
         if not users:
             return
-        with psycopg.connect(self.dsn) as conn:
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 for phone, user in users.items():
                     cur.execute(
@@ -541,7 +579,7 @@ class PostgresStateStore:
             conn.commit()
 
     def persist_sessions(self, sessions: dict[str, dict[str, str]]) -> None:
-        with psycopg.connect(self.dsn) as conn:
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM sessions")
                 for token, record in sessions.items():
@@ -557,7 +595,7 @@ class PostgresStateStore:
             conn.commit()
 
     def persist_rooms(self, rooms: dict[str, Any]) -> None:
-        with psycopg.connect(self.dsn) as conn:
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM room_winners")
                 cur.execute("DELETE FROM room_claims")
@@ -665,7 +703,7 @@ class PostgresStateStore:
             conn.commit()
 
     def persist_receipts(self, used_deposit_tx: dict[str, str], used_receipt_links: dict[str, str]) -> None:
-        with psycopg.connect(self.dsn) as conn:
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM receipt_links")
                 cur.execute("DELETE FROM receipt_reservations")
@@ -682,7 +720,7 @@ class PostgresStateStore:
             conn.commit()
 
     def persist_withdraw_tickets(self, tickets: list[dict[str, Any]]) -> None:
-        with psycopg.connect(self.dsn) as conn:
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM withdraw_requests")
                 for ticket in tickets:
@@ -718,7 +756,7 @@ class PostgresStateStore:
             conn.commit()
 
     def persist_deposit_methods(self, methods: list[dict[str, Any]]) -> None:
-        with psycopg.connect(self.dsn) as conn:
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM deposit_accounts")
                 cur.execute("DELETE FROM deposit_methods")
@@ -752,7 +790,7 @@ class PostgresStateStore:
             conn.commit()
 
     def persist_audit_events(self, events: list[dict[str, Any]]) -> None:
-        with psycopg.connect(self.dsn) as conn:
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM audit_events")
                 for event in events:

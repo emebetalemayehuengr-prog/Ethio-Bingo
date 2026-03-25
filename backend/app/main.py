@@ -77,7 +77,7 @@ except Exception:  # pragma: no cover - optional in constrained environments
 if "DATABASE_URL" in os.environ and not os.environ.get("DATABASE_URL", "").strip():
     os.environ.pop("DATABASE_URL", None)
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 
 def env_flag(name: str, default: bool = False) -> bool:
