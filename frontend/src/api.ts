@@ -20,6 +20,7 @@ const inferredApiBase = `${window.location.protocol}//${window.location.hostname
 const API_BASE = envApiBase?.trim() ? envApiBase : inferredApiBase;
 const TOKEN_KEY = "40bingo_token";
 const LEGACY_TOKEN_KEY = "ethio_bingo_token";
+const REQUEST_TIMEOUT_MS = 12000;
 
 const tokenFromStorage =
   window.localStorage.getItem(TOKEN_KEY) ?? window.localStorage.getItem(LEGACY_TOKEN_KEY) ?? "";
@@ -58,14 +59,28 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     headers.Authorization = `Bearer ${authToken}`;
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-  });
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error("Request timed out. Check your connection.");
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     if (response.status === 401) {
       clearAuthToken();
+      window.dispatchEvent(new CustomEvent("auth:expired"));
     }
     const errorBody = await response.json().catch(() => ({}));
     let detail = "Request failed";
@@ -268,3 +283,4 @@ export function claimBingo(roomId: string, cartellaNo?: number) {
     body: JSON.stringify({ room_id: roomId, cartella_no: cartellaNo }),
   });
 }
+

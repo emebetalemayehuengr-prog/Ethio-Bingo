@@ -727,6 +727,38 @@ export default function App() {
   }, [authPhone, authPassword, rememberPassword]);
 
   useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 4500);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => {
+    const onAuthExpired = () => {
+      clearAuthToken();
+      setProfile(null);
+      setDashboard(null);
+      setRoom(null);
+      setCards([]);
+      setSelectedCardNo(null);
+      setCard(null);
+      setMarkedNumbers([]);
+      setService("home");
+      setDrawerOpen(false);
+      setCartellaOpen(false);
+      setDepositGuideOpen(false);
+      setSelectedBet(null);
+      setAuthNotice("");
+      setAuthError("");
+      setError("");
+      setLoading(false);
+      setWorking(false);
+      setNotice("Session expired. Please sign in again.");
+    };
+    window.addEventListener("auth:expired", onAuthExpired);
+    return () => window.removeEventListener("auth:expired", onAuthExpired);
+  }, []);
+
+  useEffect(() => {
     const detectTapMode = () => {
       const coarsePointer = window.matchMedia?.("(pointer: coarse)")?.matches ?? false;
       const noHover = window.matchMedia?.("(hover: none)")?.matches ?? false;
@@ -3021,4 +3053,5 @@ export default function App() {
     </div>
   );
 }
+
 
