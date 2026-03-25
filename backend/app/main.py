@@ -2856,7 +2856,7 @@ def get_auth_token(authorization: str | None) -> str:
 def load_latest_user_from_persisted_state(phone_number: str) -> UserStore | None:
     if PG_STORE.enabled():
         try:
-            raw_user = PG_STORE.load_user(phone_number)
+            raw_user = PG_STORE.load_user(phone_number, include_history=False, include_bet_history=False)
             if raw_user is None:
                 return None
             return UserStore.model_validate(raw_user)
@@ -4089,11 +4089,17 @@ def reject_withdraw_request(ticket_id: str, user: UserStore = Depends(get_curren
 
 @app.get("/api/wallet/history")
 def wallet_history(user: UserStore = Depends(get_current_user)) -> dict:
+    if PG_STORE.enabled():
+        items = PG_STORE.load_user_history(user.phone_number, limit=50)
+        return {"items": items}
     return {"items": [entry.model_dump() for entry in user.history[:50]]}
 
 
 @app.get("/api/game/bet-history")
 def bet_history(user: UserStore = Depends(get_current_user)) -> dict:
+    if PG_STORE.enabled():
+        items = PG_STORE.load_user_bet_history(user.phone_number, limit=100)
+        return {"items": items}
     return {"items": [entry.model_dump() for entry in user.bet_history[:100]]}
 
 

@@ -500,7 +500,12 @@ class PostgresStateStore:
 
         return state
 
-    def load_user(self, phone_number: str) -> dict[str, Any] | None:
+    def load_user(
+        self,
+        phone_number: str,
+        include_history: bool = True,
+        include_bet_history: bool = True,
+    ) -> dict[str, Any] | None:
         if not self.enabled():
             return None
 
@@ -517,19 +522,23 @@ class PostgresStateStore:
                     "SELECT main_balance, bonus_balance FROM wallets WHERE phone_number = %s",
                     (phone,),
                 ).fetchone()
-                tx_rows = cur.execute(
-                    "SELECT type, amount, status, created_at FROM transactions WHERE phone_number = %s ORDER BY id DESC",
-                    (phone,),
-                ).fetchall()
-                bet_rows = cur.execute(
-                    """
-                    SELECT id, stake, game_winning, winner_cards, your_cards, date, result, payout, called_numbers, preview_card
-                    FROM bet_history
-                    WHERE phone_number = %s
-                    ORDER BY date DESC
-                    """,
-                    (phone,),
-                ).fetchall()
+                tx_rows = []
+                if include_history:
+                    tx_rows = cur.execute(
+                        "SELECT type, amount, status, created_at FROM transactions WHERE phone_number = %s ORDER BY id DESC",
+                        (phone,),
+                    ).fetchall()
+                bet_rows = []
+                if include_bet_history:
+                    bet_rows = cur.execute(
+                        """
+                        SELECT id, stake, game_winning, winner_cards, your_cards, date, result, payout, called_numbers, preview_card
+                        FROM bet_history
+                        WHERE phone_number = %s
+                        ORDER BY date DESC
+                        """,
+                        (phone,),
+                    ).fetchall()
 
         return {
             "user_name": str(row["user_name"]),
@@ -570,6 +579,66 @@ class PostgresStateStore:
             ],
             "joined_rooms": {},
         }
+
+    def load_user_history(self, phone_number: str, limit: int = 50) -> list[dict[str, Any]]:
+        if not self.enabled():
+            return []
+
+        phone = str(phone_number).strip()
+        if not phone:
+            return []
+
+        with psycopg.connect(self.dsn, row_factory=dict_row, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                rows = cur.execute(
+                    "SELECT type, amount, status, created_at FROM transactions WHERE phone_number = %s ORDER BY id DESC LIMIT %s",
+                    (phone, int(limit)),
+                ).fetchall()
+        return [
+            {
+                "type": str(tx["type"]),
+                "amount": float(tx["amount"]),
+                "status": str(tx["status"]),
+                "created_at": str(tx["created_at"]),
+            }
+            for tx in rows
+        ]
+
+    def load_user_bet_history(self, phone_number: str, limit: int = 100) -> list[dict[str, Any]]:
+        if not self.enabled():
+            return []
+
+        phone = str(phone_number).strip()
+        if not phone:
+            return []
+
+        with psycopg.connect(self.dsn, row_factory=dict_row, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                rows = cur.execute(
+                    """
+                    SELECT id, stake, game_winning, winner_cards, your_cards, date, result, payout, called_numbers, preview_card
+                    FROM bet_history
+                    WHERE phone_number = %s
+                    ORDER BY date DESC
+                    LIMIT %s
+                    """,
+                    (phone, int(limit)),
+                ).fetchall()
+        return [
+            {
+                "id": str(bet["id"]),
+                "stake": int(bet["stake"]),
+                "game_winning": float(bet["game_winning"]),
+                "winner_cards": list(bet["winner_cards"] or []),
+                "your_cards": list(bet["your_cards"] or []),
+                "date": str(bet["date"]),
+                "result": str(bet["result"]),
+                "payout": float(bet["payout"]),
+                "called_numbers": list(bet["called_numbers"] or []),
+                "preview_card": bet["preview_card"],
+            }
+            for bet in rows
+        ]
 
     def load_session(self, token: str) -> dict[str, str] | None:
         if not self.enabled():

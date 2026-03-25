@@ -5,6 +5,7 @@ import traceback
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import quote
+import re
 
 # Startup-safe defaults for HahuCloud
 os.environ.setdefault("APP_ENV", "production")
@@ -30,6 +31,27 @@ def _headers_from_environ(environ):
     if environ.get("CONTENT_LENGTH"):
         headers.append((b"content-length", environ["CONTENT_LENGTH"].encode("latin-1")))
     return headers
+
+
+def _parse_origin_list(raw: str) -> list[str]:
+    if not raw:
+        return []
+    return [item.strip().strip("\"'") for item in re.split(r"[,\n;]+", raw) if item.strip()]
+
+
+def _cors_headers_for_environ(environ):
+    origin = environ.get("HTTP_ORIGIN")
+    if not origin:
+        return []
+    allowed = _parse_origin_list(os.getenv("CORS_ALLOWED_ORIGINS", ""))
+    origin_regex = os.getenv("CORS_ALLOWED_ORIGIN_REGEX", "").strip()
+    if origin in allowed or (origin_regex and re.match(origin_regex, origin)):
+        return [
+            ("Access-Control-Allow-Origin", origin),
+            ("Access-Control-Allow-Credentials", "true"),
+            ("Vary", "Origin"),
+        ]
+    return []
 
 
 async def _run_asgi(scope, body):
@@ -83,6 +105,8 @@ def application(environ, start_response):
         status_code, asgi_headers, response_body = asyncio.run(_run_asgi(scope, body))
         reason = HTTPStatus(status_code).phrase if status_code in HTTPStatus._value2member_map_ else "OK"
         headers = [(k.decode("latin-1"), v.decode("latin-1")) for k, v in asgi_headers]
+        if not any(k.lower() == "access-control-allow-origin" for k, _ in headers):
+            headers.extend(_cors_headers_for_environ(environ))
         if not any(k.lower() == "content-length" for k, _ in headers):
             headers.append(("Content-Length", str(len(response_body))))
 
@@ -91,8 +115,10 @@ def application(environ, start_response):
 
     except Exception:
         err = traceback.format_exc().encode("utf-8", "replace")
-        start_response(
-            "500 Internal Server Error",
-            [("Content-Type", "text/plain; charset=utf-8"), ("Content-Length", str(len(err)))],
-        )
+        headers = [
+            ("Content-Type", "text/plain; charset=utf-8"),
+            ("Content-Length", str(len(err))),
+        ]
+        headers.extend(_cors_headers_for_environ(environ))
+        start_response("500 Internal Server Error", headers)
         return [err]
