@@ -990,8 +990,120 @@ class PostgresStateStore:
                             record.get("created_at"),
                             record.get("expires_at"),
                         ),
-                    )
+                )
             conn.commit()
+
+    def _persist_room(
+        self,
+        cur,
+        stake_id: str,
+        room: dict[str, Any],
+        *,
+        clear_existing: bool,
+    ) -> None:
+        if clear_existing:
+            cur.execute("DELETE FROM room_winners WHERE stake_id = %s", (stake_id,))
+            cur.execute("DELETE FROM room_claims WHERE stake_id = %s", (stake_id,))
+            cur.execute("DELETE FROM room_marks WHERE stake_id = %s", (stake_id,))
+            cur.execute("DELETE FROM room_cards WHERE stake_id = %s", (stake_id,))
+            cur.execute("DELETE FROM rooms WHERE stake_id = %s", (stake_id,))
+
+        cur.execute(
+            """
+            INSERT INTO rooms(
+                stake_id, room_id, stake, card_price, players_seed, started_at, called_sequence, ended_at,
+                winner_phone, winner_cartella, winner_payout, house_commission, claim_window_ends_at,
+                claim_window_reference_time, result_until
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                stake_id,
+                room.get("id", f"room-{stake_id}"),
+                int(room.get("stake", 0)),
+                int(room.get("card_price", 0)),
+                int(room.get("players_seed", 0)),
+                room.get("started_at"),
+                Jsonb(list(room.get("called_sequence", []))),
+                room.get("ended_at"),
+                room.get("winner_phone"),
+                room.get("winner_cartella"),
+                round(float(room.get("winner_payout", 0.0)), 2) if room.get("winner_payout") is not None else None,
+                round(float(room.get("house_commission", 0.0)), 2) if room.get("house_commission") is not None else None,
+                room.get("claim_window_ends_at"),
+                room.get("claim_window_reference_time"),
+                room.get("result_until"),
+            ),
+        )
+
+        def insert_map(queue: str, owner_map: dict[Any, Any], hold_map: dict[Any, Any] | None = None) -> None:
+            for cartella_raw, owner in owner_map.items():
+                cartella_no = int(cartella_raw)
+                held_updated_at = None
+                if hold_map is not None:
+                    held_updated_at = hold_map.get(cartella_raw)
+                    if held_updated_at is None:
+                        held_updated_at = hold_map.get(str(cartella_raw))
+                cur.execute(
+                    """
+                    INSERT INTO room_cards(stake_id, queue, cartella_no, phone_number, held_updated_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (stake_id, queue, cartella_no, owner, held_updated_at),
+                )
+
+        insert_map("current_paid", dict(room.get("taken_cartellas", {})))
+        insert_map("current_held", dict(room.get("held_cartellas", {})), dict(room.get("held_updated_at", {})))
+        insert_map("next_paid", dict(room.get("next_taken_cartellas", {})))
+        insert_map("next_held", dict(room.get("next_held_cartellas", {})), dict(room.get("next_held_updated_at", {})))
+
+        for key, marks in dict(room.get("marked_by_user_card", {})).items():
+            parts = str(key).split(":", maxsplit=1)
+            if len(parts) != 2:
+                continue
+            phone_number, cartella_raw = parts
+            try:
+                cartella_no = int(cartella_raw)
+            except Exception:
+                continue
+            cur.execute(
+                """
+                INSERT INTO room_marks(stake_id, phone_number, cartella_no, marks)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (stake_id, phone_number, cartella_no, Jsonb(list(marks))),
+            )
+
+        for claim in list(room.get("pending_claims", [])):
+            cur.execute(
+                """
+                INSERT INTO room_claims(stake_id, phone_number, cartella_no, claimed_at)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    stake_id,
+                    claim.get("phone_number"),
+                    int(claim.get("cartella_no", 0)),
+                    claim.get("claimed_at"),
+                ),
+            )
+
+        for idx, winner in enumerate(list(room.get("winners", []))):
+            cur.execute(
+                """
+                INSERT INTO room_winners(stake_id, phone_number, user_name, cartella_no, payout, card, position)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    stake_id,
+                    winner.get("phone_number"),
+                    winner.get("user_name"),
+                    int(winner.get("cartella_no", 0)),
+                    round(float(winner.get("payout", 0.0)), 2),
+                    Jsonb(winner.get("card", {})),
+                    idx,
+                ),
+            )
 
     def persist_rooms(self, rooms: dict[str, Any]) -> None:
         with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
@@ -1003,102 +1115,13 @@ class PostgresStateStore:
                 cur.execute("DELETE FROM rooms")
 
                 for stake_id, room in rooms.items():
-                    cur.execute(
-                        """
-                        INSERT INTO rooms(
-                            stake_id, room_id, stake, card_price, players_seed, started_at, called_sequence, ended_at,
-                            winner_phone, winner_cartella, winner_payout, house_commission, claim_window_ends_at,
-                            claim_window_reference_time, result_until
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            stake_id,
-                            room.get("id", f"room-{stake_id}"),
-                            int(room.get("stake", 0)),
-                            int(room.get("card_price", 0)),
-                            int(room.get("players_seed", 0)),
-                            room.get("started_at"),
-                            Jsonb(list(room.get("called_sequence", []))),
-                            room.get("ended_at"),
-                            room.get("winner_phone"),
-                            room.get("winner_cartella"),
-                            round(float(room.get("winner_payout", 0.0)), 2) if room.get("winner_payout") is not None else None,
-                            round(float(room.get("house_commission", 0.0)), 2) if room.get("house_commission") is not None else None,
-                            room.get("claim_window_ends_at"),
-                            room.get("claim_window_reference_time"),
-                            room.get("result_until"),
-                        ),
-                    )
+                    self._persist_room(cur, stake_id, room, clear_existing=False)
+            conn.commit()
 
-                    def insert_map(queue: str, owner_map: dict[Any, Any], hold_map: dict[Any, Any] | None = None) -> None:
-                        for cartella_raw, owner in owner_map.items():
-                            cartella_no = int(cartella_raw)
-                            held_updated_at = None
-                            if hold_map is not None:
-                                held_updated_at = hold_map.get(cartella_raw)
-                                if held_updated_at is None:
-                                    held_updated_at = hold_map.get(str(cartella_raw))
-                            cur.execute(
-                                """
-                                INSERT INTO room_cards(stake_id, queue, cartella_no, phone_number, held_updated_at)
-                                VALUES (%s, %s, %s, %s, %s)
-                                """,
-                                (stake_id, queue, cartella_no, owner, held_updated_at),
-                            )
-
-                    insert_map("current_paid", dict(room.get("taken_cartellas", {})))
-                    insert_map("current_held", dict(room.get("held_cartellas", {})), dict(room.get("held_updated_at", {})))
-                    insert_map("next_paid", dict(room.get("next_taken_cartellas", {})))
-                    insert_map("next_held", dict(room.get("next_held_cartellas", {})), dict(room.get("next_held_updated_at", {})))
-
-                    for key, marks in dict(room.get("marked_by_user_card", {})).items():
-                        parts = str(key).split(":", maxsplit=1)
-                        if len(parts) != 2:
-                            continue
-                        phone_number, cartella_raw = parts
-                        try:
-                            cartella_no = int(cartella_raw)
-                        except Exception:
-                            continue
-                        cur.execute(
-                            """
-                            INSERT INTO room_marks(stake_id, phone_number, cartella_no, marks)
-                            VALUES (%s, %s, %s, %s)
-                            """,
-                            (stake_id, phone_number, cartella_no, Jsonb(list(marks))),
-                        )
-
-                    for claim in list(room.get("pending_claims", [])):
-                        cur.execute(
-                            """
-                            INSERT INTO room_claims(stake_id, phone_number, cartella_no, claimed_at)
-                            VALUES (%s, %s, %s, %s)
-                            """,
-                            (
-                                stake_id,
-                                claim.get("phone_number"),
-                                int(claim.get("cartella_no", 0)),
-                                claim.get("claimed_at"),
-                            ),
-                        )
-
-                    for idx, winner in enumerate(list(room.get("winners", []))):
-                        cur.execute(
-                            """
-                            INSERT INTO room_winners(stake_id, phone_number, user_name, cartella_no, payout, card, position)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            """,
-                            (
-                                stake_id,
-                                winner.get("phone_number"),
-                                winner.get("user_name"),
-                                int(winner.get("cartella_no", 0)),
-                                round(float(winner.get("payout", 0.0)), 2),
-                                Jsonb(winner.get("card", {})),
-                                idx,
-                            ),
-                        )
+    def persist_room(self, stake_id: str, room: dict[str, Any]) -> None:
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                self._persist_room(cur, stake_id, room, clear_existing=True)
             conn.commit()
 
     def persist_receipts(self, used_deposit_tx: dict[str, str], used_receipt_links: dict[str, str]) -> None:

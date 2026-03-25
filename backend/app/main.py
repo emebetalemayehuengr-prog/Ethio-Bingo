@@ -1088,6 +1088,13 @@ def persist_rooms() -> None:
     db_write_state("rooms", {stake_id: room.model_dump(mode="json") for stake_id, room in ROOMS.items()})
 
 
+def persist_room(room: RoomStore) -> None:
+    if PG_STORE.enabled():
+        PG_STORE.persist_room(str(room.stake_id), room.model_dump(mode="json"))
+        return
+    persist_rooms()
+
+
 def persist_receipt_cache() -> None:
     if PG_STORE.enabled():
         PG_STORE.persist_receipts(USED_DEPOSIT_TX, USED_RECEIPT_LINKS)
@@ -3105,7 +3112,7 @@ def get_or_create_room(stake: StakeOption) -> RoomStore:
     if room is None:
         room = create_room(stake)
         ROOMS[stake.id] = room
-        persist_rooms()
+        persist_room(room)
     return room
 
 
@@ -3283,7 +3290,7 @@ def start_next_round(room: RoomStore, now: datetime) -> None:
     room.claim_window_reference_time = None
     room.winners = []
     room.result_until = None
-    persist_rooms()
+    persist_room(room)
 
 
 def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
@@ -3295,7 +3302,7 @@ def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
     if not room.pending_claims:
         room.claim_window_ends_at = None
         room.claim_window_reference_time = None
-        persist_rooms()
+        persist_room(room)
         return
 
     valid_claims: list[ClaimEntry] = []
@@ -3324,7 +3331,7 @@ def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
         room.pending_claims = []
         room.claim_window_ends_at = None
         room.claim_window_reference_time = None
-        persist_rooms()
+        persist_room(room)
         return
 
     total_sales = round(float(len(room.taken_cartellas) * room.card_price), 2)
@@ -3370,7 +3377,7 @@ def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
     if not winners:
         room.pending_claims = []
         room.claim_window_ends_at = None
-        persist_rooms()
+        persist_room(room)
         return
 
     changed_user_phones.update(
@@ -3395,7 +3402,7 @@ def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
     room.claim_window_reference_time = None
     if changed_user_phones:
         persist_users(changed_user_phones)
-    persist_rooms()
+    persist_room(room)
 
 
 def end_room_if_calls_complete(room: RoomStore, now: datetime) -> None:
@@ -3429,7 +3436,7 @@ def end_room_if_calls_complete(room: RoomStore, now: datetime) -> None:
     room.result_until = now + timedelta(seconds=RESULT_ANNOUNCE_SECONDS)
     if changed_user_phones:
         persist_users(changed_user_phones)
-    persist_rooms()
+    persist_room(room)
 
 
 def get_queue_maps(
@@ -3527,7 +3534,7 @@ def ensure_simulated_activity(room: RoomStore, now: datetime) -> None:
     if changed_user_phones:
         persist_users(changed_user_phones)
     if changed_room:
-        persist_rooms()
+        persist_room(room)
 
 
 def inject_simulated_claims(room: RoomStore, now: datetime) -> bool:
@@ -3577,7 +3584,7 @@ def advance_room_if_needed(room: RoomStore) -> None:
     now = utc_now()
     ensure_simulated_activity(room, now)
     if inject_simulated_claims(room, now):
-        persist_rooms()
+        persist_room(room)
     finalize_claim_window_if_needed(room, now)
     end_room_if_calls_complete(room, now)
     if room.ended_at is not None and room.result_until is not None and now >= room.result_until:
@@ -3601,7 +3608,7 @@ def compute_simulated_paid_cartellas(
 def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
     advance_room_if_needed(room)
     if prune_holds(room):
-        persist_rooms()
+        persist_room(room)
     now = utc_now()
     reference_time = room.ended_at or now
     elapsed_seconds = int((reference_time - room.started_at).total_seconds())
@@ -3796,7 +3803,7 @@ async def room_tick_loop() -> None:
         for room in list(ROOMS.values()):
             advance_room_if_needed(room)
             if prune_holds(room):
-                persist_rooms()
+                persist_room(room)
         await asyncio.sleep(1)
 
 
@@ -4566,7 +4573,7 @@ def preview_card(payload: PreviewCardRequest, user: UserStore = Depends(get_curr
 
     held_map[payload.cartella_no] = user.phone_number
     held_updated_at[payload.cartella_no] = utc_now()
-    persist_rooms()
+    persist_room(room)
 
     card = create_bingo_card(payload.cartella_no)
     return {
@@ -4637,7 +4644,7 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
     held_map.pop(payload.cartella_no, None)
     held_updated_at.pop(payload.cartella_no, None)
     room.marked_by_user_card[mark_key(user.phone_number, payload.cartella_no)] = []
-    persist_rooms()
+    persist_room(room)
 
     card = create_bingo_card(payload.cartella_no)
     current_cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in get_user_cartellas_from_map(room.taken_cartellas, user.phone_number)]
@@ -4705,7 +4712,7 @@ def mark_number(payload: MarkNumberRequest, user: UserStore = Depends(get_curren
     else:
         marks.discard(payload.number)
     room.marked_by_user_card[mark_key(user.phone_number, my_cartella)] = sorted(marks)
-    persist_rooms()
+    persist_room(room)
 
     return {
         "message": "Mark updated",
@@ -4761,7 +4768,7 @@ def claim_bingo(payload: ClaimBingoRequest, user: UserStore = Depends(get_curren
         room.pending_claims.append(ClaimEntry(phone_number=user.phone_number, cartella_no=my_cartella, claimed_at=now))
 
     finalize_claim_window_if_needed(room, now)
-    persist_rooms()
+    persist_room(room)
     next_state = build_room_state(room, user.phone_number)
 
     if next_state.phase == "finished":
