@@ -701,9 +701,9 @@ class PostgresStateStore:
                     row = cur.execute(
                         """
                         UPDATE wallets
-                        SET main_balance = ROUND(main_balance + %s, 2)
+                        SET main_balance = ROUND(main_balance + %s::numeric, 2)
                         WHERE phone_number = %s
-                          AND main_balance + %s >= 0
+                          AND main_balance + %s::numeric >= 0
                         RETURNING main_balance
                         """,
                         (signed_delta, phone, signed_delta),
@@ -714,7 +714,7 @@ class PostgresStateStore:
                     row = cur.execute(
                         """
                         UPDATE wallets
-                        SET main_balance = ROUND(main_balance + %s, 2)
+                        SET main_balance = ROUND(main_balance + %s::numeric, 2)
                         WHERE phone_number = %s
                         RETURNING main_balance
                         """,
@@ -771,7 +771,7 @@ class PostgresStateStore:
                 sender_row = cur.execute(
                     """
                     UPDATE wallets
-                    SET main_balance = ROUND(main_balance - %s, 2)
+                    SET main_balance = ROUND(main_balance - %s::numeric, 2)
                     WHERE phone_number = %s
                       AND main_balance >= %s
                     RETURNING main_balance
@@ -784,7 +784,7 @@ class PostgresStateStore:
                 receiver_row = cur.execute(
                     """
                     UPDATE wallets
-                    SET main_balance = ROUND(main_balance + %s, 2)
+                    SET main_balance = ROUND(main_balance + %s::numeric, 2)
                     WHERE phone_number = %s
                     RETURNING main_balance
                     """,
@@ -868,7 +868,7 @@ class PostgresStateStore:
                 balance_row = cur.execute(
                     """
                     UPDATE wallets
-                    SET main_balance = ROUND(main_balance + %s, 2)
+                    SET main_balance = ROUND(main_balance + %s::numeric, 2)
                     WHERE phone_number = %s
                     RETURNING main_balance
                     """,
@@ -1166,9 +1166,9 @@ class PostgresStateStore:
                 row = cur.execute(
                     """
                     UPDATE wallets
-                    SET main_balance = ROUND(main_balance + %s, 2)
+                    SET main_balance = ROUND(main_balance + %s::numeric, 2)
                     WHERE phone_number = %s
-                      AND main_balance + %s >= 0
+                      AND main_balance + %s::numeric >= 0
                     RETURNING main_balance
                     """,
                     (signed_delta, phone, signed_delta),
