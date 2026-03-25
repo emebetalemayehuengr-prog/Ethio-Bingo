@@ -893,6 +893,12 @@ def normalize_phone_for_smtp_gateway(phone_number: str) -> str | None:
     return None
 
 
+def sanitize_error_message(message: str) -> str:
+    if not message:
+        return ""
+    return re.sub(r"(postgres(?:ql)?://)([^:@/]+):([^@/]+)@", r"\1***:***@", message)
+
+
 def build_alert_recipients() -> list[str]:
     recipients: list[str] = []
 
@@ -4660,6 +4666,10 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
             if str(exc) == "insufficient_balance":
                 raise HTTPException(status_code=400, detail="Insufficient balance")
             raise HTTPException(status_code=400, detail="Could not process the stake charge.") from None
+        except Exception as exc:
+            detail = sanitize_error_message(str(exc))
+            suffix = f": {detail}" if detail else ""
+            raise HTTPException(status_code=500, detail=f"Join failed{suffix}") from None
         refreshed_user = refresh_user_from_primary_store(user.phone_number)
         if refreshed_user is not None:
             user = refreshed_user
