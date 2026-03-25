@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   approveAdminWithdrawRequest,
   claimBingo,
@@ -59,6 +59,7 @@ const LEGACY_AUTH_PASSWORD_STORAGE_KEY = "ethio_bingo_auth_password";
 const LEGACY_AUTH_REMEMBER_STORAGE_KEY = "ethio_bingo_auth_remember_password";
 const LEGACY_THEME_STORAGE_KEY = "ethio_bingo_theme_mode";
 const LEGACY_BRAND_MODAL_STORAGE_KEY = "ethio_bingo_brand_modal_seen_at";
+const APP_BACK_GUARD_STATE_KEY = "__40bingo_back_guard";
 const CASINO_ENABLED = false;
 
 const services: Array<{ view: ServiceView; label: string }> = [
@@ -562,6 +563,7 @@ function AuthScreen({
 }
 
 export default function App() {
+  const backGuardArmedRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -1013,6 +1015,48 @@ export default function App() {
     const timer = window.setInterval(poll, 2500);
     return () => window.clearInterval(timer);
   }, [profile?.is_admin, walletTab]);
+
+  useEffect(() => {
+    if (!profile) {
+      backGuardArmedRef.current = false;
+      return;
+    }
+    if (backGuardArmedRef.current) return;
+    try {
+      const currentState =
+        window.history.state && typeof window.history.state === "object"
+          ? (window.history.state as Record<string, unknown>)
+          : {};
+      window.history.pushState({ ...currentState, [APP_BACK_GUARD_STATE_KEY]: true }, "", window.location.href);
+      backGuardArmedRef.current = true;
+    } catch {
+      // Ignore history API errors in constrained webviews.
+    }
+  }, [profile?.phone_number]);
+
+  useEffect(() => {
+    if (!profile) return;
+    const onPopState = () => {
+      if (!getAuthToken()) return;
+      setDrawerOpen(false);
+      setCartellaOpen(false);
+      setDepositGuideOpen(false);
+      setSelectedBet(null);
+      setCartellaStep("pick");
+      setService("home");
+      try {
+        const currentState =
+          window.history.state && typeof window.history.state === "object"
+            ? (window.history.state as Record<string, unknown>)
+            : {};
+        window.history.pushState({ ...currentState, [APP_BACK_GUARD_STATE_KEY]: true }, "", window.location.href);
+      } catch {
+        // Ignore history API errors in constrained webviews.
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [profile?.phone_number]);
 
   useEffect(() => {
     if (!profile) return;
