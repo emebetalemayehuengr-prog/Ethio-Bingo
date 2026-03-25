@@ -2808,6 +2808,23 @@ def get_auth_token(authorization: str | None) -> str:
     return authorization[len(prefix) :].strip()
 
 
+def load_latest_user_from_persisted_state(phone_number: str) -> UserStore | None:
+    # In SQLite multi-worker Passenger setups, each worker can keep stale in-memory
+    # user objects. Load latest persisted user snapshot to avoid wallet flip-flops.
+    if PG_STORE.enabled():
+        return None
+    persisted_users = db_read_state("users")
+    if not isinstance(persisted_users, dict):
+        return None
+    raw_user = persisted_users.get(phone_number)
+    if raw_user is None:
+        return None
+    try:
+        return UserStore.model_validate(raw_user)
+    except Exception:
+        return None
+
+
 def get_current_user(authorization: str | None = Header(default=None)) -> UserStore:
     token = get_auth_token(authorization)
     record = normalize_session_record(SESSIONS.get(token))
@@ -2828,6 +2845,11 @@ def get_current_user(authorization: str | None = Header(default=None)) -> UserSt
     user = USERS.get(phone_number)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    if IS_PRODUCTION_ENV and not PG_STORE.enabled():
+        latest_user = load_latest_user_from_persisted_state(phone_number)
+        if latest_user is not None:
+            USERS[phone_number] = latest_user
+            user = latest_user
     return user
 
 
