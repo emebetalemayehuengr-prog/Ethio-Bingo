@@ -77,6 +77,31 @@ jobs:
           overwrite: true
           exclude: ".env,**/__pycache__/**,**/*.pyc,**/.venv/**,**/data/**,**/*.db"
 
+      - name: Verify backend file updated (server)
+        if: ${{ env.SSH_HOST != '' && env.SSH_USER != '' && env.SSH_KEY != '' && env.SSH_BACKEND_PATH != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
+          passphrase: ${{ env.SSH_PASSPHRASE }}
+          port: ${{ env.SSH_PORT }}
+          script: |
+            set -e
+            BACKEND_PATH="${{ env.SSH_BACKEND_PATH }}"
+            FILE="$BACKEND_PATH/app/postgres_store.py"
+            if [ ! -f "$FILE" ]; then
+              echo "Missing file: $FILE"
+              exit 1
+            fi
+            echo "File timestamp:"
+            stat "$FILE" || true
+            echo "Checking for ::numeric casts:"
+            if ! grep -n "::numeric" "$FILE"; then
+              echo "Expected ::numeric not found in $FILE"
+              exit 1
+            fi
+
       - name: Restart backend app (Passenger)
         if: ${{ env.SSH_HOST != '' && env.SSH_USER != '' && env.SSH_KEY != '' && env.SSH_BACKEND_PATH != '' }}
         uses: appleboy/ssh-action@v1.0.3
