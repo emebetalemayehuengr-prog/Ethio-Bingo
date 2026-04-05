@@ -48,6 +48,7 @@ type ServiceView = "home" | "stakes" | "game" | "casino" | "casino-launch" | "wa
 type CartellaStep = "pick" | "preview";
 type WalletTab = "deposit" | "withdraw" | "transfer" | "history" | "admin";
 type CasinoDisplayGame = CasinoGame & { image_url: string; exclusive?: boolean };
+type PendingMarkMap = Record<string, boolean>;
 
 const loadCartellaModalContent = () => import("./components/modals/CartellaModalContent");
 const loadDepositModalContent = () => import("./components/modals/DepositModalContent");
@@ -369,6 +370,43 @@ const marksForCard = (state: RoomState | null, cardNo: number | null) => {
   return state.my_marked_numbers_by_card?.[String(cardNo)] ?? [];
 };
 
+const buildMarkRequestKey = (cardNo: number, value: number) => `${cardNo}:${value}`;
+
+const applyMarkMutationToRoom = (state: RoomState | null, cardNo: number, value: number, marked: boolean) => {
+  if (!state) return state;
+  const cardKey = String(cardNo);
+  const currentMarks = state.my_marked_numbers_by_card?.[cardKey] ?? [];
+  const nextMarks = marked ? Array.from(new Set([...currentMarks, value])).sort((a, b) => a - b) : currentMarks.filter((item) => item !== value);
+  return {
+    ...state,
+    my_marked_numbers_by_card: {
+      ...state.my_marked_numbers_by_card,
+      [cardKey]: nextMarks,
+    },
+    my_marked_numbers:
+      state.my_cartella === cardNo
+        ? nextMarks
+        : state.my_marked_numbers,
+  };
+};
+
+const applyPendingMarksToRoom = (state: RoomState | null, pendingMarks: PendingMarkMap) => {
+  let nextState = state;
+  for (const [key, marked] of Object.entries(pendingMarks)) {
+    const [cardNoRaw, valueRaw] = key.split(":");
+    const cardNo = Number(cardNoRaw);
+    const value = Number(valueRaw);
+    if (!Number.isFinite(cardNo) || !Number.isFinite(value)) continue;
+    nextState = applyMarkMutationToRoom(nextState, cardNo, value, marked);
+  }
+  return nextState;
+};
+
+const resolveSyncedCards = (nextRoom: RoomState, nextCards: BingoCard[], previousCards: BingoCard[]) => {
+  if (nextCards.length > 0) return nextCards;
+  return nextRoom.my_cartellas.length > 0 ? previousCards : [];
+};
+
 function hasBingo(card: BingoCard, calledNumbers: number[], marked: number[]) {
   const markedSet = new Set(marked);
   const allowed = new Set(calledNumbers);
@@ -656,6 +694,8 @@ export default function App() {
   const brandDialogRef = useRef<HTMLDivElement | null>(null);
   const overlayReturnFocusRef = useRef<HTMLElement | null>(null);
   const overlayWasOpenRef = useRef(false);
+  const pendingMarksRef = useRef<PendingMarkMap>({});
+  const lastFinishedRoomRef = useRef<string | null>(null);
   const [ready, setReady] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -727,7 +767,7 @@ export default function App() {
   const [selectedCardNo, setSelectedCardNo] = useState<number | null>(null);
   const [card, setCard] = useState<BingoCard | null>(null);
   const [markedNumbers, setMarkedNumbers] = useState<number[]>([]);
-  const [markingNumber, setMarkingNumber] = useState<number | null>(null);
+  const [pendingMarks, setPendingMarks] = useState<PendingMarkMap>({});
   const [claimingBingo, setClaimingBingo] = useState(false);
   const [autoClaimRequested, setAutoClaimRequested] = useState(false);
 
@@ -755,6 +795,16 @@ export default function App() {
   const casinoFeaturedGames = useMemo(() => casinoCatalog.slice(0, Math.min(5, casinoCatalog.length)), [casinoCatalog]);
   const casinoLatestGames = useMemo(() => (casinoCatalog.length > 5 ? casinoCatalog.slice(5) : casinoCatalog), [casinoCatalog]);
   const overlayOpen = drawerOpen || cartellaOpen || depositGuideOpen || selectedBet !== null || showBrandModal;
+  const hasPendingMarks = Object.keys(pendingMarks).length > 0;
+
+  const setPendingMarkState = (nextPending: PendingMarkMap) => {
+    pendingMarksRef.current = nextPending;
+    setPendingMarks(nextPending);
+  };
+
+  const setRoomWithPendingMarks = (nextRoom: RoomState | null) => {
+    setRoom(applyPendingMarksToRoom(nextRoom, pendingMarksRef.current));
+  };
 
   useEffect(() => {
     try {
@@ -972,7 +1022,7 @@ export default function App() {
     try {
       const res = await fetchStakeRoom(stake.id);
       setPickerRoom(res.room);
-      setRoom(res.room);
+      setRoomWithPendingMarks(res.room);
       const ownedCards = res.cards ?? (res.card ? [res.card] : []);
       setCards(ownedCards);
       if (!ownedCards.length) {
@@ -1293,8 +1343,9 @@ export default function App() {
       void (async () => {
         try {
           const synced = await syncRoom(room.id);
-          setRoom(synced.room);
-          setCards(synced.cards ?? (synced.card ? [synced.card] : []));
+          const syncedCards = synced.cards ?? (synced.card ? [synced.card] : []);
+          setRoomWithPendingMarks(synced.room);
+          setCards((prev) => resolveSyncedCards(synced.room, syncedCards, prev));
         } catch {
           // keep polling
         } finally {
@@ -1404,16 +1455,23 @@ export default function App() {
   }, [cartellaOpen, pickerRoom?.phase, pickerRoom?.id, pickerRoom?.my_cartellas, room?.id, cards.length]);
 
   useEffect(() => {
-    const roundFinished = room?.phase === "finished" || (cartellaOpen && pickerRoom?.phase === "finished");
-    const inGameFlow = service === "game" || service === "stakes" || cartellaOpen;
-    if (!roundFinished || !inGameFlow) return;
-    const timer = window.setTimeout(() => {
-      setCartellaOpen(false);
-      setCartellaStep("pick");
-      setService("home");
-      setNotice("Round finished. Returning to Home.");
-    }, 1800);
-    return () => window.clearTimeout(timer);
+    const finishedRoomKey =
+      service === "game" && room?.phase === "finished"
+        ? `game:${room.id}`
+        : cartellaOpen && pickerRoom?.phase === "finished"
+          ? `picker:${pickerRoom.id}`
+          : null;
+    if (!finishedRoomKey) {
+      lastFinishedRoomRef.current = null;
+      return;
+    }
+    if (lastFinishedRoomRef.current === finishedRoomKey) return;
+    lastFinishedRoomRef.current = finishedRoomKey;
+    setNotice(
+      service === "game"
+        ? "Round finished. Results stay visible until the next game starts."
+        : "Round finished. Next card selection opens shortly.",
+    );
   }, [service, room?.phase, room?.id, pickerRoom?.phase, pickerRoom?.id, cartellaOpen]);
 
   useEffect(() => {
@@ -1424,14 +1482,14 @@ export default function App() {
 
   useEffect(() => {
     if (!autoClaimRequested) return;
-    if (markingNumber !== null || claimingBingo) return;
+    if (hasPendingMarks || claimingBingo) return;
     const claimReady = room?.phase === "playing" && !!card ? hasBingo(card, room?.called_numbers ?? [], markedNumbers) : false;
     if (!claimReady || !room?.id) {
       setAutoClaimRequested(false);
       return;
     }
     void onClaimBingo();
-  }, [autoClaimRequested, markingNumber, claimingBingo, room, card, markedNumbers]);
+  }, [autoClaimRequested, hasPendingMarks, claimingBingo, room, card, markedNumbers]);
 
   const onAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1541,7 +1599,7 @@ export default function App() {
     try {
       const res = await fetchStakeRoom(stake.id);
       setPickerRoom(res.room);
-      setRoom(res.room);
+      setRoomWithPendingMarks(res.room);
       setCards(res.cards ?? (res.card ? [res.card] : []));
       if (res.room.my_cartella) {
         setSelectedCartella(res.room.my_cartella);
@@ -1581,7 +1639,7 @@ export default function App() {
     try {
       const res = await previewCard(selectedStake.id, cartellaNo);
       setPickerRoom(res.room);
-      setRoom(res.room);
+      setRoomWithPendingMarks(res.room);
       setSelectedCartella(cartellaNo);
       setPreview(res.card);
       if (showPreview) {
@@ -1627,7 +1685,7 @@ export default function App() {
         return { ...prev, stake_options: updatedOptions };
       });
       setPickerRoom(res.room);
-      setRoom(res.room);
+      setRoomWithPendingMarks(res.room);
       const returnedCards = res.cards ?? (res.card ? [res.card] : []);
       const mergedCards =
         res.card && !returnedCards.some((item) => item.card_no === res.card.card_no)
@@ -1880,34 +1938,47 @@ export default function App() {
 
   const toggleMarked = async (value: number | string, cardNoParam?: number) => {
     if (typeof value !== "number") return;
-    if (!room?.id) return;
+    const roomId = room?.id;
+    if (!roomId) return;
     const targetCardNo = cardNoParam ?? selectedCardNo;
     if (!targetCardNo) return;
     if (room.phase !== "playing") return;
     if (!calledSet.has(value)) return;
-    if (markingNumber === value) return;
+    const requestKey = buildMarkRequestKey(targetCardNo, value);
+    if (pendingMarksRef.current[requestKey] !== undefined) return;
 
     const currentMarks = targetCardNo === selectedCardNo ? markedNumbers : marksForCard(room, targetCardNo);
     const nextMarked = !currentMarks.includes(value);
-    setMarkingNumber(value);
+    setSelectedCardNo(targetCardNo);
+    setPendingMarkState({ ...pendingMarksRef.current, [requestKey]: nextMarked });
+    setRoom((prev) => applyMarkMutationToRoom(prev, targetCardNo, value, nextMarked));
     setError("");
 
     try {
-      const res = await markNumberForCard(room.id, value, nextMarked, targetCardNo);
-      setRoom(res.room);
-      setMarkedNumbers(marksForCard(res.room, targetCardNo));
-      setSelectedCardNo(targetCardNo);
+      const res = await markNumberForCard(roomId, value, nextMarked, targetCardNo);
+      const { [requestKey]: _ignored, ...remainingPending } = pendingMarksRef.current;
+      setPendingMarkState(remainingPending);
+      setRoomWithPendingMarks(res.room);
     } catch (err) {
+      const { [requestKey]: _ignored, ...remainingPending } = pendingMarksRef.current;
+      setPendingMarkState(remainingPending);
+      setRoom((prev) => applyMarkMutationToRoom(prev, targetCardNo, value, !nextMarked));
+      try {
+        const synced = await syncRoom(roomId);
+        const syncedCards = synced.cards ?? (synced.card ? [synced.card] : []);
+        setRoomWithPendingMarks(synced.room);
+        setCards((prev) => resolveSyncedCards(synced.room, syncedCards, prev));
+      } catch {
+        // keep optimistic rollback when sync fails
+      }
       setError(err instanceof Error ? err.message : "Unable to update mark");
-    } finally {
-      setMarkingNumber(null);
     }
   };
 
   const onClaimBingo = async () => {
     if (!room?.id) return;
     if (!bingoClaimable) {
-      if (markingNumber !== null) {
+      if (hasPendingMarks) {
         setAutoClaimRequested(true);
         setNotice("Finishing your last mark... Bingo will claim automatically.");
         return;
@@ -1921,8 +1992,7 @@ export default function App() {
     setError("");
     try {
       const res = await claimBingo(room.id, selectedCardNo ?? undefined);
-      setRoom(res.room);
-      setMarkedNumbers(marksForCard(res.room, selectedCardNo));
+      setRoomWithPendingMarks(res.room);
       const paidWallet = res.wallet;
       if (paidWallet) {
         setDashboard((prev) => (prev ? { ...prev, wallet: paidWallet } : prev));
@@ -2098,16 +2168,17 @@ export default function App() {
           {ownedCard.grid.flat().map((value, idx) => {
             const clickable = typeof value === "number" && calledSet.has(value);
             const marked = typeof value === "number" && marksForOwnedCard.includes(value);
+            const markPending = typeof value === "number" && pendingMarks[buildMarkRequestKey(ownedCard.card_no, value)] !== undefined;
             return (
               <button
                 key={`${rail}-${ownedCard.card_no}-${value}-${idx}`}
                 type="button"
-                className={`cell ${value === "FREE" ? "free" : ""} ${clickable ? "clickable" : ""} ${marked ? "marked" : ""} ${markingNumber === value && isActive ? "marking" : ""}`}
+                className={`cell ${value === "FREE" ? "free" : ""} ${clickable ? "clickable" : ""} ${marked ? "marked" : ""} ${markPending ? "marking" : ""}`}
                 onClick={() => {
                   setSelectedCardNo(ownedCard.card_no);
                   void toggleMarked(value, ownedCard.card_no);
                 }}
-                disabled={typeof value !== "number" || !clickable || (markingNumber === value && isActive) || room?.phase !== "playing"}
+                disabled={typeof value !== "number" || !clickable || markPending || room?.phase !== "playing"}
               >
                 {value}
               </button>
