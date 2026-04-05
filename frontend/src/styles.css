@@ -5829,3 +5829,48 @@ body {
 .auth-error[role="alert"] {
   scroll-margin-top: 96px;
 }
+
+.modal-skeleton {
+  display: grid;
+  gap: 12px;
+}
+
+.modal-skeleton-copy {
+  margin: 0;
+  color: rgba(233, 241, 255, 0.78);
+  font-size: 0.95rem;
+}
+
+.modal-skeleton-stack,
+.modal-skeleton-grid-blocks {
+  display: grid;
+  gap: 10px;
+}
+
+.modal-skeleton-grid-blocks {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.modal-skeleton-block {
+  display: block;
+  min-height: 18px;
+  border-radius: 12px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.08));
+  background-size: 200% 100%;
+  animation: modal-shimmer 1.2s ease-in-out infinite;
+}
+
+.modal-skeleton-block.small {
+  min-height: 42px;
+  border-radius: 10px;
+}
+
+@keyframes modal-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}

@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import {
   approveAdminWithdrawRequest,
   claimBingo,
@@ -49,6 +49,16 @@ type CartellaStep = "pick" | "preview";
 type WalletTab = "deposit" | "withdraw" | "transfer" | "history" | "admin";
 type CasinoDisplayGame = CasinoGame & { image_url: string; exclusive?: boolean };
 
+const loadCartellaModalContent = () => import("./components/modals/CartellaModalContent");
+const loadDepositModalContent = () => import("./components/modals/DepositModalContent");
+const loadBetHistoryModalContent = () => import("./components/modals/BetHistoryModalContent");
+const loadBrandModalContent = () => import("./components/modals/BrandModalContent");
+
+const CartellaModalContent = lazy(loadCartellaModalContent);
+const DepositModalContent = lazy(loadDepositModalContent);
+const BetHistoryModalContent = lazy(loadBetHistoryModalContent);
+const BrandModalContent = lazy(loadBrandModalContent);
+
 const AUTH_PHONE_STORAGE_KEY = "40bingo_auth_phone";
 const AUTH_PASSWORD_STORAGE_KEY = "40bingo_auth_password";
 const AUTH_REMEMBER_STORAGE_KEY = "40bingo_auth_remember_password";
@@ -73,7 +83,6 @@ const services: Array<{ view: ServiceView; label: string }> = [
   { view: "contact", label: "Contact" },
 ];
 
-const cartellaList = Array.from({ length: 200 }, (_, idx) => idx + 1);
 const calledBoard = Array.from({ length: 75 }, (_, idx) => idx + 1);
 const callerLetters = ["B", "I", "N", "G", "O"] as const;
 const callerRows = Array.from({ length: 15 }, (_, idx) => [idx + 1, idx + 16, idx + 31, idx + 46, idx + 61]);
@@ -476,6 +485,40 @@ function fallbackCopyText(value: string) {
   return copied;
 }
 
+function ModalBodyFallback({
+  title,
+  message,
+  onClose,
+  variant = "lines",
+  headingId,
+}: {
+  title: string;
+  message: string;
+  onClose: () => void;
+  variant?: "lines" | "grid" | "card";
+  headingId?: string;
+}) {
+  const blockCount = variant === "grid" ? 24 : variant === "card" ? 12 : 5;
+  return (
+    <>
+      <div className="modal-head">
+        <h3 id={headingId}>{title}</h3>
+        <button type="button" onClick={onClose}>
+          x
+        </button>
+      </div>
+      <div className={`modal-skeleton modal-skeleton-${variant}`}>
+        <p className="modal-skeleton-copy">{message}</p>
+        <div className={variant === "grid" ? "modal-skeleton-grid-blocks" : "modal-skeleton-stack"}>
+          {Array.from({ length: blockCount }, (_, idx) => (
+            <span key={`${title}-fallback-${idx}`} className={`modal-skeleton-block ${variant === "grid" ? "small" : ""}`} />
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
 function AuthScreen({
   mode,
   setMode,
@@ -693,9 +736,6 @@ export default function App() {
     () => dashboard?.deposit_methods.find((method) => method.code === methodCode) ?? null,
     [dashboard, methodCode],
   );
-  const paidSet = useMemo(() => new Set(pickerRoom?.paid_cartellas ?? []), [pickerRoom]);
-  const simulatedPaidSet = useMemo(() => new Set(pickerRoom?.simulated_paid_cartellas ?? []), [pickerRoom]);
-  const heldSet = useMemo(() => new Set(pickerRoom?.held_cartellas ?? []), [pickerRoom]);
   const selectedCartellaOwned = useMemo(() => {
     if (!pickerRoom || !selectedCartella) return false;
     return pickerRoom.my_cartellas.includes(selectedCartella) || pickerRoom.next_my_cartellas.includes(selectedCartella);
@@ -905,6 +945,25 @@ export default function App() {
     if (!Number.isFinite(lastSeen) || Date.now() - lastSeen >= cooldownMs) {
       setShowBrandModal(true);
     }
+  }, [profile?.phone_number]);
+
+  useEffect(() => {
+    if (service === "stakes") {
+      void loadCartellaModalContent();
+      return;
+    }
+    if (service === "wallet") {
+      void loadDepositModalContent();
+      return;
+    }
+    if (service === "history") {
+      void loadBetHistoryModalContent();
+    }
+  }, [service]);
+
+  useEffect(() => {
+    if (!profile) return;
+    void loadBrandModalContent();
   }, [profile?.phone_number]);
 
   async function openOwnedStakeGame(stake: StakeOption) {
@@ -2062,6 +2121,55 @@ export default function App() {
 
   const profileInitials = (profile.user_name.trim().slice(0, 2) || "40").toUpperCase();
   const selectedMethodDraftAccounts = selectedMethod ? adminDraftAccounts[selectedMethod.code] ?? [] : [];
+  const onDraftPhoneChange = (idx: number, value: string) => {
+    if (!selectedMethod) return;
+    setAdminDraftAccounts((prev) => ({
+      ...prev,
+      [selectedMethod.code]: (prev[selectedMethod.code] ?? []).map((item, rowIdx) => (rowIdx === idx ? { ...item, phone_number: value } : item)),
+    }));
+  };
+  const onDraftOwnerChange = (idx: number, value: string) => {
+    if (!selectedMethod) return;
+    setAdminDraftAccounts((prev) => ({
+      ...prev,
+      [selectedMethod.code]: (prev[selectedMethod.code] ?? []).map((item, rowIdx) => (rowIdx === idx ? { ...item, owner_name: value } : item)),
+    }));
+  };
+  const onRemoveDraftAccount = (idx: number) => {
+    if (!selectedMethod) return;
+    setAdminDraftAccounts((prev) => ({
+      ...prev,
+      [selectedMethod.code]: (prev[selectedMethod.code] ?? []).filter((_, rowIdx) => rowIdx !== idx),
+    }));
+  };
+  const onAddDraftAccount = () => {
+    if (!selectedMethod) return;
+    setAdminDraftAccounts((prev) => ({
+      ...prev,
+      [selectedMethod.code]: [...(prev[selectedMethod.code] ?? []), { phone_number: "", owner_name: "" }],
+    }));
+  };
+  const onDepositTxChange = (rawValue: string) => {
+    const extracted = extractTransactionNumber(rawValue);
+    if (/\s/.test(rawValue) && extracted) {
+      setTxNo(extracted);
+      if (!receiptMessage.trim()) {
+        setReceiptMessage(rawValue.trim());
+      }
+      return;
+    }
+    setTxNo(rawValue);
+  };
+  const onDepositReceiptChange = (nextMessage: string) => {
+    setReceiptMessage(nextMessage);
+    const extracted = extractTransactionNumber(nextMessage);
+    if (!extracted) return;
+    setTxNo((current) => {
+      const currentNormalized = normalizeTransactionNumberInput(current);
+      if (currentNormalized && currentNormalized !== extracted) return current;
+      return extracted;
+    });
+  };
 
   return (
     <div className={`fortybingo-app ${isCasinoLaunchView ? "casino-launch-active" : ""}`}>
@@ -3092,157 +3200,43 @@ export default function App() {
             tabIndex={-1}
             onClick={(event) => event.stopPropagation()}
           >
-            {cartellaStep === "pick" && (
-              <>
-                <div className="cartella-stage">
-                  <aside className="cartella-stage-ads" aria-hidden="true">
-                    <div className="cartella-ad">40bingo</div>
-                    <div className="cartella-ad alt">Held Cartellas</div>
-                  </aside>
-                  <section className="cartella-stage-main">
-                    <div className="modal-head">
-                      <h3 id="cartella-dialog-title">
-                        {selectedStake
-                          ? `${selectedStake.stake} Birr ${pickerRoom?.active_queue === "next" ? "Next Game Queue" : "Current Game"}`
-                          : "Choose Cartella"}
-                      </h3>
-                      <button type="button" onClick={() => setCartellaOpen(false)}>
-                        x
-                      </button>
-                    </div>
-                    {cardRechargeLabel && <div className="modal-recharge-label">{cardRechargeLabel}</div>}
-                    <div className="cartella-details-lines">
-                      <div className="cartella-details-line primary">
-                        <span className={`cartella-pill countdown phase-${pickerPhase}`}>0:{String(Math.max(0, pickerCountdownValue)).padStart(2, "0")}</span>
-                        <span className="cartella-pill stake">{selectedStake ? `${selectedStake.stake} Birr Per Card` : "0 Birr Per Card"}</span>
-                        <span className={`cartella-pill latest phase-${pickerPhase}`}>{pickerLiveDetail}</span>
-                      </div>
-                      <div className="cartella-details-line secondary">
-                        <span>
-                          <strong>{pickerRoom?.held_cartellas.length ?? 0}</strong> Held
-                        </span>
-                        <span>
-                          <strong>{pickerPaidCount}</strong> Paid
-                        </span>
-                        <span>
-                          <strong>200</strong> Total
-                        </span>
-                        <span>
-                          <strong>{pickerRoom?.my_cartellas.length ?? 0}</strong> My Current
-                        </span>
-                        <span>
-                          <strong>{pickerRoom?.next_my_cartellas.length ?? 0}</strong> My Next
-                        </span>
-                        <span className="legend-inline">W=available R=held B=paid G=sim</span>
-                      </div>
-                    </div>
-                    <div className="cartella-surface">
-                      <div className="cartella-grid">
-                        {cartellaList.map((num) => {
-                          const paid = paidSet.has(num);
-                          const mineHeld = pickerRoom?.my_held_cartella === num;
-                          const held = heldSet.has(num);
-                          const heldByOther = held && !mineHeld;
-                          const simulated = simulatedPaidSet.has(num);
-                          const red = processingCartella === num || held;
-                          const selected = selectedCartella === num;
-                          return (
-                            <button
-                              key={`c-${num}`}
-                              type="button"
-                              className={`cartella-cell ${paid ? "paid" : ""} ${simulated ? "simulated" : ""} ${red ? "processing" : ""} ${selected ? "selected" : ""} ${heldByOther ? "held-other" : ""} ${mineHeld ? "held-mine" : ""}`}
-                              onClick={() => {
-                                if (!paid && !heldByOther) {
-                                  void reserveCartella(num);
-                                }
-                              }}
-                              disabled={paid || heldByOther || working}
-                            >
-                              {num}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    <div className="modal-actions">
-                      <button className="secondary-btn" type="button" onClick={() => setCartellaOpen(false)}>
-                        Go Back
-                      </button>
-                      <button
-                        className="secondary-btn"
-                        type="button"
-                        onClick={() => void onPreviewCartella()}
-                        disabled={!selectedCartella || working}
-                      >
-                        {working ? "Loading..." : "Preview Card"}
-                      </button>
-                      <button
-                        className={`primary-btn ${insufficientCardBalance ? "insufficient-buy-btn" : ""}`}
-                        type="button"
-                        onClick={() => void onConfirmCartella()}
-                        disabled={!selectedCartella || working || insufficientCardBalance}
-                      >
-                        {working
-                          ? "Buying..."
-                          : insufficientCardBalance
-                            ? `Insufficient Balance (Need ETB ${cardBuyAmount})`
-                            : pickerRoom?.active_queue === "next"
-                              ? "Buy For Next Game"
-                              : "Buy Card"}
-                      </button>
-                    </div>
-                  </section>
-                </div>
-              </>
-            )}
-
-            {cartellaStep === "preview" && preview && (
-              <>
-                <div className="game-top-row compact">
-                  <div className={`countdown phase-${pickerRoom?.phase ?? "selecting"}`}>
-                    0:{String(Math.max(0, pickerCountdownValue)).padStart(2, "0")}
-                  </div>
-                  <div className="stake-chip">{selectedStake ? `${selectedStake.stake} Birr Per Card` : "0 Birr Per Card"}</div>
-                </div>
-                {cardRechargeLabel && <div className="modal-recharge-label">{cardRechargeLabel}</div>}
-                <article className="bingo-card">
-                  <h3>Card No. {preview.card_no}</h3>
-                  <div className="letters">
-                    <span>B</span>
-                    <span>I</span>
-                    <span>N</span>
-                    <span>G</span>
-                    <span>O</span>
-                  </div>
-                  <div className="grid">
-                    {preview.grid.flat().map((value, idx) => (
-                      <div key={`p-${value}-${idx}`} className={`cell ${value === "FREE" ? "free" : ""}`}>
-                        {value}
-                      </div>
-                    ))}
-                  </div>
-                </article>
-                <div className="modal-actions">
-                  <button className="secondary-btn" type="button" onClick={() => setCartellaStep("pick")}>
-                    Go Back
-                  </button>
-                  <button
-                    className={`primary-btn ${insufficientCardBalance ? "insufficient-buy-btn" : ""}`}
-                    type="button"
-                    disabled={working || insufficientCardBalance}
-                    onClick={() => void onConfirmCartella()}
-                  >
-                    {working
-                      ? "Paying..."
-                      : insufficientCardBalance
-                        ? `Insufficient Balance (Need ETB ${cardBuyAmount})`
-                        : pickerRoom?.active_queue === "next"
-                          ? "Buy For Next Game"
-                          : "Buy Card"}
-                  </button>
-                </div>
-              </>
-            )}
+            <Suspense
+              fallback={
+                <ModalBodyFallback
+                  title={selectedStake ? `${selectedStake.stake} Birr Current Game` : "Choose Cartella"}
+                  message="Preparing live cartella room..."
+                  onClose={() => setCartellaOpen(false)}
+                  variant="grid"
+                  headingId="cartella-dialog-title"
+                />
+              }
+            >
+              <CartellaModalContent
+                loading={working}
+                cartellaStep={cartellaStep}
+                selectedStake={selectedStake}
+                pickerRoom={pickerRoom}
+                cardRechargeLabel={cardRechargeLabel}
+                pickerPhase={pickerPhase}
+                pickerCountdownValue={pickerCountdownValue}
+                pickerLiveDetail={pickerLiveDetail}
+                pickerPaidCount={pickerPaidCount}
+                paidCartellas={pickerRoom?.paid_cartellas ?? []}
+                simulatedPaidCartellas={pickerRoom?.simulated_paid_cartellas ?? []}
+                heldCartellas={pickerRoom?.held_cartellas ?? []}
+                processingCartella={processingCartella}
+                selectedCartella={selectedCartella}
+                preview={preview}
+                insufficientCardBalance={insufficientCardBalance}
+                cardBuyAmount={cardBuyAmount}
+                working={working}
+                onClose={() => setCartellaOpen(false)}
+                onPreview={() => void onPreviewCartella()}
+                onConfirm={() => void onConfirmCartella()}
+                onBackToPick={() => setCartellaStep("pick")}
+                onSelectCartella={(num) => void reserveCartella(num)}
+              />
+            </Suspense>
           </div>
         </div>
       )}
@@ -3258,171 +3252,39 @@ export default function App() {
             tabIndex={-1}
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="modal-head">
-              <h3 id="deposit-dialog-title">{selectedMethod?.label ?? "Deposit"}</h3>
-              <button type="button" onClick={() => setDepositGuideOpen(false)}>
-                x
-              </button>
-            </div>
-            {selectedMethod && (
-              <>
-                {selectedMethod.logo_url ? (
-                  <img
-                    className="deposit-provider-logo"
-                    src={selectedMethod.logo_url}
-                    alt={`${selectedMethod.label} logo`}
-                    onError={(event) => {
-                      const target = event.currentTarget;
-                      if (target.dataset.fallbackApplied === "1") return;
-                      target.dataset.fallbackApplied = "1";
-                      target.src = selectedMethod.code === "telebirr" ? "/providers/telebirr.svg" : "/providers/cbebirr.png";
-                    }}
-                  />
-                ) : null}
-                <p className="panel-subtitle">Follow steps below and submit receipt info. Receiver account is verified against assigned personnel.</p>
-                <ol>
-                  {selectedMethod.instruction_steps.map((step) => (
-                    <li key={step}>{step}</li>
-                  ))}
-                </ol>
-                <div className="accounts">
-                  {profile.is_admin
-                    ? selectedMethodDraftAccounts.map((account, idx) => (
-                        <div key={`${selectedMethod.code}-draft-${idx}`} className="account-box admin-edit">
-                          <input
-                            value={account.phone_number}
-                            onChange={(event) =>
-                              setAdminDraftAccounts((prev) => ({
-                                ...prev,
-                                [selectedMethod.code]: (prev[selectedMethod.code] ?? []).map((item, rowIdx) =>
-                                  rowIdx === idx ? { ...item, phone_number: event.target.value } : item,
-                                ),
-                              }))
-                            }
-                            placeholder="09XXXXXXXX"
-                          />
-                          <input
-                            value={account.owner_name}
-                            onChange={(event) =>
-                              setAdminDraftAccounts((prev) => ({
-                                ...prev,
-                                [selectedMethod.code]: (prev[selectedMethod.code] ?? []).map((item, rowIdx) =>
-                                  rowIdx === idx ? { ...item, owner_name: event.target.value } : item,
-                                ),
-                              }))
-                            }
-                            placeholder="Owner name"
-                          />
-                          <div className="admin-inline-actions">
-                            <button
-                              className="secondary-btn copy-btn"
-                              type="button"
-                              disabled={!account.phone_number.trim()}
-                              onClick={() => void onCopyPhone(account.phone_number.trim())}
-                            >
-                              {copiedPhone === account.phone_number.trim() ? "Copied" : "Copy"}
-                            </button>
-                            <button
-                              className="secondary-btn"
-                              type="button"
-                              onClick={() =>
-                                setAdminDraftAccounts((prev) => ({
-                                  ...prev,
-                                  [selectedMethod.code]: (prev[selectedMethod.code] ?? []).filter((_, rowIdx) => rowIdx !== idx),
-                                }))
-                              }
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                      ))
-                    : selectedMethod.transfer_accounts.map((account) => (
-                        <div key={`${selectedMethod.code}-${account.phone_number}`} className="account-box">
-                          <span>{account.phone_number}</span>
-                          <small>{account.owner_name}</small>
-                          <button className="secondary-btn copy-btn" type="button" onClick={() => void onCopyPhone(account.phone_number)}>
-                            {copiedPhone === account.phone_number ? "Copied" : "Copy"}
-                          </button>
-                        </div>
-                      ))}
-                </div>
-                {profile.is_admin && (
-                  <div className="deposit-admin-actions">
-                    <button
-                      className="secondary-btn"
-                      type="button"
-                      onClick={() =>
-                        setAdminDraftAccounts((prev) => ({
-                          ...prev,
-                          [selectedMethod.code]: [...(prev[selectedMethod.code] ?? []), { phone_number: "", owner_name: "" }],
-                        }))
-                      }
-                    >
-                      Add Number
-                    </button>
-                    <button className="primary-btn" type="button" disabled={working} onClick={() => void onSaveDepositAccounts(selectedMethod.code)}>
-                      {working ? "Saving..." : "Save Numbers"}
-                    </button>
-                  </div>
-                )}
-                <form className="wallet-form" onSubmit={onDeposit}>
-                  <label>
-                    Amount
-                    <input type="number" min={1} value={depositAmount} onChange={(event) => setDepositAmount(event.target.value)} />
-                  </label>
-                  <label>
-                    Transaction Number
-                    <input
-                      value={txNo}
-                      inputMode="text"
-                      autoCapitalize="characters"
-                      autoCorrect="off"
-                      spellCheck={false}
-                      onChange={(event) => {
-                        const rawValue = event.target.value;
-                        const extracted = extractTransactionNumber(rawValue);
-                        if (/\s/.test(rawValue) && extracted) {
-                          setTxNo(extracted);
-                          if (!receiptMessage.trim()) {
-                            setReceiptMessage(rawValue.trim());
-                          }
-                          return;
-                        }
-                        setTxNo(rawValue);
-                      }}
-                      onBlur={(event) => setTxNo(normalizeTransactionNumberInput(event.target.value))}
-                    />
-                  </label>
-                  <label>
-                    Message
-                    <textarea
-                      required
-                      rows={5}
-                      value={receiptMessage}
-                      placeholder="Paste payment SMS or receipt message here"
-                      spellCheck={false}
-                      onChange={(event) => {
-                        const nextMessage = event.target.value;
-                        setReceiptMessage(nextMessage);
-                        const extracted = extractTransactionNumber(nextMessage);
-                        if (!extracted) return;
-                        setTxNo((current) => {
-                          const currentNormalized = normalizeTransactionNumberInput(current);
-                          if (currentNormalized && currentNormalized !== extracted) return current;
-                          return extracted;
-                        });
-                      }}
-                    />
-                  </label>
-                  <small className="receipt-tip">We auto-detect the transaction number from the receipt when possible.</small>
-                  <small>Receipt message must include one assigned receiver phone number or owner name.</small>
-                  <button className="primary-btn" type="submit" disabled={working}>
-                    {working ? "Submitting..." : "Submit Deposit"}
-                  </button>
-                </form>
-              </>
-            )}
+            <Suspense
+              fallback={
+                <ModalBodyFallback
+                  title={selectedMethod?.label ?? "Deposit"}
+                  message="Loading deposit instructions..."
+                  onClose={() => setDepositGuideOpen(false)}
+                  headingId="deposit-dialog-title"
+                />
+              }
+            >
+              <DepositModalContent
+                selectedMethod={selectedMethod}
+                selectedMethodDraftAccounts={selectedMethodDraftAccounts}
+                isAdmin={profile.is_admin}
+                copiedPhone={copiedPhone}
+                working={working}
+                depositAmount={depositAmount}
+                txNo={txNo}
+                receiptMessage={receiptMessage}
+                onClose={() => setDepositGuideOpen(false)}
+                onCopyPhone={(phone) => void onCopyPhone(phone)}
+                onDraftPhoneChange={onDraftPhoneChange}
+                onDraftOwnerChange={onDraftOwnerChange}
+                onRemoveDraftAccount={onRemoveDraftAccount}
+                onAddDraftAccount={onAddDraftAccount}
+                onSaveAccounts={(code) => void onSaveDepositAccounts(code)}
+                onDepositAmountChange={setDepositAmount}
+                onTxChange={onDepositTxChange}
+                onTxBlur={(value) => setTxNo(normalizeTransactionNumberInput(value))}
+                onReceiptChange={onDepositReceiptChange}
+                onSubmit={onDeposit}
+              />
+            </Suspense>
           </div>
         </div>
       )}
@@ -3438,37 +3300,19 @@ export default function App() {
             tabIndex={-1}
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="modal-head">
-              <h3 id="bet-history-dialog-title">{selectedBet.result === "Won" ? "You Won" : "This Card Lost"}</h3>
-              <button type="button" onClick={() => setSelectedBet(null)}>
-                x
-              </button>
-            </div>
-            <p className="bet-result-amount">
-              Amount : ETB {selectedBet.result === "Won" ? selectedBet.payout.toFixed(2) : selectedBet.game_winning.toFixed(2)}
-            </p>
-            {selectedBet.preview_card && (
-              <article className="bingo-card compact history-card-preview">
-                <h3>Card No. {selectedBet.preview_card.card_no}</h3>
-                <div className="letters">
-                  <span>B</span>
-                  <span>I</span>
-                  <span>N</span>
-                  <span>G</span>
-                  <span>O</span>
-                </div>
-                <div className="grid">
-                  {selectedBet.preview_card.grid.flat().map((value, idx) => {
-                    const marked = typeof value === "number" && selectedBet.called_numbers.includes(value);
-                    return (
-                      <div key={`history-preview-${selectedBet.id}-${idx}`} className={`cell ${value === "FREE" ? "free" : ""} ${marked ? "marked" : ""}`}>
-                        {value}
-                      </div>
-                    );
-                  })}
-                </div>
-              </article>
-            )}
+            <Suspense
+              fallback={
+                <ModalBodyFallback
+                  title={selectedBet.result === "Won" ? "You Won" : "This Card Lost"}
+                  message="Loading bet details..."
+                  onClose={() => setSelectedBet(null)}
+                  variant="card"
+                  headingId="bet-history-dialog-title"
+                />
+              }
+            >
+              <BetHistoryModalContent selectedBet={selectedBet} onClose={() => setSelectedBet(null)} />
+            </Suspense>
           </div>
         </div>
       )}
@@ -3484,25 +3328,9 @@ export default function App() {
             tabIndex={-1}
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="modal-head">
-              <h3 id="brand-dialog-title">40bingo Updates</h3>
-              <button type="button" onClick={onCloseBrandModal}>
-                x
-              </button>
-            </div>
-            <div className="brand-modal-content">
-              <article className="brand-promo">
-                <h4>Prize Structure</h4>
-                <p>Join any stake room and play live with fair payouts. House commission remains fixed at 15%.</p>
-              </article>
-              <article className="brand-promo">
-                <h4>Safe Deposit</h4>
-                <p>Use only verified Telebirr/CBE transfer accounts listed in wallet. Duplicate receipts are blocked automatically.</p>
-              </article>
-            </div>
-            <button className="primary-btn" type="button" onClick={onCloseBrandModal}>
-              Continue
-            </button>
+            <Suspense fallback={<ModalBodyFallback title="40bingo Updates" message="Loading updates..." onClose={onCloseBrandModal} headingId="brand-dialog-title" />}>
+              <BrandModalContent onClose={onCloseBrandModal} />
+            </Suspense>
           </div>
         </div>
       )}
