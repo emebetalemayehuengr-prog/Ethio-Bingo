@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   approveAdminWithdrawRequest,
   claimBingo,
@@ -445,6 +445,37 @@ function MethodCard({ method, active, onClick }: { method: DepositMethod; active
   );
 }
 
+function activateOnEnterSpace(event: ReactKeyboardEvent<HTMLElement>, action: () => void) {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  action();
+}
+
+function fallbackCopyText(value: string) {
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "true");
+  textarea.setAttribute("aria-hidden", "true");
+  textarea.style.position = "fixed";
+  textarea.style.top = "0";
+  textarea.style.left = "0";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, value.length);
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
+  return copied;
+}
+
 function AuthScreen({
   mode,
   setMode,
@@ -536,6 +567,7 @@ function AuthScreen({
                 type="button"
                 className="auth-password-toggle"
                 onClick={() => setShowPassword((current) => !current)}
+                aria-pressed={showPassword}
                 aria-label={showPassword ? "Hide password" : "Show password"}
               >
                 {showPassword ? "Hide" : "Show"}
@@ -546,8 +578,16 @@ function AuthScreen({
             <input type="checkbox" checked={rememberPassword} onChange={(event) => setRememberPassword(event.target.checked)} />
             <span>Remember password on this device</span>
           </label>
-          {notice && <p className={`auth-notice ${accountCreatedNotice ? "account-created" : ""}`}>{notice}</p>}
-          {error && <p className="auth-error">{error}</p>}
+          {notice && (
+            <p className={`auth-notice ${accountCreatedNotice ? "account-created" : ""}`} role="status" aria-live="polite">
+              {notice}
+            </p>
+          )}
+          {error && (
+            <p className="auth-error" role="alert">
+              {error}
+            </p>
+          )}
           <button className="primary-btn" type="submit" disabled={busy}>
             {busy ? "Please wait..." : mode === "login" ? "Log in" : "Create account"}
           </button>
@@ -564,6 +604,15 @@ function AuthScreen({
 
 export default function App() {
   const backGuardArmedRef = useRef(false);
+  const topHeaderRef = useRef<HTMLElement | null>(null);
+  const gameSessionPanelRef = useRef<HTMLDivElement | null>(null);
+  const drawerDialogRef = useRef<HTMLElement | null>(null);
+  const cartellaDialogRef = useRef<HTMLDivElement | null>(null);
+  const depositDialogRef = useRef<HTMLDivElement | null>(null);
+  const betDialogRef = useRef<HTMLDivElement | null>(null);
+  const brandDialogRef = useRef<HTMLDivElement | null>(null);
+  const overlayReturnFocusRef = useRef<HTMLElement | null>(null);
+  const overlayWasOpenRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -618,6 +667,9 @@ export default function App() {
   const [showBrandModal, setShowBrandModal] = useState(false);
   const [stakeCountdownNow, setStakeCountdownNow] = useState(() => Date.now());
   const [stakeCountdownDeadlines, setStakeCountdownDeadlines] = useState<Record<string, number>>({});
+  const [sessionPanelExpanded, setSessionPanelExpanded] = useState(true);
+  const [nowPlayingExpanded, setNowPlayingExpanded] = useState(true);
+  const [nowPlayingToggleTop, setNowPlayingToggleTop] = useState(88);
 
   const [selectedStake, setSelectedStake] = useState<StakeOption | null>(null);
   const [cartellaOpen, setCartellaOpen] = useState(false);
@@ -644,6 +696,11 @@ export default function App() {
   const paidSet = useMemo(() => new Set(pickerRoom?.paid_cartellas ?? []), [pickerRoom]);
   const simulatedPaidSet = useMemo(() => new Set(pickerRoom?.simulated_paid_cartellas ?? []), [pickerRoom]);
   const heldSet = useMemo(() => new Set(pickerRoom?.held_cartellas ?? []), [pickerRoom]);
+  const selectedCartellaOwned = useMemo(() => {
+    if (!pickerRoom || !selectedCartella) return false;
+    return pickerRoom.my_cartellas.includes(selectedCartella) || pickerRoom.next_my_cartellas.includes(selectedCartella);
+  }, [pickerRoom, selectedCartella]);
+  const selectedCartellaHeld = selectedCartella != null && pickerRoom?.my_held_cartella === selectedCartella;
   const calledSet = useMemo(() => new Set(room?.called_numbers ?? []), [room?.called_numbers]);
   const casinoCatalog = useMemo<CasinoDisplayGame[]>(
     () =>
@@ -657,6 +714,7 @@ export default function App() {
   const casinoCircleGames = useMemo(() => casinoCatalog.slice(0, 5), [casinoCatalog]);
   const casinoFeaturedGames = useMemo(() => casinoCatalog.slice(0, Math.min(5, casinoCatalog.length)), [casinoCatalog]);
   const casinoLatestGames = useMemo(() => (casinoCatalog.length > 5 ? casinoCatalog.slice(5) : casinoCatalog), [casinoCatalog]);
+  const overlayOpen = drawerOpen || cartellaOpen || depositGuideOpen || selectedBet !== null || showBrandModal;
 
   useEffect(() => {
     try {
@@ -787,23 +845,6 @@ export default function App() {
   }, [service]);
 
   useEffect(() => {
-    if (!drawerOpen) return;
-    const previousOverflow = document.body.style.overflow;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setDrawerOpen(false);
-      }
-    };
-
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [drawerOpen]);
-
-  useEffect(() => {
     if (service !== "stakes") return;
     const tick = () => setStakeCountdownNow(Date.now());
     tick();
@@ -866,6 +907,61 @@ export default function App() {
     }
   }, [profile?.phone_number]);
 
+  async function openOwnedStakeGame(stake: StakeOption) {
+    setWorking(true);
+    setError("");
+    try {
+      const res = await fetchStakeRoom(stake.id);
+      setPickerRoom(res.room);
+      setRoom(res.room);
+      const ownedCards = res.cards ?? (res.card ? [res.card] : []);
+      setCards(ownedCards);
+      if (!ownedCards.length) {
+        if ((res.room.next_my_cartellas?.length ?? 0) > 0) {
+          setNotice("You have cartella booked for the next game. Wait for this round to finish.");
+        } else {
+          setNotice("No active bought cartella for this live game.");
+        }
+        return;
+      }
+      setSelectedCardNo((prev) => {
+        if (prev && ownedCards.some((item) => item.card_no === prev)) return prev;
+        return ownedCards[0].card_no;
+      });
+      setService("game");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to open live game");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function recoverCurrentGameView() {
+    try {
+      const dash = dashboard ?? (await fetchDashboard());
+      if (!dashboard) {
+        setDashboard(dash);
+        setProfile(dash.user);
+        if (dash.deposit_methods.length > 0) {
+          setMethodCode((prev) => (dash.deposit_methods.some((method) => method.code === prev) ? prev : dash.deposit_methods[0].code));
+        }
+      }
+      const stake = dash.stake_options.find((option) => (option.my_cards_current ?? 0) > 0) ?? null;
+      if (!stake) {
+        setService("stakes");
+        setNotice("Choose stake and buy cartella first.");
+        setDrawerOpen(false);
+        return;
+      }
+      setDrawerOpen(false);
+      await openOwnedStakeGame(stake);
+    } catch (err) {
+      setService("stakes");
+      setDrawerOpen(false);
+      setError(err instanceof Error ? err.message : "Unable to open your active game");
+    }
+  }
+
   const openService = (next: ServiceView) => {
     if (!CASINO_ENABLED && (next === "casino" || next === "casino-launch")) {
       setService("home");
@@ -874,9 +970,7 @@ export default function App() {
       return;
     }
     if (next === "game" && (!room || !cards.length)) {
-      setService("stakes");
-      setNotice("Choose stake and buy cartella first.");
-      setDrawerOpen(false);
+      void recoverCurrentGameView();
       return;
     }
     setService(next);
@@ -963,7 +1057,7 @@ export default function App() {
       setDashboard(dash);
       setProfile(dash.user);
       if (dash.deposit_methods.length > 0) {
-        setMethodCode(dash.deposit_methods[0].code);
+        setMethodCode((prev) => (dash.deposit_methods.some((method) => method.code === prev) ? prev : dash.deposit_methods[0].code));
       }
 
       void fetchHistory()
@@ -1180,6 +1274,13 @@ export default function App() {
   }, [selectedCardNo, cards, room]);
 
   useEffect(() => {
+    if (service === "game") {
+      setSessionPanelExpanded(typeof window === "undefined" ? true : window.innerWidth >= 1180);
+      setNowPlayingExpanded(true);
+    }
+  }, [service, room?.id]);
+
+  useEffect(() => {
     if (!cartellaOpen || !selectedStake) return;
     let inFlight = false;
     const pollStakeRoom = () => {
@@ -1208,6 +1309,27 @@ export default function App() {
 
     return () => window.clearInterval(timer);
   }, [cartellaOpen, selectedStake, cartellaStep, selectedCartella]);
+
+  useEffect(() => {
+    if (!cartellaOpen || !selectedCartella || processingCartella === selectedCartella) return;
+    if (selectedCartellaHeld || selectedCartellaOwned) return;
+    setSelectedCartella(null);
+    if (preview?.card_no === selectedCartella) {
+      setPreview(null);
+    }
+    if (cartellaStep === "preview") {
+      setCartellaStep("pick");
+    }
+    setNotice("Your cartella hold expired. Pick a card again.");
+  }, [
+    cartellaOpen,
+    cartellaStep,
+    preview?.card_no,
+    processingCartella,
+    selectedCartella,
+    selectedCartellaHeld,
+    selectedCartellaOwned,
+  ]);
 
   useEffect(() => {
     if (
@@ -1378,53 +1500,51 @@ export default function App() {
     }
   };
 
-  const onOpenLiveStake = async (stake: StakeOption) => {
+  async function reserveCartella(cartellaNo: number, showPreview = false) {
+    if (!selectedStake) return;
+    const alreadyReserved =
+      pickerRoom?.my_held_cartella === cartellaNo ||
+      pickerRoom?.my_cartellas.includes(cartellaNo) ||
+      pickerRoom?.next_my_cartellas.includes(cartellaNo);
+    const hasPreview = preview?.card_no === cartellaNo;
+
+    if (alreadyReserved && hasPreview) {
+      setSelectedCartella(cartellaNo);
+      if (showPreview) {
+        setCartellaStep("preview");
+      }
+      return;
+    }
+
+    setProcessingCartella(cartellaNo);
     setWorking(true);
     setError("");
     try {
-      const res = await fetchStakeRoom(stake.id);
+      const res = await previewCard(selectedStake.id, cartellaNo);
       setPickerRoom(res.room);
       setRoom(res.room);
-      const ownedCards = res.cards ?? (res.card ? [res.card] : []);
-      setCards(ownedCards);
-      if (!ownedCards.length) {
-        if ((res.room.next_my_cartellas?.length ?? 0) > 0) {
-          setNotice("You have cartella booked for the next game. Wait for this round to finish.");
-        } else {
-          setNotice("No active bought cartella for this live game.");
-        }
-        return;
+      setSelectedCartella(cartellaNo);
+      setPreview(res.card);
+      if (showPreview) {
+        setCartellaStep("preview");
       }
-      setSelectedCardNo((prev) => {
-        if (prev && ownedCards.some((item) => item.card_no === prev)) return prev;
-        return ownedCards[0].card_no;
-      });
-      setService("game");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to open live game");
+      setError(err instanceof Error ? err.message : "Unable to select cartella");
+      if (selectedCartella === cartellaNo) {
+        setSelectedCartella(null);
+      }
     } finally {
+      setProcessingCartella(null);
       setWorking(false);
     }
-  };
+  }
 
   const onPreviewCartella = async () => {
     if (!selectedStake || !selectedCartella) {
       setError("Select cartella number first.");
       return;
     }
-    setWorking(true);
-    setError("");
-    try {
-      const res = await previewCard(selectedStake.id, selectedCartella);
-      setPickerRoom(res.room);
-      setRoom(res.room);
-      setPreview(res.card);
-      setCartellaStep("preview");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to preview card");
-    } finally {
-      setWorking(false);
-    }
+    await reserveCartella(selectedCartella, true);
   };
 
   const onConfirmCartella = async () => {
@@ -1591,15 +1711,110 @@ export default function App() {
     setShowBrandModal(false);
   };
 
+  const closeTopOverlay = () => {
+    if (showBrandModal) {
+      onCloseBrandModal();
+      return;
+    }
+    if (selectedBet) {
+      setSelectedBet(null);
+      return;
+    }
+    if (depositGuideOpen) {
+      setDepositGuideOpen(false);
+      return;
+    }
+    if (cartellaOpen) {
+      setCartellaStep("pick");
+      setCartellaOpen(false);
+      return;
+    }
+    if (drawerOpen) {
+      setDrawerOpen(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!overlayOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [overlayOpen]);
+
+  useEffect(() => {
+    if (!overlayOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeTopOverlay();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [overlayOpen, showBrandModal, selectedBet, depositGuideOpen, cartellaOpen, drawerOpen]);
+
+  useEffect(() => {
+    if (overlayOpen && !overlayWasOpenRef.current) {
+      overlayReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+    if (!overlayOpen && overlayWasOpenRef.current) {
+      try {
+        overlayReturnFocusRef.current?.focus();
+      } catch {
+        // ignore focus restore errors
+      }
+      overlayReturnFocusRef.current = null;
+    }
+    overlayWasOpenRef.current = overlayOpen;
+  }, [overlayOpen]);
+
+  useEffect(() => {
+    if (!overlayOpen) return;
+    const target =
+      (showBrandModal
+        ? brandDialogRef.current
+        : selectedBet
+          ? betDialogRef.current
+          : depositGuideOpen
+            ? depositDialogRef.current
+            : cartellaOpen
+              ? cartellaDialogRef.current
+              : drawerOpen
+                ? drawerDialogRef.current
+                : null) ?? null;
+    if (!target) return;
+    const frameId = window.requestAnimationFrame(() => {
+      try {
+        target.focus();
+      } catch {
+        // ignore focus errors
+      }
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [overlayOpen, showBrandModal, selectedBet?.id, depositGuideOpen, cartellaOpen, drawerOpen]);
+
   const onCopyPhone = async (phone: string) => {
     try {
-      await navigator.clipboard.writeText(phone);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(phone);
+      } else if (!fallbackCopyText(phone)) {
+        throw new Error("Clipboard unavailable");
+      }
       setCopiedPhone(phone);
       setNotice(`Copied ${phone}`);
       window.setTimeout(() => {
         setCopiedPhone((prev) => (prev === phone ? "" : prev));
       }, 1500);
     } catch {
+      if (fallbackCopyText(phone)) {
+        setCopiedPhone(phone);
+        setNotice(`Copied ${phone}`);
+        window.setTimeout(() => {
+          setCopiedPhone((prev) => (prev === phone ? "" : prev));
+        }, 1500);
+        return;
+      }
       setError("Clipboard copy failed.");
     }
   };
@@ -1733,6 +1948,9 @@ export default function App() {
   const myWinnerEntry = winnerEntries.find((entry) => entry.phone_number === profile.phone_number) ?? null;
   const resultAmount = myWinnerEntry?.payout ?? winnerEntries[0]?.payout ?? 0;
   const showResultOverlay = room?.phase === "finished" && winnerEntries.length > 0;
+  const sessionPanelId = room ? `game-session-panel-${room.id}` : "game-session-panel";
+  const nowPlayingPanelId = room ? `now-playing-panel-${room.id}` : "now-playing-panel";
+  const nowPlayingCardLabel = selectedCardNo ? `Card ${selectedCardNo}` : `${cards.length} ${cards.length === 1 ? "Card" : "Cards"}`;
   const pickerCountdownValue =
     pickerRoom?.phase === "selecting"
       ? pickerRoom.countdown_seconds
@@ -1753,6 +1971,44 @@ export default function App() {
   const insufficientCardBalance = cardBuyAmount > 0 && wallet.main_balance < cardBuyAmount;
   const latestBallLetter = typeof room?.latest_number === "number" ? toBingoLetter(room.latest_number) : null;
   const latestBallClass = latestBallLetter ? `call-${latestBallLetter.toLowerCase()}` : "call-idle";
+  useEffect(() => {
+    if (service !== "game" || !room || !card || showResultOverlay) return;
+
+    let frameId = 0;
+    const updateToggleTop = () => {
+      frameId = 0;
+      const headerBottom = topHeaderRef.current?.getBoundingClientRect().bottom ?? 0;
+      const sessionBottom = gameSessionPanelRef.current?.getBoundingClientRect().bottom ?? 0;
+      const anchorBottom = Math.max(headerBottom, sessionBottom > headerBottom ? sessionBottom : 0);
+      const nextTop = Math.max(12, Math.round(anchorBottom + 10));
+      setNowPlayingToggleTop((prev) => (prev === nextTop ? prev : nextTop));
+    };
+
+    const scheduleUpdate = () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(updateToggleTop);
+    };
+
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(scheduleUpdate) : null;
+    if (topHeaderRef.current) resizeObserver?.observe(topHeaderRef.current);
+    if (gameSessionPanelRef.current) resizeObserver?.observe(gameSessionPanelRef.current);
+
+    scheduleUpdate();
+    window.addEventListener("resize", scheduleUpdate);
+    window.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.visualViewport?.addEventListener("resize", scheduleUpdate);
+    window.visualViewport?.addEventListener("scroll", scheduleUpdate);
+
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", scheduleUpdate);
+      window.removeEventListener("scroll", scheduleUpdate);
+      window.visualViewport?.removeEventListener("resize", scheduleUpdate);
+      window.visualViewport?.removeEventListener("scroll", scheduleUpdate);
+    };
+  }, [service, room, card, showResultOverlay]);
+
   const renderBoughtCard = (ownedCard: BingoCard, rail: "desktop" | "panel" = "desktop") => {
     const isActive = selectedCardNo === ownedCard.card_no;
     const marksForOwnedCard = marksForCard(room, ownedCard.card_no);
@@ -1761,7 +2017,17 @@ export default function App() {
         key={`${rail}-owned-card-${ownedCard.card_no}`}
         className={`bingo-card player-card bought-card ${rail === "panel" ? "compact" : ""} ${isActive ? "active" : ""}`}
       >
-        <h3>Your Card No. {ownedCard.card_no}</h3>
+        <div className="player-card-head">
+          <h3>Your Card No. {ownedCard.card_no}</h3>
+          <button
+            className={`player-card-select ${isActive ? "active" : ""}`}
+            type="button"
+            aria-pressed={isActive}
+            onClick={() => setSelectedCardNo(ownedCard.card_no)}
+          >
+            {isActive ? "Active Card" : "View Card"}
+          </button>
+        </div>
         <div className="letters">
           <span>B</span>
           <span>I</span>
@@ -1802,7 +2068,15 @@ export default function App() {
       {!isCasinoLaunchView && (
         <>
           <div className={`drawer-overlay ${drawerOpen ? "show" : ""}`} onClick={() => setDrawerOpen(false)} />
-          <aside className={`side-drawer ${drawerOpen ? "open" : ""}`}>
+          <aside
+            ref={drawerDialogRef}
+            id="app-side-drawer"
+            className={`side-drawer ${drawerOpen ? "open" : ""}`}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation menu"
+            tabIndex={-1}
+          >
             <div className="drawer-profile">
               <div className="avatar">{profileInitials}</div>
               <div className="drawer-profile-meta">
@@ -1830,13 +2104,19 @@ export default function App() {
             </nav>
           </aside>
 
-          <header className="top-header">
+          <header ref={topHeaderRef} className="top-header">
             <div className="top-strip">
               <div className="brand-inline">
                 <img src="/brand/40bingo-logo.svg" alt="40bingo logo" className="brand-inline-logo" />
                 <span>40bingo</span>
               </div>
-              <button className="menu-toggle" type="button" onClick={() => setDrawerOpen((state) => !state)}>
+              <button
+                className="menu-toggle"
+                type="button"
+                aria-expanded={drawerOpen}
+                aria-controls="app-side-drawer"
+                onClick={() => setDrawerOpen((state) => !state)}
+              >
                 Menu
               </button>
               <button
@@ -1850,7 +2130,7 @@ export default function App() {
                 </span>
                 <span className="theme-toggle-label">{isDarkMode ? "On" : "Off"}</span>
               </button>
-              <button className="refresh-btn" type="button" onClick={() => void loadData()}>
+              <button className="refresh-btn" type="button" aria-label="Refresh dashboard data" onClick={() => void loadData()}>
                 Refresh
               </button>
               <div className="wallet-pill">{fmtEtb(wallet.main_balance)}</div>
@@ -1860,9 +2140,21 @@ export default function App() {
       )}
 
       <main className={`main-content ${isCasinoLaunchView ? "casino-launch-main" : ""}`}>
-        {!isCasinoLaunchView && loading && <div className="notice">Refreshing data...</div>}
-        {!isCasinoLaunchView && error && <div className="notice error">{error}</div>}
-        {!isCasinoLaunchView && notice && <div className="notice success">{notice}</div>}
+        {!isCasinoLaunchView && loading && (
+          <div className="notice" role="status" aria-live="polite">
+            Refreshing data...
+          </div>
+        )}
+        {!isCasinoLaunchView && error && (
+          <div className="notice error" role="alert" aria-live="assertive">
+            {error}
+          </div>
+        )}
+        {!isCasinoLaunchView && notice && (
+          <div className="notice success" role="status" aria-live="polite">
+            {notice}
+          </div>
+        )}
 
         {service === "home" && (
           <section className="home-landing fade-up">
@@ -1935,7 +2227,7 @@ export default function App() {
                       : stake.room_phase === "finished"
                         ? fmtClock(liveCountdown)
                         : "None";
-                const canOpen = Boolean(stake.open_available && (stake.my_cards_current ?? 0) > 0);
+                const canOpen = (stake.my_cards_current ?? 0) > 0;
                 return (
                   <div key={stake.id} className={`stake-row ${stake.bonus ? "bonus" : ""}`}>
                     <span className="stake-col">
@@ -1948,7 +2240,7 @@ export default function App() {
                       className="join-btn"
                       type="button"
                       disabled={stake.status === "none" || working}
-                      onClick={() => void (canOpen ? onOpenLiveStake(stake) : onOpenStake(stake))}
+                      onClick={() => void (canOpen ? openOwnedStakeGame(stake) : onOpenStake(stake))}
                     >
                       {canOpen ? "Open" : "Join"}
                     </button>
@@ -1970,56 +2262,111 @@ export default function App() {
               <>
                 {!showResultOverlay && (
                   <div className="game-live-shell">
-                    {room.phase === "selecting" && (
-                      <div className="game-top-row compact buying-only">
-                        <div className={`countdown phase-${room.phase}`}>{gameCountdownLabel}</div>
-                        <div className="stake-chip">{room.card_price} Birr Per Card</div>
-                      </div>
-                    )}
-                    <div className="game-stat-grid">
-                      <div className="stat-box">
-                        <small>Win</small>
-                        <strong>{realWinnerPool.toFixed(2)}</strong>
-                      </div>
-                      <div className="stat-box">
-                        <small>Stake</small>
-                        <strong>{room.card_price}</strong>
-                      </div>
-                      <div className="stat-box">
-                        <small>Call</small>
-                        <strong>{room.called_numbers.length}</strong>
-                      </div>
-                      <div className="stat-box">
-                        <small>Bought</small>
-                        <strong>{currentPaidCount}</strong>
-                      </div>
-                      <button type="button" className="stat-box stat-sound" aria-label="sound">
-                        (( ))
+                    <div
+                      ref={gameSessionPanelRef}
+                      id={sessionPanelId}
+                      className={`game-session-panel ${sessionPanelExpanded ? "expanded" : "collapsed"}`}
+                    >
+                      <button
+                        className="game-session-toggle"
+                        type="button"
+                        aria-expanded={sessionPanelExpanded}
+                        aria-controls={`${sessionPanelId}-body`}
+                        onClick={() => setSessionPanelExpanded((state) => !state)}
+                      >
+                        <span className="game-session-toggle-copy">
+                          <small>Live Session</small>
+                          <strong>{room.phase === "playing" ? "Round In Progress" : room.phase === "selecting" ? "Round Queue" : "Round Status"}</strong>
+                          <span className="game-session-toggle-detail">{gameStatusLabel}</span>
+                        </span>
+                        <span className="game-session-summary-row" aria-hidden="true">
+                          <span className="game-session-pill">Stake {room.card_price}</span>
+                          <span className="game-session-pill">{room.called_numbers.length} Calls</span>
+                          <span className="game-session-pill">{currentPaidCount} Bought</span>
+                        </span>
+                        <span className="game-session-toggle-icon" aria-hidden="true">
+                          <svg viewBox="0 0 20 20" focusable="false">
+                            <path d="M5.5 7.5 10 12l4.5-4.5" />
+                          </svg>
+                        </span>
                       </button>
-                    </div>
-                    <div className="caller-layout">
-                      <aside className="caller-side-card">
-                        <div className={`caller-ball-shell ${latestBallClass}`}>
-                          <div className={`caller-ball ${latestBallClass}`}>
-                            <small>{latestBallLetter ?? "-"}</small>
-                            <strong>{room.latest_number ?? "--"}</strong>
+                      {sessionPanelExpanded && (
+                        <div id={`${sessionPanelId}-body`} className="game-session-body">
+                          {room.phase === "selecting" && (
+                            <div className="game-top-row compact buying-only">
+                              <div className={`countdown phase-${room.phase}`}>{gameCountdownLabel}</div>
+                              <div className="stake-chip">{room.card_price} Birr Per Card</div>
+                            </div>
+                          )}
+                          <div className="game-stat-grid">
+                            <div className="stat-box">
+                              <small>Win</small>
+                              <strong>{realWinnerPool.toFixed(2)}</strong>
+                            </div>
+                            <div className="stat-box">
+                              <small>Stake</small>
+                              <strong>{room.card_price}</strong>
+                            </div>
+                            <div className="stat-box">
+                              <small>Call</small>
+                              <strong>{room.called_numbers.length}</strong>
+                            </div>
+                            <div className="stat-box">
+                              <small>Bought</small>
+                              <strong>{currentPaidCount}</strong>
+                            </div>
+                            <button type="button" className="stat-box stat-sound" aria-label="sound">
+                              (( ))
+                            </button>
                           </div>
                         </div>
-                        <div className="caller-recent-row">
-                          {(room.called_numbers.slice(-4).reverse() ?? []).map((num) => (
-                            <div
-                              key={`recent-${num}`}
-                              className={`recent-pill call-${toBingoLetter(num).toLowerCase()} ${room.latest_number === num ? "latest" : ""}`}
-                            >
-                              {num}
+                      )}
+                    </div>
+                    <button
+                      className="now-playing-toggle"
+                      type="button"
+                      aria-expanded={nowPlayingExpanded}
+                      aria-controls={nowPlayingPanelId}
+                      aria-label={nowPlayingExpanded ? "Collapse now playing" : "Expand now playing"}
+                      onClick={() => setNowPlayingExpanded((state) => !state)}
+                      style={{ top: `${nowPlayingToggleTop}px` }}
+                    >
+                      <span className="now-playing-toggle-copy">
+                        <small>{nowPlayingExpanded ? "Hide panel" : "Show panel"}</small>
+                        <strong>Now Playing</strong>
+                      </span>
+                      <span className="now-playing-toggle-status">{nowPlayingCardLabel}</span>
+                      <span className="now-playing-toggle-icon" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" focusable="false">
+                          <path d="M5.5 7.5 10 12l4.5-4.5" />
+                        </svg>
+                      </span>
+                    </button>
+                    <div className={`caller-layout ${nowPlayingExpanded ? "now-playing-open" : "now-playing-collapsed"}`}>
+                      {nowPlayingExpanded && (
+                        <aside id={nowPlayingPanelId} className="caller-side-card now-playing-panel">
+                          <div className={`caller-ball-shell ${latestBallClass}`}>
+                            <div className={`caller-ball ${latestBallClass}`}>
+                              <small>{latestBallLetter ?? "-"}</small>
+                              <strong>{room.latest_number ?? "--"}</strong>
                             </div>
-                          ))}
-                          {room.called_numbers.length === 0 && <div className="recent-pill">-</div>}
-                        </div>
-                        <div className="in-panel-card-rail">
-                          {cards.map((ownedCard) => renderBoughtCard(ownedCard, "panel"))}
-                        </div>
-                      </aside>
+                          </div>
+                          <div className="caller-recent-row">
+                            {(room.called_numbers.slice(-4).reverse() ?? []).map((num) => (
+                              <div
+                                key={`recent-${num}`}
+                                className={`recent-pill call-${toBingoLetter(num).toLowerCase()} ${room.latest_number === num ? "latest" : ""}`}
+                              >
+                                {num}
+                              </div>
+                            ))}
+                            {room.called_numbers.length === 0 && <div className="recent-pill">-</div>}
+                          </div>
+                          <div className="in-panel-card-rail">
+                            {cards.map((ownedCard) => renderBoughtCard(ownedCard, "panel"))}
+                          </div>
+                        </aside>
+                      )}
 
                       <section className="caller-board-panel">
                         <div className="caller-board-grid">
@@ -2395,14 +2742,22 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {history.map((row) => (
-                      <tr key={`wallet-row-${row.type}-${row.created_at}-${row.amount}`}>
-                        <td>{row.type}</td>
-                        <td>{fmtDate(row.created_at)}</td>
-                        <td>{row.amount}</td>
-                        <td>{row.status}</td>
+                    {history.length === 0 ? (
+                      <tr>
+                        <td colSpan={4}>
+                          <div className="table-empty">No wallet activity yet.</div>
+                        </td>
                       </tr>
-                    ))}
+                    ) : (
+                      history.map((row) => (
+                        <tr key={`wallet-row-${row.type}-${row.created_at}-${row.amount}`}>
+                          <td>{row.type}</td>
+                          <td>{fmtDate(row.created_at)}</td>
+                          <td>{row.amount}</td>
+                          <td>{row.status}</td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -2492,139 +2847,147 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {adminWithdrawRequests.map((item) => {
-                          const normalizedStatus = item.status === "Approved" ? "Paid" : item.status;
-                          const payoutRef = adminPayoutRefs[item.id] ?? "";
+                        {adminWithdrawRequests.length === 0 ? (
+                          <tr>
+                            <td colSpan={5}>
+                              <div className="table-empty">No withdraw requests right now.</div>
+                            </td>
+                          </tr>
+                        ) : (
+                          adminWithdrawRequests.map((item) => {
+                            const normalizedStatus = item.status === "Approved" ? "Paid" : item.status;
+                            const payoutRef = adminPayoutRefs[item.id] ?? "";
 
-                          return (
-                            <tr key={item.id}>
-                              <td>
-                                {item.user_name}
-                                <br />
-                                <small>{item.phone_number}</small>
-                              </td>
-                              <td>ETB {item.amount.toFixed(2)}</td>
-                              <td>
-                                <strong>{item.bank}</strong>
-                                <br />
-                                <small>{item.account_holder}</small>
-                                <br />
-                                <small>{item.account_number}</small>
-                              </td>
-                              <td>{normalizedStatus}</td>
-                              <td>
-                                {normalizedStatus === "Pending" ? (
-                                  <div className="admin-actions">
-                                    <button
-                                      className="primary-btn"
-                                      type="button"
-                                      disabled={working}
-                                      onClick={async () => {
-                                        setWorking(true);
-                                        setError("");
-                                        try {
-                                          const res = await approveAdminWithdrawRequest(item.id);
-                                          setNotice(res.message);
-                                          await refreshAdminWithdrawRequests();
-                                        } catch (err) {
-                                          setError(err instanceof Error ? err.message : "Unable to start withdraw processing");
-                                        } finally {
-                                          setWorking(false);
-                                        }
-                                      }}
-                                    >
-                                      Start Processing
-                                    </button>
-                                    <button
-                                      className="secondary-btn"
-                                      type="button"
-                                      disabled={working}
-                                      onClick={async () => {
-                                        setWorking(true);
-                                        setError("");
-                                        try {
-                                          const res = await rejectAdminWithdrawRequest(item.id);
-                                          setNotice(res.message);
-                                          await refreshAdminWithdrawRequests();
-                                        } catch (err) {
-                                          setError(err instanceof Error ? err.message : "Unable to reject withdraw request");
-                                        } finally {
-                                          setWorking(false);
-                                        }
-                                      }}
-                                    >
-                                      Reject
-                                    </button>
-                                  </div>
-                                ) : normalizedStatus === "Processing" ? (
-                                  <div className="admin-actions">
-                                    <input
-                                      value={payoutRef}
-                                      placeholder="Bank transfer ref"
-                                      onChange={(event) =>
-                                        setAdminPayoutRefs((prev) => ({
-                                          ...prev,
-                                          [item.id]: event.target.value,
-                                        }))
-                                      }
-                                    />
-                                    <button
-                                      className="primary-btn"
-                                      type="button"
-                                      disabled={working}
-                                      onClick={async () => {
-                                        setWorking(true);
-                                        setError("");
-                                        try {
-                                          if (!payoutRef.trim()) {
-                                            throw new Error("Enter bank transfer reference before marking paid.");
+                            return (
+                              <tr key={item.id}>
+                                <td>
+                                  {item.user_name}
+                                  <br />
+                                  <small>{item.phone_number}</small>
+                                </td>
+                                <td>ETB {item.amount.toFixed(2)}</td>
+                                <td>
+                                  <strong>{item.bank}</strong>
+                                  <br />
+                                  <small>{item.account_holder}</small>
+                                  <br />
+                                  <small>{item.account_number}</small>
+                                </td>
+                                <td>{normalizedStatus}</td>
+                                <td>
+                                  {normalizedStatus === "Pending" ? (
+                                    <div className="admin-actions">
+                                      <button
+                                        className="primary-btn"
+                                        type="button"
+                                        disabled={working}
+                                        onClick={async () => {
+                                          setWorking(true);
+                                          setError("");
+                                          try {
+                                            const res = await approveAdminWithdrawRequest(item.id);
+                                            setNotice(res.message);
+                                            await refreshAdminWithdrawRequests();
+                                          } catch (err) {
+                                            setError(err instanceof Error ? err.message : "Unable to start withdraw processing");
+                                          } finally {
+                                            setWorking(false);
                                           }
-                                          const res = await markPaidAdminWithdrawRequest(item.id, {
-                                            payout_reference: payoutRef.trim(),
-                                          });
-                                          setNotice(res.message);
+                                        }}
+                                      >
+                                        Start Processing
+                                      </button>
+                                      <button
+                                        className="secondary-btn"
+                                        type="button"
+                                        disabled={working}
+                                        onClick={async () => {
+                                          setWorking(true);
+                                          setError("");
+                                          try {
+                                            const res = await rejectAdminWithdrawRequest(item.id);
+                                            setNotice(res.message);
+                                            await refreshAdminWithdrawRequests();
+                                          } catch (err) {
+                                            setError(err instanceof Error ? err.message : "Unable to reject withdraw request");
+                                          } finally {
+                                            setWorking(false);
+                                          }
+                                        }}
+                                      >
+                                        Reject
+                                      </button>
+                                    </div>
+                                  ) : normalizedStatus === "Processing" ? (
+                                    <div className="admin-actions">
+                                      <input
+                                        value={payoutRef}
+                                        placeholder="Bank transfer ref"
+                                        onChange={(event) =>
                                           setAdminPayoutRefs((prev) => ({
                                             ...prev,
-                                            [item.id]: "",
-                                          }));
-                                          await refreshAdminWithdrawRequests();
-                                        } catch (err) {
-                                          setError(err instanceof Error ? err.message : "Unable to mark withdraw as paid");
-                                        } finally {
-                                          setWorking(false);
+                                            [item.id]: event.target.value,
+                                          }))
                                         }
-                                      }}
-                                    >
-                                      Mark Paid
-                                    </button>
-                                    <button
-                                      className="secondary-btn"
-                                      type="button"
-                                      disabled={working}
-                                      onClick={async () => {
-                                        setWorking(true);
-                                        setError("");
-                                        try {
-                                          const res = await rejectAdminWithdrawRequest(item.id);
-                                          setNotice(res.message);
-                                          await refreshAdminWithdrawRequests();
-                                        } catch (err) {
-                                          setError(err instanceof Error ? err.message : "Unable to reject withdraw request");
-                                        } finally {
-                                          setWorking(false);
-                                        }
-                                      }}
-                                    >
-                                      Reject
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <span>{normalizedStatus === "Paid" ? "Paid" : "Reviewed"}</span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
+                                      />
+                                      <button
+                                        className="primary-btn"
+                                        type="button"
+                                        disabled={working}
+                                        onClick={async () => {
+                                          setWorking(true);
+                                          setError("");
+                                          try {
+                                            if (!payoutRef.trim()) {
+                                              throw new Error("Enter bank transfer reference before marking paid.");
+                                            }
+                                            const res = await markPaidAdminWithdrawRequest(item.id, {
+                                              payout_reference: payoutRef.trim(),
+                                            });
+                                            setNotice(res.message);
+                                            setAdminPayoutRefs((prev) => ({
+                                              ...prev,
+                                              [item.id]: "",
+                                            }));
+                                            await refreshAdminWithdrawRequests();
+                                          } catch (err) {
+                                            setError(err instanceof Error ? err.message : "Unable to mark withdraw as paid");
+                                          } finally {
+                                            setWorking(false);
+                                          }
+                                        }}
+                                      >
+                                        Mark Paid
+                                      </button>
+                                      <button
+                                        className="secondary-btn"
+                                        type="button"
+                                        disabled={working}
+                                        onClick={async () => {
+                                          setWorking(true);
+                                          setError("");
+                                          try {
+                                            const res = await rejectAdminWithdrawRequest(item.id);
+                                            setNotice(res.message);
+                                            await refreshAdminWithdrawRequests();
+                                          } catch (err) {
+                                            setError(err instanceof Error ? err.message : "Unable to reject withdraw request");
+                                          } finally {
+                                            setWorking(false);
+                                          }
+                                        }}
+                                      >
+                                        Reject
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span>{normalizedStatus === "Paid" ? "Paid" : "Reviewed"}</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -2650,33 +3013,49 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                {betHistory.map((row, idx) => (
-                  <tr key={row.id} className="bet-history-row" onClick={() => setSelectedBet(row)}>
-                    <td>{idx + 1}</td>
-                    <td>{row.stake} Birr</td>
-                    <td>{Math.round(row.game_winning)} Birr</td>
-                    <td>
-                      <div className="card-chip-group">
-                        {row.winner_cards.map((cardNo) => (
-                          <span key={`winner-card-${row.id}-${cardNo}`} className="card-chip winner">
-                            {cardNo}
-                          </span>
-                        ))}
-                      </div>
+                {betHistory.length === 0 ? (
+                  <tr>
+                    <td colSpan={7}>
+                      <div className="table-empty">No finished rounds yet. Your results will appear here.</div>
                     </td>
-                    <td>
-                      <div className="card-chip-group">
-                        {row.your_cards.map((cardNo) => (
-                          <span key={`your-card-${row.id}-${cardNo}`} className="card-chip mine">
-                            {cardNo}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td>{fmtShortDate(row.date)}</td>
-                    <td className={row.result === "Won" ? "result-won" : "result-lost"}>{row.result}</td>
                   </tr>
-                ))}
+                ) : (
+                  betHistory.map((row, idx) => (
+                    <tr
+                      key={row.id}
+                      className="bet-history-row"
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`Open bet history row ${idx + 1}`}
+                      onClick={() => setSelectedBet(row)}
+                      onKeyDown={(event) => activateOnEnterSpace(event, () => setSelectedBet(row))}
+                    >
+                      <td>{idx + 1}</td>
+                      <td>{row.stake} Birr</td>
+                      <td>{Math.round(row.game_winning)} Birr</td>
+                      <td>
+                        <div className="card-chip-group">
+                          {row.winner_cards.map((cardNo) => (
+                            <span key={`winner-card-${row.id}-${cardNo}`} className="card-chip winner">
+                              {cardNo}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td>
+                        <div className="card-chip-group">
+                          {row.your_cards.map((cardNo) => (
+                            <span key={`your-card-${row.id}-${cardNo}`} className="card-chip mine">
+                              {cardNo}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td>{fmtShortDate(row.date)}</td>
+                      <td className={row.result === "Won" ? "result-won" : "result-lost"}>{row.result}</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </section>
@@ -2704,7 +3083,15 @@ export default function App() {
 
       {cartellaOpen && (
         <div className="modal-overlay show" onClick={() => setCartellaOpen(false)}>
-          <div className="modal-card cartella-modal" onClick={(event) => event.stopPropagation()}>
+          <div
+            ref={cartellaDialogRef}
+            className="modal-card cartella-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cartella-dialog-title"
+            tabIndex={-1}
+            onClick={(event) => event.stopPropagation()}
+          >
             {cartellaStep === "pick" && (
               <>
                 <div className="cartella-stage">
@@ -2714,7 +3101,7 @@ export default function App() {
                   </aside>
                   <section className="cartella-stage-main">
                     <div className="modal-head">
-                      <h3>
+                      <h3 id="cartella-dialog-title">
                         {selectedStake
                           ? `${selectedStake.stake} Birr ${pickerRoom?.active_queue === "next" ? "Next Game Queue" : "Current Game"}`
                           : "Choose Cartella"}
@@ -2765,9 +3152,11 @@ export default function App() {
                               type="button"
                               className={`cartella-cell ${paid ? "paid" : ""} ${simulated ? "simulated" : ""} ${red ? "processing" : ""} ${selected ? "selected" : ""} ${heldByOther ? "held-other" : ""} ${mineHeld ? "held-mine" : ""}`}
                               onClick={() => {
-                                if (!paid && !heldByOther) setSelectedCartella(num);
+                                if (!paid && !heldByOther) {
+                                  void reserveCartella(num);
+                                }
                               }}
-                              disabled={paid || heldByOther}
+                              disabled={paid || heldByOther || working}
                             >
                               {num}
                             </button>
@@ -2860,9 +3249,17 @@ export default function App() {
 
       {depositGuideOpen && (
         <div className="modal-overlay show" onClick={() => setDepositGuideOpen(false)}>
-          <div className="modal-card deposit-modal" onClick={(event) => event.stopPropagation()}>
+          <div
+            ref={depositDialogRef}
+            className="modal-card deposit-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="deposit-dialog-title"
+            tabIndex={-1}
+            onClick={(event) => event.stopPropagation()}
+          >
             <div className="modal-head">
-              <h3>{selectedMethod?.label ?? "Deposit"}</h3>
+              <h3 id="deposit-dialog-title">{selectedMethod?.label ?? "Deposit"}</h3>
               <button type="button" onClick={() => setDepositGuideOpen(false)}>
                 x
               </button>
@@ -2978,6 +3375,10 @@ export default function App() {
                     Transaction Number
                     <input
                       value={txNo}
+                      inputMode="text"
+                      autoCapitalize="characters"
+                      autoCorrect="off"
+                      spellCheck={false}
                       onChange={(event) => {
                         const rawValue = event.target.value;
                         const extracted = extractTransactionNumber(rawValue);
@@ -2990,14 +3391,17 @@ export default function App() {
                         }
                         setTxNo(rawValue);
                       }}
+                      onBlur={(event) => setTxNo(normalizeTransactionNumberInput(event.target.value))}
                     />
                   </label>
                   <label>
                     Message
-                    <input
+                    <textarea
                       required
+                      rows={5}
                       value={receiptMessage}
-                      placeholder="Paste payment SMS/receipt message"
+                      placeholder="Paste payment SMS or receipt message here"
+                      spellCheck={false}
                       onChange={(event) => {
                         const nextMessage = event.target.value;
                         setReceiptMessage(nextMessage);
@@ -3011,6 +3415,7 @@ export default function App() {
                       }}
                     />
                   </label>
+                  <small className="receipt-tip">We auto-detect the transaction number from the receipt when possible.</small>
                   <small>Receipt message must include one assigned receiver phone number or owner name.</small>
                   <button className="primary-btn" type="submit" disabled={working}>
                     {working ? "Submitting..." : "Submit Deposit"}
@@ -3024,9 +3429,17 @@ export default function App() {
 
       {selectedBet && (
         <div className="modal-overlay show" onClick={() => setSelectedBet(null)}>
-          <div className={`modal-card bet-history-modal ${selectedBet.result === "Won" ? "won" : "lost"}`} onClick={(event) => event.stopPropagation()}>
+          <div
+            ref={betDialogRef}
+            className={`modal-card bet-history-modal ${selectedBet.result === "Won" ? "won" : "lost"}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="bet-history-dialog-title"
+            tabIndex={-1}
+            onClick={(event) => event.stopPropagation()}
+          >
             <div className="modal-head">
-              <h3>{selectedBet.result === "Won" ? "You Won" : "This Card Lost"}</h3>
+              <h3 id="bet-history-dialog-title">{selectedBet.result === "Won" ? "You Won" : "This Card Lost"}</h3>
               <button type="button" onClick={() => setSelectedBet(null)}>
                 x
               </button>
@@ -3062,9 +3475,17 @@ export default function App() {
 
       {showBrandModal && (
         <div className="modal-overlay show" onClick={onCloseBrandModal}>
-          <div className="modal-card brand-modal" onClick={(event) => event.stopPropagation()}>
+          <div
+            ref={brandDialogRef}
+            className="modal-card brand-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="brand-dialog-title"
+            tabIndex={-1}
+            onClick={(event) => event.stopPropagation()}
+          >
             <div className="modal-head">
-              <h3>40bingo Updates</h3>
+              <h3 id="brand-dialog-title">40bingo Updates</h3>
               <button type="button" onClick={onCloseBrandModal}>
                 x
               </button>
