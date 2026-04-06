@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#20345f"/>
+      <stop offset="100%" stop-color="#0b8b5a"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="420" fill="url(#g)"/>
+  <circle cx="700" cy="320" r="130" fill="rgba(255,255,255,0.2)"/>
+  <text x="52" y="216" fill="#ffffff" font-family="Segoe UI, Arial" font-size="60" font-weight="700">Blackjack Classic</text>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f4b68"/>
+      <stop offset="100%" stop-color="#5de0ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="420" fill="url(#g)"/>
+  <circle cx="710" cy="90" r="120" fill="rgba(255,255,255,0.2)"/>
+  <text x="45" y="220" fill="#ffffff" font-family="Segoe UI, Arial" font-size="54" font-weight="700">Big Bass Splash</text>
+</svg>

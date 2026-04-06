@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120" viewBox="0 0 320 120" role="img" aria-label="Telebirr">
+  <rect width="320" height="120" rx="18" fill="#ffffff"/>
+  <g fill="#0d79c8">
+    <path d="M65 22h12v28h28v12H77v28H65V62H37V50h28z"/>
+    <circle cx="65" cy="95" r="10"/>
+  </g>
+  <text x="120" y="66" font-family="Segoe UI, Arial, sans-serif" font-size="36" font-weight="700" fill="#0d79c8">telebirr</text>
+</svg>

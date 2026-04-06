@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f4456e"/>
+      <stop offset="100%" stop-color="#8c1cb6"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="420" fill="url(#g)"/>
+  <circle cx="100" cy="70" r="120" fill="rgba(255,255,255,0.18)"/>
+  <text x="54" y="216" fill="#ffffff" font-family="Segoe UI, Arial" font-size="62" font-weight="700">Claw Machine</text>
+</svg>

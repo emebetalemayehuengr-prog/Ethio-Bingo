@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f585b2"/>
+      <stop offset="100%" stop-color="#ffd252"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="420" fill="url(#g)"/>
+  <circle cx="730" cy="82" r="118" fill="rgba(255,255,255,0.24)"/>
+  <text x="52" y="192" fill="#6b2356" font-family="Segoe UI, Arial" font-size="58" font-weight="700">Bankin More</text>
+  <text x="52" y="252" fill="#6b2356" font-family="Segoe UI, Arial" font-size="58" font-weight="700">Bacon</text>
+</svg>
