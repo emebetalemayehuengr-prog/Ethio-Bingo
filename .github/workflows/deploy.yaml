@@ -20,9 +20,9 @@ jobs:
       RUNTIME_API_BASE: ${{ secrets.RUNTIME_API_BASE }}
       SSH_HOST: ${{ secrets.SSH_HOST }}
       SSH_USER: ${{ secrets.SSH_USER }}
-      SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY != '' && secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
+      SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
       SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
-      SSH_PORT: ${{ secrets.SSH_PORT }}
+      SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
       SSH_FRONTEND_PATH: ${{ secrets.SSH_FRONTEND_PATH }}
       SSH_BACKEND_PATH: ${{ secrets.SSH_BACKEND_PATH }}
     steps:
@@ -93,7 +93,6 @@ jobs:
             echo "::error::Missing required deploy secrets: ${missing[*]}"
             exit 1
           fi
-          echo "SSH_PORT=${SSH_PORT:-22}" >> "$GITHUB_ENV"
 
       - name: Package frontend bundle
         shell: bash
@@ -118,24 +117,8 @@ jobs:
             -C backend \
             .
 
-      - name: Prepare remote directories
-        uses: appleboy/ssh-action@v1.2.5
-        with:
-          host: ${{ env.SSH_HOST }}
-          username: ${{ env.SSH_USER }}
-          key: ${{ env.SSH_KEY }}
-          passphrase: ${{ env.SSH_PASSPHRASE }}
-          port: ${{ env.SSH_PORT }}
-          timeout: 300000
-          script_stop: true
-          script: |
-            set -e
-            mkdir -p "${{ env.SSH_FRONTEND_PATH }}"
-            mkdir -p "${{ env.SSH_BACKEND_PATH }}"
-            mkdir -p "${{ env.SSH_BACKEND_PATH }}/tmp"
-
       - name: Upload frontend to HahuCloud (SFTP)
-        uses: appleboy/scp-action@v1.0.0
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
@@ -148,7 +131,7 @@ jobs:
           timeout: 300000
 
       - name: Extract frontend bundle
-        uses: appleboy/ssh-action@v1.2.5
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
@@ -171,7 +154,7 @@ jobs:
             test -f "$FRONTEND_PATH/.htaccess"
 
       - name: Upload backend to HahuCloud (SFTP)
-        uses: appleboy/scp-action@v1.0.0
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
@@ -184,7 +167,7 @@ jobs:
           timeout: 300000
 
       - name: Extract backend bundle and restart Passenger
-        uses: appleboy/ssh-action@v1.2.5
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
