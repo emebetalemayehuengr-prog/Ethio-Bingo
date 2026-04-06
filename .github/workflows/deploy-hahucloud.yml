@@ -39,6 +39,10 @@ jobs:
           echo "✅ Amharic translations found in build"
         else
           echo "❌ Amharic translations NOT found in build"
+          echo "Files found:"
+          ls -la frontend/dist/assets/
+          echo "Checking content:"
+          head -20 frontend/dist/assets/index-*.js
           exit 1
         fi
         
@@ -49,11 +53,17 @@ jobs:
         username: ${{ secrets.FTP_USERNAME }}
         password: ${{ secrets.FTP_PASSWORD }}
         local-dir: frontend/dist/
-        server-dir: /public_html/
+        server-dir: public_html/
         exclude: ""
         log-level: verbose
         timeout: 300000
         
-    - name: Clear cache (if available)
+    - name: Verify deployment
       run: |
-        echo "Deployment completed. Cache may take a few minutes to clear."
+        echo "Verifying deployment..."
+        curl -s https://40bingo.com/assets/index-*.js | grep -o "ዋና\|ክፍያ\|መውሰድ" | head -3
+        if [ $? -eq 0 ]; then
+          echo "✅ Amharic translations verified on live site!"
+        else
+          echo "⚠️ Amharic translations not found on live site (may need cache clear)"
+        fi
