@@ -623,10 +623,11 @@ CASINO_PAYOUT_TABLES: dict[str, list[tuple[float, float]]] = {
 CARTELLA_TOTAL = 200
 CALL_INTERVAL_SECONDS = 5.0
 SELECT_PHASE_SECONDS = 43
-HOLD_TTL_SECONDS = 20
+HOLD_TTL_SECONDS = 60
+HOLD_HEARTBEAT_SECONDS = 8
 DEMO_START_BALANCE = 700.0
 HOUSE_COMMISSION_RATE = 0.15
-RESULT_ANNOUNCE_SECONDS = 5
+RESULT_ANNOUNCE_SECONDS = 15
 MAX_CARDS_PER_USER = 10
 CLAIM_GRACE_SECONDS = 2
 ENABLE_DEMO_SEED = env_flag("ENABLE_DEMO_SEED", False)
@@ -3191,6 +3192,26 @@ def get_user_held_cartella(room: RoomStore, phone_number: str) -> int | None:
     return get_user_held_cartella_from_map(room.held_cartellas, phone_number)
 
 
+def refresh_user_holds(room: RoomStore, phone_number: str, now: datetime | None = None) -> bool:
+    current_time = now or utc_now()
+    changed = False
+    for held_map, held_updated_at in (
+        (room.held_cartellas, room.held_updated_at),
+        (room.next_held_cartellas, room.next_held_updated_at),
+    ):
+        for cartella_no, owner in list(held_map.items()):
+            if owner != phone_number:
+                continue
+            updated_at = held_updated_at.get(cartella_no)
+            if updated_at is not None and (current_time - updated_at).total_seconds() < HOLD_HEARTBEAT_SECONDS:
+                continue
+            held_updated_at[cartella_no] = current_time
+            changed = True
+    if changed:
+        persist_room(room)
+    return changed
+
+
 def get_user_marked_numbers(room: RoomStore, phone_number: str, cartella_no: int) -> list[int]:
     key = mark_key(phone_number, cartella_no)
     raw = room.marked_by_user_card.get(key, [])
@@ -4705,6 +4726,7 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
 def get_room_by_stake(stake_id: str, user: UserStore = Depends(get_current_user)) -> dict:
     stake = find_stake(stake_id)
     room = get_or_create_room(stake)
+    refresh_user_holds(room, user.phone_number)
     cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in get_user_cartellas_from_map(room.taken_cartellas, user.phone_number)]
     card = cards[0] if cards else None
     return {

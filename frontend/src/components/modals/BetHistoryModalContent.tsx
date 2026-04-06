@@ -6,15 +6,20 @@ type Props = {
 };
 
 export default function BetHistoryModalContent({ selectedBet, onClose }: Props) {
+  const amountLabel = selectedBet.result === "Won" ? "Payout" : "Winner Pool";
+  const amount = selectedBet.result === "Won" ? selectedBet.payout : selectedBet.game_winning;
+
   return (
     <>
       <div className="modal-head">
-        <h3 id="bet-history-dialog-title">{selectedBet.result === "Won" ? "You Won" : "This Card Lost"}</h3>
-        <button type="button" onClick={onClose}>
-          x
+        <h3 id="bet-history-dialog-title">{selectedBet.result === "Won" ? "You Won" : "Round Result"}</h3>
+        <button type="button" onClick={onClose} aria-label="Close dialog">
+          &times;
         </button>
       </div>
-      <p className="bet-result-amount">Amount : ETB {selectedBet.result === "Won" ? selectedBet.payout.toFixed(2) : selectedBet.game_winning.toFixed(2)}</p>
+      <p className="bet-result-amount">
+        {amountLabel}: ETB {amount.toFixed(2)}
+      </p>
       {selectedBet.preview_card && (
         <article className="bingo-card compact history-card-preview">
           <h3>Card No. {selectedBet.preview_card.card_no}</h3>

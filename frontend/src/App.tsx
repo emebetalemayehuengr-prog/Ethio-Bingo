@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent as ReactKeyboardEvent, Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, Suspense, lazy, startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { unstable_batchedUpdates } from "react-dom";
 import {
   approveAdminWithdrawRequest,
@@ -50,6 +50,7 @@ type CartellaStep = "pick" | "preview";
 type WalletTab = "deposit" | "withdraw" | "transfer" | "history" | "admin";
 type CasinoDisplayGame = CasinoGame & { image_url: string; exclusive?: boolean };
 type PendingMarkMap = Record<string, boolean>;
+type ToastTone = "success" | "error" | "info";
 
 const loadCartellaModalContent = () => import("./components/modals/CartellaModalContent");
 const loadDepositModalContent = () => import("./components/modals/DepositModalContent");
@@ -62,30 +63,33 @@ const BetHistoryModalContent = lazy(loadBetHistoryModalContent);
 const BrandModalContent = lazy(loadBrandModalContent);
 
 const AUTH_PHONE_STORAGE_KEY = "40bingo_auth_phone";
-const AUTH_PASSWORD_STORAGE_KEY = "40bingo_auth_password";
-const AUTH_REMEMBER_STORAGE_KEY = "40bingo_auth_remember_password";
+const AUTH_REMEMBER_STORAGE_KEY = "40bingo_auth_remember_phone";
 const THEME_STORAGE_KEY = "40bingo_theme_mode";
 const BRAND_MODAL_STORAGE_KEY = "40bingo_brand_modal_seen_at";
 const LEGACY_AUTH_PHONE_STORAGE_KEY = "ethio_bingo_auth_phone";
-const LEGACY_AUTH_PASSWORD_STORAGE_KEY = "ethio_bingo_auth_password";
-const LEGACY_AUTH_REMEMBER_STORAGE_KEY = "ethio_bingo_auth_remember_password";
+const LEGACY_AUTH_REMEMBER_STORAGE_KEY = "ethio_bingo_auth_remember_phone";
 const LEGACY_THEME_STORAGE_KEY = "ethio_bingo_theme_mode";
 const LEGACY_BRAND_MODAL_STORAGE_KEY = "ethio_bingo_brand_modal_seen_at";
+const DEPRECATED_AUTH_REMEMBER_PASSWORD_STORAGE_KEY = "40bingo_auth_remember_password";
+const LEGACY_DEPRECATED_AUTH_REMEMBER_PASSWORD_STORAGE_KEY = "ethio_bingo_auth_remember_password";
+const DEPRECATED_AUTH_PASSWORD_STORAGE_KEY = "40bingo_auth_password";
+const LEGACY_DEPRECATED_AUTH_PASSWORD_STORAGE_KEY = "ethio_bingo_auth_password";
 const APP_BACK_GUARD_STATE_KEY = "__40bingo_back_guard";
 const CASINO_ENABLED = false;
-const NOTICE_TIMEOUT_MS = 2000; // Reduced for better UX
+const NOTICE_TIMEOUT_MS = 4500;
 const CARD_RECHARGE_LABEL_TIMEOUT_MS = 2500;
 
 const services: Array<{ view: ServiceView; label: string }> = [
   { view: "home", label: "Home" },
-  { view: "stakes", label: "Bingo Game" },
+  { view: "stakes", label: "Rooms" },
   { view: "game", label: "Live Game" },
   ...(CASINO_ENABLED ? [{ view: "casino" as ServiceView, label: "Casino Games" }] : []),
   { view: "wallet", label: "Wallet" },
   { view: "history", label: "History" },
   { view: "how", label: "How To Play" },
-  { view: "contact", label: "Contact" },
 ];
+
+const mobileNavViews: ServiceView[] = ["home", "stakes", "game", "wallet", "history"];
 
 const calledBoard = Array.from({ length: 75 }, (_, idx) => idx + 1);
 const callerLetters = ["B", "I", "N", "G", "O"] as const;
@@ -544,8 +548,8 @@ function ModalBodyFallback({
     <>
       <div className="modal-head">
         <h3 id={headingId}>{title}</h3>
-        <button type="button" onClick={onClose}>
-          x
+        <button type="button" onClick={onClose} aria-label="Close dialog">
+          &times;
         </button>
       </div>
       <div className={`modal-skeleton modal-skeleton-${variant}`}>
@@ -569,11 +573,13 @@ function AuthScreen({
   setPhone,
   password,
   setPassword,
+  confirmPassword,
+  setConfirmPassword,
   busy,
   notice,
   error,
-  rememberPassword,
-  setRememberPassword,
+  rememberPhone,
+  setRememberPhone,
   onSubmit,
   onTelegramLogin,
   telegramAvailable,
@@ -586,11 +592,13 @@ function AuthScreen({
   setPhone: (value: string) => void;
   password: string;
   setPassword: (value: string) => void;
+  confirmPassword: string;
+  setConfirmPassword: (value: string) => void;
   busy: boolean;
   notice: string;
   error: string;
-  rememberPassword: boolean;
-  setRememberPassword: (value: boolean) => void;
+  rememberPhone: boolean;
+  setRememberPhone: (value: boolean) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onTelegramLogin: () => void;
   telegramAvailable: boolean;
@@ -608,20 +616,22 @@ function AuthScreen({
       </div>
       <div className="auth-card">
         <h2>{mode === "signup" ? "Create Your Account" : "Welcome Back"}</h2>
-        <p className="auth-subtitle">{mode === "signup" ? "Create account to continue." : "Sign in to continue."}</p>
+        <p className="auth-subtitle">
+          {mode === "signup" ? "Set up your profile and join a room in under a minute." : "Sign in and jump back into your live game."}
+        </p>
         <div className="auth-switch">
           <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
-            Login
+            Sign In
           </button>
           <button type="button" className={mode === "signup" ? "active" : ""} onClick={() => setMode("signup")}>
-            Signup
+            Sign Up
           </button>
         </div>
         <form className="auth-form" onSubmit={onSubmit}>
           {mode === "signup" && (
             <label>
-              User Name
-              <input value={name} onChange={(event) => setName(event.target.value)} required />
+              Full Name
+              <input value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" required />
             </label>
           )}
           <label>
@@ -658,9 +668,21 @@ function AuthScreen({
               </button>
             </div>
           </label>
+          {mode === "signup" && (
+            <label>
+              Confirm Password
+              <input
+                type={showPassword ? "text" : "password"}
+                value={confirmPassword}
+                autoComplete="new-password"
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                required
+              />
+            </label>
+          )}
           <label className="auth-inline-check">
-            <input type="checkbox" checked={rememberPassword} onChange={(event) => setRememberPassword(event.target.checked)} />
-            <span>Remember password on this device</span>
+            <input type="checkbox" checked={rememberPhone} onChange={(event) => setRememberPhone(event.target.checked)} />
+            <span>Remember my phone number on this device</span>
           </label>
           {notice && (
             <p className={`auth-notice ${accountCreatedNotice ? "account-created" : ""}`} role="status" aria-live="polite">
@@ -673,7 +695,7 @@ function AuthScreen({
             </p>
           )}
           <button className="primary-btn" type="submit" disabled={busy}>
-            {busy ? "Please wait..." : mode === "login" ? "Log in" : "Create account"}
+            {busy ? "Please wait..." : mode === "login" ? "Sign In" : "Create Account"}
           </button>
           {telegramAvailable && (
             <button className="secondary-btn" type="button" disabled={busy} onClick={onTelegramLogin}>
@@ -682,6 +704,56 @@ function AuthScreen({
           )}
         </form>
       </div>
+    </div>
+  );
+}
+
+function ToastRail({
+  loading,
+  notice,
+  error,
+  onDismissNotice,
+  onDismissError,
+}: {
+  loading: boolean;
+  notice: string;
+  error: string;
+  onDismissNotice: () => void;
+  onDismissError: () => void;
+}) {
+  const toasts: Array<{ id: string; tone: ToastTone; message: string; dismissible: boolean }> = [];
+  if (loading) {
+    toasts.push({ id: "loading", tone: "info", message: "Refreshing live data...", dismissible: false });
+  }
+  if (error) {
+    toasts.push({ id: "error", tone: "error", message: error, dismissible: true });
+  }
+  if (notice) {
+    toasts.push({ id: "notice", tone: "success", message: notice, dismissible: true });
+  }
+  if (!toasts.length) return null;
+  return (
+    <div className="toast-rail" role="region" aria-label="Notifications">
+      {toasts.map((toast) => (
+        <div
+          key={toast.id}
+          className={`toast-card ${toast.tone}`}
+          role={toast.tone === "error" ? "alert" : "status"}
+          aria-live={toast.tone === "error" ? "assertive" : "polite"}
+        >
+          <p>{toast.message}</p>
+          {toast.dismissible && (
+            <button
+              type="button"
+              className="toast-dismiss"
+              aria-label={`Dismiss ${toast.tone} message`}
+              onClick={toast.id === "error" ? onDismissError : onDismissNotice}
+            >
+              &times;
+            </button>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -701,6 +773,7 @@ export default function App() {
   const lastFinishedRoomRef = useRef<string | null>(null);
   const [ready, setReady] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
+  const [isPageVisible, setIsPageVisible] = useState(() => (typeof document === "undefined" ? true : document.visibilityState !== "hidden"));
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState(false);
   const [cardRechargeLabel, setCardRechargeLabel] = useState("");
@@ -714,7 +787,8 @@ export default function App() {
   const [authName, setAuthName] = useState("");
   const [authPhone, setAuthPhone] = useState("");
   const [authPassword, setAuthPassword] = useState("");
-  const [rememberPassword, setRememberPassword] = useState(false);
+  const [authConfirmPassword, setAuthConfirmPassword] = useState("");
+  const [rememberPhone, setRememberPhone] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
 
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
@@ -799,6 +873,8 @@ export default function App() {
   const casinoLatestGames = useMemo(() => (casinoCatalog.length > 5 ? casinoCatalog.slice(5) : casinoCatalog), [casinoCatalog]);
   const overlayOpen = drawerOpen || cartellaOpen || depositGuideOpen || selectedBet !== null || showBrandModal;
   const hasPendingMarks = Object.keys(pendingMarks).length > 0;
+  const canResumeLiveGame =
+    Boolean(room?.id) || (dashboard?.stake_options ?? []).some((stakeOption) => (stakeOption.my_cards_current ?? 0) > 0);
 
   const setPendingMarkState = (nextPending: PendingMarkMap) => {
     pendingMarksRef.current = nextPending;
@@ -839,21 +915,28 @@ export default function App() {
   }, [isDarkMode]);
 
   useEffect(() => {
+    const onVisibilityChange = () => setIsPageVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
+
+  useEffect(() => {
     try {
       const remembered =
         (window.localStorage.getItem(AUTH_REMEMBER_STORAGE_KEY) ??
-          window.localStorage.getItem(LEGACY_AUTH_REMEMBER_STORAGE_KEY)) === "1";
+          window.localStorage.getItem(LEGACY_AUTH_REMEMBER_STORAGE_KEY) ??
+          window.localStorage.getItem(DEPRECATED_AUTH_REMEMBER_PASSWORD_STORAGE_KEY) ??
+          window.localStorage.getItem(LEGACY_DEPRECATED_AUTH_REMEMBER_PASSWORD_STORAGE_KEY)) === "1";
       const savedPhone =
         window.localStorage.getItem(AUTH_PHONE_STORAGE_KEY) ??
         window.localStorage.getItem(LEGACY_AUTH_PHONE_STORAGE_KEY) ??
         "";
-      const savedPassword =
-        window.localStorage.getItem(AUTH_PASSWORD_STORAGE_KEY) ??
-        window.localStorage.getItem(LEGACY_AUTH_PASSWORD_STORAGE_KEY) ??
-        "";
-      setRememberPassword(remembered);
+      setRememberPhone(remembered);
       if (savedPhone) setAuthPhone(savedPhone);
-      if (remembered && savedPassword) setAuthPassword(savedPassword);
+      window.localStorage.removeItem(DEPRECATED_AUTH_REMEMBER_PASSWORD_STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_DEPRECATED_AUTH_REMEMBER_PASSWORD_STORAGE_KEY);
+      window.localStorage.removeItem(DEPRECATED_AUTH_PASSWORD_STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_DEPRECATED_AUTH_PASSWORD_STORAGE_KEY);
     } catch {
       // ignore storage errors
     }
@@ -861,21 +944,22 @@ export default function App() {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(AUTH_REMEMBER_STORAGE_KEY, rememberPassword ? "1" : "0");
-      window.localStorage.setItem(AUTH_PHONE_STORAGE_KEY, authPhone);
+      window.localStorage.setItem(AUTH_REMEMBER_STORAGE_KEY, rememberPhone ? "1" : "0");
+      if (rememberPhone) {
+        window.localStorage.setItem(AUTH_PHONE_STORAGE_KEY, authPhone);
+      } else {
+        window.localStorage.removeItem(AUTH_PHONE_STORAGE_KEY);
+      }
       window.localStorage.removeItem(LEGACY_AUTH_REMEMBER_STORAGE_KEY);
       window.localStorage.removeItem(LEGACY_AUTH_PHONE_STORAGE_KEY);
-      if (rememberPassword) {
-        window.localStorage.setItem(AUTH_PASSWORD_STORAGE_KEY, authPassword);
-        window.localStorage.removeItem(LEGACY_AUTH_PASSWORD_STORAGE_KEY);
-      } else {
-        window.localStorage.removeItem(AUTH_PASSWORD_STORAGE_KEY);
-        window.localStorage.removeItem(LEGACY_AUTH_PASSWORD_STORAGE_KEY);
-      }
+      window.localStorage.removeItem(DEPRECATED_AUTH_REMEMBER_PASSWORD_STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_DEPRECATED_AUTH_REMEMBER_PASSWORD_STORAGE_KEY);
+      window.localStorage.removeItem(DEPRECATED_AUTH_PASSWORD_STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_DEPRECATED_AUTH_PASSWORD_STORAGE_KEY);
     } catch {
       // ignore storage errors
     }
-  }, [authPhone, authPassword, rememberPassword]);
+  }, [authPhone, rememberPhone]);
 
   useEffect(() => {
     if (!notice) return;
@@ -900,6 +984,8 @@ export default function App() {
       setSelectedBet(null);
       setAuthNotice("");
       setAuthError("");
+      setAuthPassword("");
+      setAuthConfirmPassword("");
       setError("");
       setLoading(false);
       setWorking(false);
@@ -989,18 +1075,6 @@ export default function App() {
   }, [dashboard?.deposit_methods, walletTab, profile?.is_admin]);
 
   useEffect(() => {
-    if (!profile) return;
-    const raw =
-      window.localStorage.getItem(BRAND_MODAL_STORAGE_KEY) ??
-      window.localStorage.getItem(LEGACY_BRAND_MODAL_STORAGE_KEY);
-    const lastSeen = raw ? Number(raw) : 0;
-    const cooldownMs = 1000 * 60 * 60 * 6;
-    if (!Number.isFinite(lastSeen) || Date.now() - lastSeen >= cooldownMs) {
-      setShowBrandModal(true);
-    }
-  }, [profile?.phone_number]);
-
-  useEffect(() => {
     if (service === "stakes") {
       void loadCartellaModalContent();
       return;
@@ -1013,11 +1087,6 @@ export default function App() {
       void loadBetHistoryModalContent();
     }
   }, [service]);
-
-  useEffect(() => {
-    if (!profile) return;
-    void loadBrandModalContent();
-  }, [profile?.phone_number]);
 
   async function openOwnedStakeGame(stake: StakeOption) {
     setWorking(true);
@@ -1165,44 +1234,40 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      // Parallel API calls for better performance
       const [dashResult, historyResult, betHistoryResult, casinoResult] = await Promise.allSettled([
         fetchDashboard(),
         fetchHistory().catch(() => null),
         safeFetchBetHistory().catch(() => null),
-        fetchCasinoGames().catch(() => null)
+        fetchCasinoGames().catch(() => null),
       ]);
-
-      // Process dashboard result
-      if (dashResult.status === "fulfilled") {
-        const dash = dashResult.value;
-        setDashboard(dash);
-        setProfile(dash.user);
-        if (dash.deposit_methods.length > 0) {
-          setMethodCode((prev) => (dash.deposit_methods.some((method) => method.code === prev) ? prev : dash.deposit_methods[0].code));
+      startTransition(() => {
+        if (dashResult.status === "fulfilled") {
+          const dash = dashResult.value;
+          setDashboard(dash);
+          setProfile(dash.user);
+          if (dash.deposit_methods.length > 0) {
+            setMethodCode((prev) => (dash.deposit_methods.some((method) => method.code === prev) ? prev : dash.deposit_methods[0].code));
+          }
         }
-      }
 
-      // Process history result
-      if (historyResult.status === "fulfilled" && historyResult.value) {
-        setHistory(historyResult.value.items);
-      }
+        if (historyResult.status === "fulfilled" && historyResult.value) {
+          setHistory(historyResult.value.items);
+        }
 
-      // Process bet history result
-      if (betHistoryResult.status === "fulfilled" && betHistoryResult.value) {
-        setBetHistory(betHistoryResult.value.items);
-      }
+        if (betHistoryResult.status === "fulfilled" && betHistoryResult.value) {
+          setBetHistory(betHistoryResult.value.items);
+        }
 
-      // Process casino result
-      if (casinoResult.status === "fulfilled" && casinoResult.value) {
-        const casino = casinoResult.value;
-        const items = casino.items.length > 0 ? casino.items : fallbackCasinoGames;
-        setCasinoGames(items);
-        setCasinoCatalogNotice(casino.items.length > 0 ? "" : "Showing cached casino lineup.");
-      } else {
-        setCasinoGames(fallbackCasinoGames);
-        setCasinoCatalogNotice("Showing cached casino lineup.");
-      }
+        if (casinoResult.status === "fulfilled" && casinoResult.value) {
+          const casino = casinoResult.value;
+          const items = casino.items.length > 0 ? casino.items : fallbackCasinoGames;
+          setCasinoGames(items);
+          setCasinoCatalogNotice(casino.items.length > 0 ? "" : "Showing cached casino lineup.");
+        } else {
+          setCasinoGames(fallbackCasinoGames);
+          setCasinoCatalogNotice("Showing cached casino lineup.");
+        }
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to load data";
       setError(message);
@@ -1231,17 +1296,16 @@ export default function App() {
       games: prev?.games ?? [],
     }));
     setNotice(successMessage);
-    setAuthNotice(""); // Clear auth notice
-    setAuthError("");  // Clear auth error
+    setAuthNotice("");
+    setAuthError("");
     setAuthName("");
+    setAuthConfirmPassword("");
     setAuthPhone(normalizedPhone);
-    if (!rememberPassword) {
-      setAuthPassword("");
-    }
+    setAuthPassword("");
     setAuthMode("login");
     setDrawerOpen(false);
     setService("home");
-    setLoading(true); // Show loading during data load
+    setLoading(true);
     void loadData();
   };
 
@@ -1262,7 +1326,7 @@ export default function App() {
   }, [profile, walletTab]);
 
   useEffect(() => {
-    if (!profile?.is_admin || walletTab !== "admin") return;
+    if (!profile?.is_admin || walletTab !== "admin" || !isPageVisible) return;
     let inFlight = false;
     const poll = () => {
       if (inFlight) return;
@@ -1276,9 +1340,9 @@ export default function App() {
       })();
     };
     poll();
-    const timer = window.setInterval(poll, 2500);
+    const timer = window.setInterval(poll, 4000);
     return () => window.clearInterval(timer);
-  }, [profile?.is_admin, walletTab]);
+  }, [profile?.is_admin, walletTab, isPageVisible]);
 
   useEffect(() => {
     if (!profile) {
@@ -1302,12 +1366,22 @@ export default function App() {
     if (!profile) return;
     const onPopState = () => {
       if (!getAuthToken()) return;
-      setDrawerOpen(false);
-      setCartellaOpen(false);
-      setDepositGuideOpen(false);
-      setSelectedBet(null);
-      setCartellaStep("pick");
-      setService("home");
+      if (showBrandModal) {
+        onCloseBrandModal();
+      } else if (selectedBet) {
+        setSelectedBet(null);
+      } else if (depositGuideOpen) {
+        setDepositGuideOpen(false);
+      } else if (cartellaOpen) {
+        setCartellaStep("pick");
+        setCartellaOpen(false);
+      } else if (drawerOpen) {
+        setDrawerOpen(false);
+      } else if (service === "game" && canResumeLiveGame) {
+        setService("stakes");
+      } else if (service !== "home") {
+        setService("home");
+      }
       try {
         const currentState =
           window.history.state && typeof window.history.state === "object"
@@ -1320,21 +1394,23 @@ export default function App() {
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [profile?.phone_number]);
+  }, [profile?.phone_number, showBrandModal, selectedBet, depositGuideOpen, cartellaOpen, drawerOpen, service, canResumeLiveGame]);
 
   useEffect(() => {
-    if (!profile) return;
+    if (!profile || !isPageVisible) return;
     if (cartellaOpen || service === "game") return;
     let inFlight = false;
-    const pollIntervalMs = service === "stakes" ? 1000 : 1800;
+    const pollIntervalMs = service === "stakes" ? 2200 : 3600;
     const pollDashboard = () => {
       if (inFlight) return;
       inFlight = true;
       void (async () => {
         try {
           const dash = await fetchDashboard();
-          setDashboard(dash);
-          setProfile(dash.user);
+          startTransition(() => {
+            setDashboard(dash);
+            setProfile(dash.user);
+          });
         } catch {
           // keep polling
         } finally {
@@ -1347,10 +1423,10 @@ export default function App() {
       pollDashboard();
     }, pollIntervalMs);
     return () => window.clearInterval(timer);
-  }, [profile?.phone_number, service, cartellaOpen]);
+  }, [profile?.phone_number, service, cartellaOpen, isPageVisible]);
 
   useEffect(() => {
-    if (!room?.id || service !== "game") return;
+    if (!room?.id || service !== "game" || !isPageVisible) return;
     let inFlight = false;
     const pollRoom = () => {
       if (inFlight) return;
@@ -1359,8 +1435,10 @@ export default function App() {
         try {
           const synced = await syncRoom(room.id);
           const syncedCards = synced.cards ?? (synced.card ? [synced.card] : []);
-          setRoomWithPendingMarks(synced.room);
-          setCards((prev) => resolveSyncedCards(synced.room, syncedCards, prev));
+          startTransition(() => {
+            setRoomWithPendingMarks(synced.room);
+            setCards((prev) => resolveSyncedCards(synced.room, syncedCards, prev));
+          });
         } catch {
           // keep polling
         } finally {
@@ -1371,9 +1449,9 @@ export default function App() {
     pollRoom();
     const timer = window.setInterval(() => {
       pollRoom();
-    }, 1200);
+    }, 1500);
     return () => window.clearInterval(timer);
-  }, [room?.id, service]);
+  }, [room?.id, service, isPageVisible]);
 
   useEffect(() => {
     if (!cards.length) {
@@ -1406,7 +1484,7 @@ export default function App() {
   }, [service, room?.id]);
 
   useEffect(() => {
-    if (!cartellaOpen || !selectedStake) return;
+    if (!cartellaOpen || !selectedStake || !isPageVisible) return;
     let inFlight = false;
     const pollStakeRoom = () => {
       if (inFlight) return;
@@ -1414,10 +1492,12 @@ export default function App() {
       void (async () => {
         try {
           const res = await fetchStakeRoom(selectedStake.id);
-          setPickerRoom(res.room);
-          if (res.room.my_held_cartella && cartellaStep === "pick" && !selectedCartella) {
-            setSelectedCartella(res.room.my_held_cartella);
-          }
+          startTransition(() => {
+            setPickerRoom(res.room);
+            if (res.room.my_held_cartella && cartellaStep === "pick" && !selectedCartella) {
+              setSelectedCartella(res.room.my_held_cartella);
+            }
+          });
         } catch {
           // keep polling
         } finally {
@@ -1430,10 +1510,10 @@ export default function App() {
 
     const timer = window.setInterval(() => {
       pollStakeRoom();
-    }, 1000);
+    }, 1500);
 
     return () => window.clearInterval(timer);
-  }, [cartellaOpen, selectedStake, cartellaStep, selectedCartella]);
+  }, [cartellaOpen, selectedStake, cartellaStep, selectedCartella, isPageVisible]);
 
   useEffect(() => {
     if (!cartellaOpen || !selectedCartella || processingCartella === selectedCartella) return;
@@ -1445,7 +1525,7 @@ export default function App() {
     if (cartellaStep === "preview") {
       setCartellaStep("pick");
     }
-    setNotice("Your cartella hold expired. Pick a card again.");
+    setNotice("That cartella was released. Choose it again or pick another available card.");
   }, [
     cartellaOpen,
     cartellaStep,
@@ -1516,10 +1596,20 @@ export default function App() {
       if (!isValidAuthPhoneInput(normalizedPhone)) {
         throw new Error("Use phone format 09XXXXXXXX or +2519XXXXXXXX.");
       }
+      if (authPassword.trim().length < 6) {
+        throw new Error("Password must be at least 6 characters.");
+      }
       setAuthPhone(normalizedPhone);
       if (authMode === "signup") {
+        const normalizedName = authName.trim().replace(/\s+/g, " ");
+        if (normalizedName.length < 2) {
+          throw new Error("Enter your full name to create an account.");
+        }
+        if (authConfirmPassword !== authPassword) {
+          throw new Error("Passwords do not match.");
+        }
         const res = await signupRequest({
-          user_name: authName.trim(),
+          user_name: normalizedName,
           phone_number: normalizedPhone,
           password: authPassword,
         });
@@ -1543,6 +1633,7 @@ export default function App() {
         setAuthMode("login");
         setAuthNotice("This phone number already exists. Please log in.");
         setAuthError("");
+        setAuthConfirmPassword("");
         return;
       }
       if (authMode === "login" && normalizedMessage.includes("invalid phone number or password")) {
@@ -1610,9 +1701,11 @@ export default function App() {
     setAuthError("");
     setAuthMode("login");
     setAuthName("");
-    setAuthPhone("");
     setAuthPassword("");
-    setRememberPassword(false);
+    setAuthConfirmPassword("");
+    if (!rememberPhone) {
+      setAuthPhone("");
+    }
   };
 
   const onOpenStake = async (stake: StakeOption) => {
@@ -1875,6 +1968,98 @@ export default function App() {
     }
   };
 
+  const submitDepositForm = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setWorking(true);
+    setError("");
+    try {
+      const amount = Number(depositAmount);
+      const receiptText = receiptMessage.trim();
+      const directTxNo = normalizeTransactionNumberInput(txNo);
+      const inferredTxNo = extractTransactionNumber(receiptText);
+      const transactionNumber = directTxNo || inferredTxNo;
+      if (!selectedMethod) throw new Error("Choose a deposit method first.");
+      if (!amount || amount <= 0) throw new Error("Enter a valid deposit amount.");
+      if (!receiptText) throw new Error("Paste the transfer receipt message so we can verify the payment.");
+      if (!hasAssignedRecipientInReceipt(receiptText, selectedMethod.transfer_accounts)) {
+        throw new Error("The receipt message must include one of the approved transfer numbers or account names.");
+      }
+      if (transactionNumber.length < 3) {
+        throw new Error("Enter a valid transaction reference or paste the full receipt message.");
+      }
+      const res = await submitDeposit({
+        method: methodCode,
+        amount,
+        transaction_number: transactionNumber,
+        receipt_message: receiptText,
+      });
+      setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
+      setNotice(res.message);
+      setCardRechargeLabel(`Recharged +ETB ${amount.toFixed(2)}`);
+      setTxNo("");
+      setReceiptMessage("");
+      setDepositGuideOpen(false);
+      await refreshHistory();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Deposit request failed.");
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const submitTransferForm = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setWorking(true);
+    setError("");
+    try {
+      const amount = Number(transferAmount);
+      if (!amount || amount <= 0) throw new Error("Enter a valid transfer amount.");
+      if (!transferPhone.trim()) throw new Error("Enter the receiver phone number.");
+      if (!/^\d{4,6}$/.test(transferOtp.trim())) throw new Error("Enter a valid 4 to 6 digit OTP.");
+      const res = await submitTransfer({
+        phone_number: transferPhone.trim(),
+        amount,
+        otp: transferOtp.trim(),
+      });
+      setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
+      setNotice(res.message);
+      setTransferPhone("");
+      setTransferAmount("10");
+      setTransferOtp("");
+      await refreshHistory();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Transfer failed.");
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const submitWithdrawForm = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setWorking(true);
+    setError("");
+    try {
+      const amount = Number(withdrawAmount);
+      if (!amount || amount <= 0) throw new Error("Enter a valid withdraw amount.");
+      if (!withdrawAccountNumber.trim()) throw new Error("Enter the destination account number.");
+      if (!withdrawAccountHolder.trim()) throw new Error("Enter the account holder name.");
+      const res = await submitWithdraw({
+        bank: withdrawBank,
+        account_number: withdrawAccountNumber.trim(),
+        account_holder: withdrawAccountHolder.trim(),
+        amount,
+      });
+      setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
+      setNotice(res.message);
+      setWithdrawAmount("50");
+      await refreshHistory();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Withdraw request failed.");
+    } finally {
+      setWorking(false);
+    }
+  };
+
   const onCloseBrandModal = () => {
     window.localStorage.setItem(BRAND_MODAL_STORAGE_KEY, String(Date.now()));
     window.localStorage.removeItem(LEGACY_BRAND_MODAL_STORAGE_KEY);
@@ -2077,6 +2262,7 @@ export default function App() {
           setAuthMode(mode);
           setAuthError("");
           setAuthNotice("");
+          setAuthConfirmPassword("");
         }}
         name={authName}
         setName={setAuthName}
@@ -2084,11 +2270,13 @@ export default function App() {
         setPhone={setAuthPhone}
         password={authPassword}
         setPassword={setAuthPassword}
+        confirmPassword={authConfirmPassword}
+        setConfirmPassword={setAuthConfirmPassword}
         busy={authBusy}
         notice={authNotice}
         error={authError}
-        rememberPassword={rememberPassword}
-        setRememberPassword={setRememberPassword}
+        rememberPhone={rememberPhone}
+        setRememberPhone={setRememberPhone}
         onSubmit={onAuthSubmit}
         onTelegramLogin={onTelegramLogin}
         telegramAvailable={Boolean((window as Window & { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData)}
@@ -2316,7 +2504,7 @@ export default function App() {
                 <p>{profile.phone_number}</p>
               </div>
               <button className="drawer-close" type="button" onClick={() => setDrawerOpen(false)} aria-label="Close menu">
-                x
+                &times;
               </button>
             </div>
             <nav>
@@ -2330,6 +2518,16 @@ export default function App() {
                   {item.label}
                 </button>
               ))}
+              <button
+                className="menu-item"
+                type="button"
+                onClick={() => {
+                  setShowBrandModal(true);
+                  setDrawerOpen(false);
+                }}
+              >
+                What's New
+              </button>
               <button className="menu-item danger" type="button" onClick={() => void onLogout()}>
                 Logout
               </button>
@@ -2372,19 +2570,25 @@ export default function App() {
       )}
 
       <main className={`main-content ${isCasinoLaunchView ? "casino-launch-main" : ""}`}>
-        {!isCasinoLaunchView && loading && (
-          <div className="notice" role="status" aria-live="polite">
-            Refreshing data...
-          </div>
+        {!isCasinoLaunchView && (
+          <ToastRail
+            loading={loading}
+            notice={notice}
+            error={error}
+            onDismissNotice={() => setNotice("")}
+            onDismissError={() => setError("")}
+          />
         )}
-        {!isCasinoLaunchView && error && (
-          <div className="notice error" role="alert" aria-live="assertive">
-            {error}
-          </div>
-        )}
-        {!isCasinoLaunchView && notice && (
-          <div className="notice success" role="status" aria-live="polite">
-            {notice}
+
+        {!isCasinoLaunchView && canResumeLiveGame && service !== "game" && (
+          <div className="quick-action-bar fade-up">
+            <div className="quick-action-copy">
+              <strong>Live room still active</strong>
+              <span>Return to your current card without reopening every screen.</span>
+            </div>
+            <button className="primary-btn" type="button" onClick={() => openService("game")}>
+              Resume Live Game
+            </button>
           </div>
         )}
 
@@ -2636,7 +2840,7 @@ export default function App() {
                   <div className={`result-overlay ${myWinnerEntry ? "won" : "lost"}`}>
                     <div className={`result-modal ${myWinnerEntry ? "won" : "lost"}`}>
                       <h2>{myWinnerEntry ? "You Won" : "You Lost"}</h2>
-                      <h3>Amount : {Math.round(resultAmount)} ETB</h3>
+                      <h3>ETB {Math.round(resultAmount)}</h3>
                       <p className="result-subtitle">Payout is split equally between all confirmed winners.</p>
                       <div className={`result-winners ${winnerEntries.length > 1 ? "stacked" : ""}`}>
                         {winnerEntries.map((winner) => (
@@ -2914,7 +3118,7 @@ export default function App() {
             )}
 
             {walletTab === "withdraw" && (
-              <form className="wallet-form wallet-subpanel" onSubmit={onWithdraw}>
+              <form className="wallet-form wallet-subpanel" onSubmit={submitWithdrawForm}>
                 <label>
                   ባንክ
                   <select value={withdrawBank} onChange={(event) => setWithdrawBank(event.target.value)}>
@@ -2943,7 +3147,7 @@ export default function App() {
             )}
 
             {walletTab === "transfer" && (
-              <form className="wallet-form wallet-subpanel" onSubmit={onTransfer}>
+              <form className="wallet-form wallet-subpanel" onSubmit={submitTransferForm}>
                 <label>
                   ስልክ ቁጥር
                   <input value={transferPhone} onChange={(event) => setTransferPhone(event.target.value)} placeholder="09xxxxxxxx" />
@@ -3313,6 +3517,24 @@ export default function App() {
         )}
       </main>
 
+      {!isCasinoLaunchView && (
+        <nav className="mobile-bottom-nav" aria-label="Primary navigation">
+          {services
+            .filter((item) => mobileNavViews.includes(item.view))
+            .map((item) => (
+              <button
+                key={`mobile-nav-${item.view}`}
+                type="button"
+                className={`mobile-bottom-nav-item ${service === item.view ? "active" : ""}`}
+                aria-current={service === item.view ? "page" : undefined}
+                onClick={() => openService(item.view)}
+              >
+                {item.label}
+              </button>
+            ))}
+        </nav>
+      )}
+
       {cartellaOpen && (
         <div className="modal-overlay show" onClick={() => setCartellaOpen(false)}>
           <div
@@ -3406,7 +3628,7 @@ export default function App() {
                 onTxChange={onDepositTxChange}
                 onTxBlur={(value) => setTxNo(normalizeTransactionNumberInput(value))}
                 onReceiptChange={onDepositReceiptChange}
-                onSubmit={onDeposit}
+                onSubmit={submitDepositForm}
               />
             </Suspense>
           </div>
@@ -3461,5 +3683,3 @@ export default function App() {
     </div>
   );
 }
-
-

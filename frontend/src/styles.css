@@ -5814,10 +5814,12 @@ body {
 .modal-card:focus-visible,
 .side-drawer:focus-visible,
 .menu-item:focus-visible,
+.mobile-bottom-nav-item:focus-visible,
 .method-card:focus-visible,
 .player-card-select:focus-visible,
 .auth-password-toggle:focus-visible,
 .copy-btn:focus-visible,
+.toast-dismiss:focus-visible,
 .refresh-btn:focus-visible,
 .menu-toggle:focus-visible,
 .theme-toggle:focus-visible {
@@ -5833,6 +5835,161 @@ body {
 .modal-skeleton {
   display: grid;
   gap: 12px;
+}
+
+.toast-rail {
+  position: sticky;
+  top: calc(env(safe-area-inset-top, 0px) + 82px);
+  z-index: 18;
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+  margin-bottom: 16px;
+  pointer-events: none;
+}
+
+.toast-card {
+  width: min(100%, 360px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(164, 193, 219, 0.24);
+  background: rgba(14, 30, 47, 0.92);
+  color: #edf7ff;
+  box-shadow: 0 16px 30px rgba(3, 10, 18, 0.24);
+  backdrop-filter: blur(14px);
+  pointer-events: auto;
+}
+
+.toast-card.success {
+  border-color: rgba(64, 189, 124, 0.36);
+  background: linear-gradient(145deg, rgba(17, 65, 44, 0.94), rgba(12, 39, 28, 0.96));
+}
+
+.toast-card.error {
+  border-color: rgba(217, 91, 109, 0.34);
+  background: linear-gradient(145deg, rgba(93, 27, 39, 0.96), rgba(56, 14, 22, 0.98));
+}
+
+.toast-card.info {
+  border-color: rgba(104, 156, 214, 0.3);
+  background: linear-gradient(145deg, rgba(21, 49, 77, 0.96), rgba(11, 27, 42, 0.98));
+}
+
+.toast-card p {
+  margin: 0;
+  line-height: 1.45;
+  font-weight: 600;
+}
+
+.toast-dismiss {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  width: 28px;
+  height: 28px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.quick-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 212, 0, 0.2);
+  background:
+    radial-gradient(circle at top right, rgba(255, 212, 0, 0.12), transparent 42%),
+    linear-gradient(145deg, rgba(18, 41, 63, 0.96), rgba(10, 24, 38, 0.98));
+  box-shadow: 0 16px 32px rgba(3, 10, 18, 0.22);
+}
+
+.quick-action-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.quick-action-copy strong {
+  color: #fff4bf;
+}
+
+.quick-action-copy span {
+  color: #c8dced;
+  line-height: 1.45;
+}
+
+.mobile-bottom-nav {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .toast-rail {
+    top: auto;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 84px);
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    justify-items: stretch;
+    margin-bottom: 0;
+  }
+
+  .toast-card {
+    width: 100%;
+  }
+
+  .quick-action-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .quick-action-bar .primary-btn {
+    width: 100%;
+  }
+
+  .mobile-bottom-nav {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+    z-index: 24;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+    padding: 10px;
+    border-radius: 20px;
+    border: 1px solid rgba(166, 194, 220, 0.22);
+    background: rgba(12, 27, 42, 0.92);
+    box-shadow: 0 18px 36px rgba(3, 10, 18, 0.28);
+    backdrop-filter: blur(16px);
+  }
+
+  .mobile-bottom-nav-item {
+    border: 1px solid transparent;
+    border-radius: 14px;
+    min-height: 46px;
+    padding: 8px 6px;
+    background: transparent;
+    color: #c7dced;
+    font-size: 0.76rem;
+    font-weight: 700;
+    line-height: 1.2;
+    text-align: center;
+    cursor: pointer;
+  }
+
+  .mobile-bottom-nav-item.active {
+    border-color: rgba(255, 212, 0, 0.32);
+    background: rgba(255, 212, 0, 0.14);
+    color: #fff4bf;
+  }
 }
 
 .modal-skeleton-copy {

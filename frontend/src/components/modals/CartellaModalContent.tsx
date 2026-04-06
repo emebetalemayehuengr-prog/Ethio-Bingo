@@ -156,12 +156,12 @@ export default function CartellaModalContent({
       <>
         <div className="modal-head">
           <h3 id="cartella-dialog-title">{selectedStake ? `${selectedStake.stake} Birr Current Game` : "Choose Cartella"}</h3>
-          <button type="button" onClick={onClose}>
-            x
+          <button type="button" onClick={onClose} aria-label="Close dialog">
+            &times;
           </button>
         </div>
         <div className="modal-skeleton modal-skeleton-grid">
-          <p className="modal-skeleton-copy">Loading live cartella availability...</p>
+          <p className="modal-skeleton-copy">Checking live cartella availability...</p>
           <div className="modal-skeleton-grid-blocks">
             {Array.from({ length: 24 }, (_, idx) => (
               <span key={`cartella-skeleton-${idx}`} className="modal-skeleton-block small" />
@@ -182,6 +182,7 @@ export default function CartellaModalContent({
           <div className="stake-chip">{selectedStake ? `${selectedStake.stake} Birr Per Card` : "0 Birr Per Card"}</div>
         </div>
         {cardRechargeLabel && <div className="modal-recharge-label">{cardRechargeLabel}</div>}
+        <p className="panel-subtitle">Your selected cartella stays reserved while this room screen remains open.</p>
         <article className="bingo-card">
           <h3 id="cartella-dialog-title">Card No. {preview.card_no}</h3>
           <div className="letters">
@@ -201,7 +202,7 @@ export default function CartellaModalContent({
         </article>
         <div className="modal-actions">
           <button className="secondary-btn" type="button" onClick={onBackToPick}>
-            Go Back
+            Choose Another Card
           </button>
           <button className={`primary-btn ${insufficientCardBalance ? "insufficient-buy-btn" : ""}`} type="button" disabled={working || insufficientCardBalance} onClick={onConfirm}>
             {buyLabel}
@@ -223,11 +224,12 @@ export default function CartellaModalContent({
             <h3 id="cartella-dialog-title">
               {selectedStake ? `${selectedStake.stake} Birr ${pickerRoom?.active_queue === "next" ? "Next Game Queue" : "Current Game"}` : "Choose Cartella"}
             </h3>
-            <button type="button" onClick={onClose}>
-              x
+            <button type="button" onClick={onClose} aria-label="Close dialog">
+              &times;
             </button>
           </div>
           {cardRechargeLabel && <div className="modal-recharge-label">{cardRechargeLabel}</div>}
+          <p className="panel-subtitle">Pick an available cartella, preview it, then confirm payment only when you are happy with the card.</p>
           <div className="cartella-details-lines">
             <div className="cartella-details-line primary">
               <span className={`cartella-pill countdown phase-${pickerPhase}`}>0:{String(Math.max(0, pickerCountdownValue)).padStart(2, "0")}</span>
@@ -262,7 +264,7 @@ export default function CartellaModalContent({
           </div>
           <div className="modal-actions">
             <button className="secondary-btn" type="button" onClick={onClose}>
-              Go Back
+              Back to Rooms
             </button>
             <button className="secondary-btn" type="button" onClick={onPreview} disabled={!selectedCartella || working}>
               {working ? "Loading..." : "Preview Card"}
