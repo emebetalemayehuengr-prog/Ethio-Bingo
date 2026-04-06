@@ -102,7 +102,19 @@ jobs:
           key: ${{ env.SSH_KEY }}
           passphrase: ${{ env.SSH_PASSPHRASE }}
           port: ${{ env.SSH_PORT }}
-          source: "frontend/dist/*,frontend/dist/.htaccess"
+          source: "frontend/dist/*"
+          target: ${{ env.SSH_FRONTEND_PATH }}
+          timeout: 300000
+
+      - name: Upload frontend SPA rewrite file
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
+          passphrase: ${{ env.SSH_PASSPHRASE }}
+          port: ${{ env.SSH_PORT }}
+          source: "frontend/dist/.htaccess"
           target: ${{ env.SSH_FRONTEND_PATH }}
           timeout: 300000
 
