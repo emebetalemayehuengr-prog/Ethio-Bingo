@@ -94,29 +94,6 @@ jobs:
             exit 1
           fi
 
-      - name: Package frontend bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          tar -czf frontend-dist.tgz -C frontend/dist .
-
-      - name: Package backend bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          tar \
-            --exclude='.env' \
-            --exclude='.venv' \
-            --exclude='data' \
-            --exclude='*.db' \
-            --exclude='*.pyc' \
-            --exclude='*.pyo' \
-            --exclude='*/__pycache__' \
-            --exclude='*/__pycache__/*' \
-            -czf backend-src.tgz \
-            -C backend \
-            .
-
       - name: Upload frontend to HahuCloud (SFTP)
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -125,33 +102,9 @@ jobs:
           key: ${{ env.SSH_KEY }}
           passphrase: ${{ env.SSH_PASSPHRASE }}
           port: ${{ env.SSH_PORT }}
-          source: "frontend-dist.tgz"
+          source: "frontend/dist/*,frontend/dist/.htaccess"
           target: ${{ env.SSH_FRONTEND_PATH }}
-          overwrite: true
           timeout: 300000
-
-      - name: Extract frontend bundle
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ env.SSH_HOST }}
-          username: ${{ env.SSH_USER }}
-          key: ${{ env.SSH_KEY }}
-          passphrase: ${{ env.SSH_PASSPHRASE }}
-          port: ${{ env.SSH_PORT }}
-          timeout: 300000
-          script_stop: true
-          script: |
-            set -e
-            FRONTEND_PATH="${{ env.SSH_FRONTEND_PATH }}"
-            ARCHIVE="$FRONTEND_PATH/frontend-dist.tgz"
-            if [ ! -f "$ARCHIVE" ]; then
-              echo "Missing archive: $ARCHIVE"
-              exit 1
-            fi
-            tar -xzf "$ARCHIVE" -C "$FRONTEND_PATH"
-            rm -f "$ARCHIVE"
-            test -f "$FRONTEND_PATH/index.html"
-            test -f "$FRONTEND_PATH/.htaccess"
 
       - name: Upload backend to HahuCloud (SFTP)
         uses: appleboy/scp-action@v0.1.7
@@ -161,12 +114,14 @@ jobs:
           key: ${{ env.SSH_KEY }}
           passphrase: ${{ env.SSH_PASSPHRASE }}
           port: ${{ env.SSH_PORT }}
+          source: "backend/**"
           target: ${{ env.SSH_BACKEND_PATH }}
-          source: "backend-src.tgz"
           overwrite: true
+          strip_components: 1
+          exclude: ".env,**/__pycache__/**,**/*.pyc,**/.venv/**,**/data/**,**/*.db"
           timeout: 300000
 
-      - name: Extract backend bundle and restart Passenger
+      - name: Restart backend app (Passenger)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ env.SSH_HOST }}
@@ -179,13 +134,10 @@ jobs:
           script: |
             set -e
             BACKEND_PATH="${{ env.SSH_BACKEND_PATH }}"
-            ARCHIVE="$BACKEND_PATH/backend-src.tgz"
-            if [ ! -f "$ARCHIVE" ]; then
-              echo "Missing archive: $ARCHIVE"
+            if [ ! -d "$BACKEND_PATH" ]; then
+              echo "Backend path not found: $BACKEND_PATH"
               exit 1
             fi
-            tar -xzf "$ARCHIVE" -C "$BACKEND_PATH"
-            rm -f "$ARCHIVE"
             mkdir -p "$BACKEND_PATH/tmp"
             touch "$BACKEND_PATH/tmp/restart.txt"
             test -f "$BACKEND_PATH/passenger_wsgi.py"
