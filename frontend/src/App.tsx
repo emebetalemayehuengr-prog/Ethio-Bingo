@@ -1,4 +1,5 @@
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { unstable_batchedUpdates } from "react-dom";
 import {
   approveAdminWithdrawRequest,
   claimBingo,
@@ -72,6 +73,8 @@ const LEGACY_THEME_STORAGE_KEY = "ethio_bingo_theme_mode";
 const LEGACY_BRAND_MODAL_STORAGE_KEY = "ethio_bingo_brand_modal_seen_at";
 const APP_BACK_GUARD_STATE_KEY = "__40bingo_back_guard";
 const CASINO_ENABLED = false;
+const NOTICE_TIMEOUT_MS = 3000;
+const CARD_RECHARGE_LABEL_TIMEOUT_MS = 2500;
 
 const services: Array<{ view: ServiceView; label: string }> = [
   { view: "home", label: "Home" },
@@ -876,7 +879,7 @@ export default function App() {
 
   useEffect(() => {
     if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(""), 4500);
+    const timer = window.setTimeout(() => setNotice(""), NOTICE_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [notice]);
 
@@ -1476,7 +1479,7 @@ export default function App() {
 
   useEffect(() => {
     if (!cardRechargeLabel) return;
-    const timer = window.setTimeout(() => setCardRechargeLabel(""), 7000);
+    const timer = window.setTimeout(() => setCardRechargeLabel(""), CARD_RECHARGE_LABEL_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [cardRechargeLabel]);
 
@@ -1691,14 +1694,39 @@ export default function App() {
         res.card && !returnedCards.some((item) => item.card_no === res.card.card_no)
           ? [...returnedCards, res.card]
           : returnedCards;
-      setCards(mergedCards);
-      setSelectedCardNo(res.card?.card_no ?? selectedCartella);
-      setNotice(res.message);
-      void refreshHistory();
-      if (res.room.phase === "playing" && res.queue !== "next") {
-        setCartellaOpen(false);
-        setService("game");
+      const purchasedForCurrentQueue = res.queue !== "next";
+      const purchasedCardNo = res.card?.card_no ?? selectedCartella;
+      
+      if (!res.card && !selectedCartella) {
+        throw new Error("No card available for selection");
       }
+      
+      setCards(mergedCards);
+      
+      if (purchasedForCurrentQueue) {
+        setSelectedCardNo(purchasedCardNo);
+        setSelectedCartella(null);
+      } else {
+        setSelectedCartella(purchasedCardNo);
+      }
+      
+      setNotice(
+        purchasedForCurrentQueue
+          ? res.room?.phase === "selecting"
+            ? "Card purchased. Opening your board while the game countdown finishes."
+            : res.message
+          : "Card booked for next game. Your number is now marked in blue.",
+      );
+      void refreshHistory();
+      
+      unstable_batchedUpdates(() => {
+        setCartellaStep("pick");
+        setPreview(null);
+        if (purchasedForCurrentQueue) {
+          setCartellaOpen(false);
+          setService("game");
+        }
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to confirm cartella");
     } finally {
