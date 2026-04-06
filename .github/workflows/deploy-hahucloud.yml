@@ -1,0 +1,59 @@
+name: Deploy to HahuCloud
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+        
+    - name: Install dependencies
+      run: |
+        cd frontend
+        npm ci
+        
+    - name: Clean and Build frontend
+      run: |
+        cd frontend
+        rm -rf dist node_modules/.cache
+        npm ci
+        npm run build
+        
+    - name: Verify build contains Amharic
+      run: |
+        echo "Checking for Amharic translations in built files..."
+        if grep -q "ዋና\|ክፍያ\|መውሰድ" frontend/dist/assets/index-*.js; then
+          echo "✅ Amharic translations found in build"
+        else
+          echo "❌ Amharic translations NOT found in build"
+          exit 1
+        fi
+        
+    - name: Deploy to HahuCloud via FTP
+      uses: SamKirkland/FTP-Deploy-Action@4.3.0
+      with:
+        server: ${{ secrets.FTP_SERVER }}
+        username: ${{ secrets.FTP_USERNAME }}
+        password: ${{ secrets.FTP_PASSWORD }}
+        local-dir: frontend/dist/
+        server-dir: /public_html/
+        exclude: ""
+        log-level: verbose
+        timeout: 300000
+        
+    - name: Clear cache (if available)
+      run: |
+        echo "Deployment completed. Cache may take a few minutes to clear."
