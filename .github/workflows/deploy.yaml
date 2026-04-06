@@ -104,7 +104,7 @@ jobs:
           port: ${{ secrets.SSH_PORT || '22' }}
           source: "frontend/dist/*"
           target: ${{ secrets.SSH_FRONTEND_PATH }}
-          timeout: 300000
+          timeout: 5m
 
       - name: Upload frontend SPA rewrite file
         uses: appleboy/scp-action@v0.1.7
@@ -116,7 +116,7 @@ jobs:
           port: ${{ secrets.SSH_PORT || '22' }}
           source: "frontend/dist/.htaccess"
           target: ${{ secrets.SSH_FRONTEND_PATH }}
-          timeout: 300000
+          timeout: 5m
 
       - name: Upload backend to HahuCloud (SFTP)
         uses: appleboy/scp-action@v0.1.7
@@ -131,7 +131,7 @@ jobs:
           overwrite: true
           strip_components: 1
           exclude: ".env,**/__pycache__/**,**/*.pyc,**/.venv/**,**/data/**,**/*.db"
-          timeout: 300000
+          timeout: 5m
 
       - name: Restart backend app (Passenger)
         uses: appleboy/ssh-action@v1.0.3
@@ -141,7 +141,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
           passphrase: ${{ secrets.SSH_PASSPHRASE }}
           port: ${{ secrets.SSH_PORT || '22' }}
-          timeout: 300000
+          timeout: 5m
           script_stop: true
           script: |
             set -e
