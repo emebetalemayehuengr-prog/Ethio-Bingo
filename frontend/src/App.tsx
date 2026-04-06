@@ -73,7 +73,7 @@ const LEGACY_THEME_STORAGE_KEY = "ethio_bingo_theme_mode";
 const LEGACY_BRAND_MODAL_STORAGE_KEY = "ethio_bingo_brand_modal_seen_at";
 const APP_BACK_GUARD_STATE_KEY = "__40bingo_back_guard";
 const CASINO_ENABLED = false;
-const NOTICE_TIMEOUT_MS = 2000;
+const NOTICE_TIMEOUT_MS = 2000; // Reduced for better UX
 const CARD_RECHARGE_LABEL_TIMEOUT_MS = 2500;
 
 const services: Array<{ view: ServiceView; label: string }> = [
