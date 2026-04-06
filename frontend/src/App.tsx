@@ -73,7 +73,7 @@ const LEGACY_THEME_STORAGE_KEY = "ethio_bingo_theme_mode";
 const LEGACY_BRAND_MODAL_STORAGE_KEY = "ethio_bingo_brand_modal_seen_at";
 const APP_BACK_GUARD_STATE_KEY = "__40bingo_back_guard";
 const CASINO_ENABLED = false;
-const NOTICE_TIMEOUT_MS = 3000;
+const NOTICE_TIMEOUT_MS = 2000;
 const CARD_RECHARGE_LABEL_TIMEOUT_MS = 2500;
 
 const services: Array<{ view: ServiceView; label: string }> = [
@@ -1165,35 +1165,44 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const dash = await fetchDashboard();
-      setDashboard(dash);
-      setProfile(dash.user);
-      if (dash.deposit_methods.length > 0) {
-        setMethodCode((prev) => (dash.deposit_methods.some((method) => method.code === prev) ? prev : dash.deposit_methods[0].code));
+      // Parallel API calls for better performance
+      const [dashResult, historyResult, betHistoryResult, casinoResult] = await Promise.allSettled([
+        fetchDashboard(),
+        fetchHistory().catch(() => null),
+        safeFetchBetHistory().catch(() => null),
+        fetchCasinoGames().catch(() => null)
+      ]);
+
+      // Process dashboard result
+      if (dashResult.status === "fulfilled") {
+        const dash = dashResult.value;
+        setDashboard(dash);
+        setProfile(dash.user);
+        if (dash.deposit_methods.length > 0) {
+          setMethodCode((prev) => (dash.deposit_methods.some((method) => method.code === prev) ? prev : dash.deposit_methods[0].code));
+        }
       }
 
-      void fetchHistory()
-        .then((hist) => setHistory(hist.items))
-        .catch(() => {
-          // Avoid blocking core dashboard data on history failures.
-        });
+      // Process history result
+      if (historyResult.status === "fulfilled" && historyResult.value) {
+        setHistory(historyResult.value.items);
+      }
 
-      void safeFetchBetHistory()
-        .then((betHist) => setBetHistory(betHist.items))
-        .catch(() => {
-          // keep existing history if it fails
-        });
+      // Process bet history result
+      if (betHistoryResult.status === "fulfilled" && betHistoryResult.value) {
+        setBetHistory(betHistoryResult.value.items);
+      }
 
-      void fetchCasinoGames()
-        .then((casino) => {
-          const items = casino.items.length > 0 ? casino.items : fallbackCasinoGames;
-          setCasinoGames(items);
-          setCasinoCatalogNotice(casino.items.length > 0 ? "" : "Showing cached casino lineup.");
-        })
-        .catch(() => {
-          setCasinoGames(fallbackCasinoGames);
-          setCasinoCatalogNotice("Showing cached casino lineup.");
-        });
+      // Process casino result
+      if (casinoResult.status === "fulfilled" && casinoResult.value) {
+        const casino = casinoResult.value;
+        const items = casino.items.length > 0 ? casino.items : fallbackCasinoGames;
+        setCasinoGames(items);
+        setCasinoCatalogNotice(casino.items.length > 0 ? "" : "Showing cached casino lineup.");
+      } else {
+        setCasinoGames(fallbackCasinoGames);
+        setCasinoCatalogNotice("Showing cached casino lineup.");
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to load data";
       setError(message);
@@ -1222,6 +1231,8 @@ export default function App() {
       games: prev?.games ?? [],
     }));
     setNotice(successMessage);
+    setAuthNotice(""); // Clear auth notice
+    setAuthError("");  // Clear auth error
     setAuthName("");
     setAuthPhone(normalizedPhone);
     if (!rememberPassword) {
@@ -1230,6 +1241,7 @@ export default function App() {
     setAuthMode("login");
     setDrawerOpen(false);
     setService("home");
+    setLoading(true); // Show loading during data load
     void loadData();
   };
 
@@ -1575,6 +1587,7 @@ export default function App() {
       // no-op
     }
     clearAuthToken();
+    // Reset ALL state
     setProfile(null);
     setDashboard(null);
     setHistory([]);
@@ -1588,6 +1601,18 @@ export default function App() {
     setService("home");
     setDrawerOpen(false);
     setShowBrandModal(false);
+    // Add missing resets
+    setLoading(false);
+    setWorking(false);
+    setError("");
+    setNotice("");
+    setAuthNotice("");
+    setAuthError("");
+    setAuthMode("login");
+    setAuthName("");
+    setAuthPhone("");
+    setAuthPassword("");
+    setRememberPassword(false);
   };
 
   const onOpenStake = async (stake: StakeOption) => {
@@ -1745,13 +1770,13 @@ export default function App() {
       const directTxNo = normalizeTransactionNumberInput(txNo);
       const inferredTxNo = extractTransactionNumber(receiptText);
       const transactionNumber = directTxNo || inferredTxNo;
-      if (!selectedMethod) throw new Error("Select a deposit method first.");
-      if (!amount || amount <= 0) throw new Error("Enter valid amount.");
-      if (!receiptText) throw new Error("Paste receipt message so recipient account can be verified.");
+      if (!selectedMethod) throw new Error("እባክዎ የክፍያ ዘዴውን ይምረጡ።");
+      if (!amount || amount <= 0) throw new Error("ዋጋ ያለው መጠን ያስገቡ።");
+      if (!receiptText) throw new Error("የተቀበለውን መለያ ለማረጋገጥ የክፍያ ደረሰታ መልእክኛ ይለጥፉ።");
       if (!hasAssignedRecipientInReceipt(receiptText, selectedMethod.transfer_accounts)) {
-        throw new Error("Receipt must show one assigned receiver number or name.");
+        throw new Error("የደረሰታው መልእክኛ አንድ የተመደበ የተቀበለው ስልክ ቁጥር ወይም የባለሙያ ስም መያዝ አለበት።");
       }
-      if (transactionNumber.length < 3) throw new Error("Enter valid transaction number or paste the receipt message.");
+      if (transactionNumber.length < 3) throw new Error("ዋጋ ያለው የግብይት ቁጥር ያስገቡ ወይም የደረሰታ መልእክኛውን ይለጥፉ።");
       const res = await submitDeposit({
         method: methodCode,
         amount,
@@ -1766,7 +1791,7 @@ export default function App() {
       setDepositGuideOpen(false);
       await refreshHistory();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Deposit failed");
+      setError(err instanceof Error ? err.message : "ክፍያው አልተሳካም");
     } finally {
       setWorking(false);
     }
@@ -1778,9 +1803,9 @@ export default function App() {
     setError("");
     try {
       const amount = Number(transferAmount);
-      if (!amount || amount <= 0) throw new Error("Enter valid transfer amount.");
-      if (!transferPhone.trim()) throw new Error("Enter recipient phone number.");
-      if (!/^\d{4,6}$/.test(transferOtp.trim())) throw new Error("Enter valid OTP (4 to 6 digits).");
+      if (!amount || amount <= 0) throw new Error("ዋጋ ያለው የማስተላለፊያ መጠን ያስገቡ።");
+      if (!transferPhone.trim()) throw new Error("የተቀበለውን ስልክ ቁጥር ያስገቡ።");
+      if (!/^\d{4,6}$/.test(transferOtp.trim())) throw new Error("ዋጋ ያለው ኦቲፒ (ከ4 እስከ 6 አሃዝ) ያስገቡ።");
       const res = await submitTransfer({
         phone_number: transferPhone.trim(),
         amount,
@@ -1793,7 +1818,7 @@ export default function App() {
       setTransferOtp("");
       await refreshHistory();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Transfer failed");
+      setError(err instanceof Error ? err.message : "ማስተላለፊያው አልተሳካም");
     } finally {
       setWorking(false);
     }
@@ -1805,9 +1830,9 @@ export default function App() {
     setError("");
     try {
       const amount = Number(withdrawAmount);
-      if (!amount || amount <= 0) throw new Error("Enter valid withdraw amount.");
-      if (!withdrawAccountNumber.trim()) throw new Error("Enter account number.");
-      if (!withdrawAccountHolder.trim()) throw new Error("Enter account holder name.");
+      if (!amount || amount <= 0) throw new Error("ዋጋ ያለው መጠን ያስገቡ።");
+      if (!withdrawAccountNumber.trim()) throw new Error("የመለያ ቁጥር ያስገቡ።");
+      if (!withdrawAccountHolder.trim()) throw new Error("የመለያ ባለቤት ስም ያስገቡ።");
       const res = await submitWithdraw({
         bank: withdrawBank,
         account_number: withdrawAccountNumber.trim(),
@@ -1819,7 +1844,7 @@ export default function App() {
       setWithdrawAmount("50");
       await refreshHistory();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Withdraw failed");
+      setError(err instanceof Error ? err.message : "መውሰድ አልተሳካም");
     } finally {
       setWorking(false);
     }
@@ -2839,26 +2864,26 @@ export default function App() {
         {service === "wallet" && (
           <section className="panel wallet-panel">
             <h2>Wallet</h2>
-            <p className="panel-subtitle">Withdraw requests notify admin by email for manual bank payout.</p>
+            <p className="panel-subtitle">የመውሰድ ጥያቄዎች አስተዳዳሪውን በኢሜይል ለእውቅዳለቅ የባንክ ክፍያ ለማድረግ ያሳውቁታል።</p>
             <div className="balance-row">
               <div className="balance-card">
-                <h3>Main Balance</h3>
+                <h3>ዋና ሂሳብ</h3>
                 <strong>{fmtEtb(wallet.main_balance)}</strong>
               </div>
               <div className="balance-card">
-                <h3>Bonus Balance</h3>
+                <h3>ቦነስ ሂሳብ</h3>
                 <strong>{fmtEtb(wallet.bonus_balance)}</strong>
               </div>
             </div>
             <div className="wallet-tabs">
               <button className={`wallet-tab ${walletTab === "deposit" ? "active" : ""}`} type="button" onClick={() => setWalletTab("deposit")}>
-                Deposit
+                ክፍያ
               </button>
               <button className={`wallet-tab ${walletTab === "withdraw" ? "active" : ""}`} type="button" onClick={() => setWalletTab("withdraw")}>
-                Withdraw
+                መውሰድ
               </button>
               <button className={`wallet-tab ${walletTab === "transfer" ? "active" : ""}`} type="button" onClick={() => setWalletTab("transfer")}>
-                Transfer
+                ማስተላለፊያ
               </button>
               <button className={`wallet-tab ${walletTab === "history" ? "active" : ""}`} type="button" onClick={() => setWalletTab("history")}>
                 History
@@ -2883,7 +2908,7 @@ export default function App() {
                   ))}
                 </div>
                 <button className="primary-btn" type="button" onClick={() => setDepositGuideOpen(true)}>
-                  Open Deposit Guide
+                  የክፍያ መመሪያን ይክፈቱ
                 </button>
               </div>
             )}
@@ -2891,28 +2916,28 @@ export default function App() {
             {walletTab === "withdraw" && (
               <form className="wallet-form wallet-subpanel" onSubmit={onWithdraw}>
                 <label>
-                  Bank
+                  ባንክ
                   <select value={withdrawBank} onChange={(event) => setWithdrawBank(event.target.value)}>
-                    <option value="CBE">CBE</option>
-                    <option value="Awash">Awash</option>
-                    <option value="Dashen">Dashen</option>
-                    <option value="BOA">Bank of Abyssinia</option>
+                    <option value="CBE">ኢኮሚያ</option>
+                    <option value="Awash">አዋሽ</option>
+                    <option value="Dashen">ዳሸን</option>
+                    <option value="BOA">ባንክ ኦፍ አቢሲኒያ</option>
                   </select>
                 </label>
                 <label>
-                  Account Number
-                  <input value={withdrawAccountNumber} onChange={(event) => setWithdrawAccountNumber(event.target.value)} placeholder="Enter account number" />
+                  የመለያ ቁጥር
+                  <input value={withdrawAccountNumber} onChange={(event) => setWithdrawAccountNumber(event.target.value)} placeholder="የመለያ ቁጥር ያስገቡ" />
                 </label>
                 <label>
-                  Account Holder
-                  <input value={withdrawAccountHolder} onChange={(event) => setWithdrawAccountHolder(event.target.value)} placeholder="Enter account holder name" />
+                  የመለያ ባለቤት
+                  <input value={withdrawAccountHolder} onChange={(event) => setWithdrawAccountHolder(event.target.value)} placeholder="የመለያ ባለቤት ስም ያስገቡ" />
                 </label>
                 <label>
-                  Amount
+                  መጠን
                   <input type="number" min={3} value={withdrawAmount} onChange={(event) => setWithdrawAmount(event.target.value)} />
                 </label>
                 <button className="primary-btn" type="submit" disabled={working}>
-                  {working ? "Submitting..." : "Manual Withdraw"}
+                  {working ? "በማስገባት ላይ..." : "እጅ መውሰድ"}
                 </button>
               </form>
             )}
@@ -2920,19 +2945,19 @@ export default function App() {
             {walletTab === "transfer" && (
               <form className="wallet-form wallet-subpanel" onSubmit={onTransfer}>
                 <label>
-                  Phone Number
+                  ስልክ ቁጥር
                   <input value={transferPhone} onChange={(event) => setTransferPhone(event.target.value)} placeholder="09xxxxxxxx" />
                 </label>
                 <label>
-                  Amount
+                  መጠን
                   <input type="number" min={1} value={transferAmount} onChange={(event) => setTransferAmount(event.target.value)} />
                 </label>
                 <label>
-                  OTP
-                  <input value={transferOtp} onChange={(event) => setTransferOtp(event.target.value)} placeholder="Enter OTP" />
+                  ኦቲፒ
+                  <input value={transferOtp} onChange={(event) => setTransferOtp(event.target.value)} placeholder="ኦቲፒ ያስገቡ" />
                 </label>
                 <button className="primary-btn" type="submit" disabled={working}>
-                  {working ? "Transferring..." : "Transfer Balance"}
+                  {working ? "በማስተላለፊያ ላይ..." : "ቀሪ ሂሳብን ያስተላልፉ"}
                 </button>
               </form>
             )}

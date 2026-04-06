@@ -71,7 +71,7 @@ export default function DepositModalContent({
               }}
             />
           ) : null}
-          <p className="panel-subtitle">Follow steps below and submit receipt info. Receiver account is verified against assigned personnel.</p>
+          <p className="panel-subtitle">ከዚህ በታች ያሉትን ደረጃዎች ይከተሉ እና የተቀበለውን ደረሰታ መረጃ ያስገቡ። የተቀበለው መለያ ከተመደቡት ሰራተኛ ጋር ይረጋገጣል።</p>
           <ol>
             {selectedMethod.instruction_steps.map((step) => (
               <li key={step}>{step}</li>
@@ -82,13 +82,13 @@ export default function DepositModalContent({
               ? selectedMethodDraftAccounts.map((account, idx) => (
                   <div key={`${selectedMethod.code}-draft-${idx}`} className="account-box admin-edit">
                     <input value={account.phone_number} onChange={(event) => onDraftPhoneChange(idx, event.target.value)} placeholder="09XXXXXXXX" />
-                    <input value={account.owner_name} onChange={(event) => onDraftOwnerChange(idx, event.target.value)} placeholder="Owner name" />
+                    <input value={account.owner_name} onChange={(event) => onDraftOwnerChange(idx, event.target.value)} placeholder="የባለሙያ ስም" />
                     <div className="admin-inline-actions">
                       <button className="secondary-btn copy-btn" type="button" disabled={!account.phone_number.trim()} onClick={() => onCopyPhone(account.phone_number.trim())}>
-                        {copiedPhone === account.phone_number.trim() ? "Copied" : "Copy"}
+                        {copiedPhone === account.phone_number.trim() ? "ተቀድቷል" : "ኮፒ"}
                       </button>
                       <button className="secondary-btn" type="button" onClick={() => onRemoveDraftAccount(idx)}>
-                        Remove
+                        አስወግድ
                       </button>
                     </div>
                   </div>
@@ -98,7 +98,7 @@ export default function DepositModalContent({
                     <span>{account.phone_number}</span>
                     <small>{account.owner_name}</small>
                     <button className="secondary-btn copy-btn" type="button" onClick={() => onCopyPhone(account.phone_number)}>
-                      {copiedPhone === account.phone_number ? "Copied" : "Copy"}
+                      {copiedPhone === account.phone_number ? "ተቀድቷል" : "ኮፒ"}
                     </button>
                   </div>
                 ))}
@@ -106,20 +106,20 @@ export default function DepositModalContent({
           {isAdmin && (
             <div className="deposit-admin-actions">
               <button className="secondary-btn" type="button" onClick={onAddDraftAccount}>
-                Add Number
+                ቁጥር ይጨምሩ
               </button>
               <button className="primary-btn" type="button" disabled={working} onClick={() => onSaveAccounts(selectedMethod.code)}>
-                {working ? "Saving..." : "Save Numbers"}
+                {working ? "በማስቀመጥ ላይ..." : "ቁጥሮችን ያስቀምጡ"}
               </button>
             </div>
           )}
           <form className="wallet-form" onSubmit={onSubmit}>
             <label>
-              Amount
+              መጠን
               <input type="number" min={1} value={depositAmount} onChange={(event) => onDepositAmountChange(event.target.value)} />
             </label>
             <label>
-              Transaction Number
+              የግብይት ቁጥር
               <input
                 value={txNo}
                 inputMode="text"
@@ -131,26 +131,26 @@ export default function DepositModalContent({
               />
             </label>
             <label>
-              Message
+              መልእክኛ
               <textarea
                 required
                 rows={5}
                 value={receiptMessage}
-                placeholder="Paste payment SMS or receipt message here"
+                placeholder="የክፍያ ኤስኤምኤስ ወይም የደረሰታ መልእክኛ እዚህ ያስገቡ"
                 spellCheck={false}
                 onChange={(event) => onReceiptChange(event.target.value)}
               />
             </label>
-            <small className="receipt-tip">We auto-detect the transaction number from the receipt when possible.</small>
-            <small>Receipt message must include one assigned receiver phone number or owner name.</small>
+            <small className="receipt-tip">ከደረሰታው የግብይት ቁጥር በሚቻልበት ጊዜ በራሱ እንዲገኝ እናደርጋለን።</small>
+            <small>የደረሰታ መልእክኛ አንድ የተመደበ የተቀበለው ስልክ ቁጥር ወይም የባለሙያ ስም መስገል አለበት።</small>
             <button className="primary-btn" type="submit" disabled={working}>
-              {working ? "Submitting..." : "Submit Deposit"}
+              {working ? "በማስገባት ላይ..." : "ክፍያን ያስገቡ"}
             </button>
           </form>
         </>
       ) : (
         <div className="modal-skeleton">
-          <p className="modal-skeleton-copy">Loading deposit instructions...</p>
+          <p className="modal-skeleton-copy">የክፍያ መመሪያዎችን በማስቀመጥ ላይ...</p>
           <div className="modal-skeleton-stack">
             {Array.from({ length: 5 }, (_, idx) => (
               <span key={`deposit-skeleton-${idx}`} className="modal-skeleton-block" />
