@@ -119,7 +119,7 @@ jobs:
             .
 
       - name: Prepare remote directories
-        uses: appleboy/ssh-action@v1.1.4
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
@@ -135,7 +135,7 @@ jobs:
             mkdir -p "${{ env.SSH_BACKEND_PATH }}/tmp"
 
       - name: Upload frontend to HahuCloud (SFTP)
-        uses: appleboy/scp-action@v1.1.4
+        uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
@@ -148,7 +148,7 @@ jobs:
           timeout: 300000
 
       - name: Extract frontend bundle
-        uses: appleboy/ssh-action@v1.1.4
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
@@ -171,7 +171,7 @@ jobs:
             test -f "$FRONTEND_PATH/.htaccess"
 
       - name: Upload backend to HahuCloud (SFTP)
-        uses: appleboy/scp-action@v1.1.4
+        uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
@@ -184,7 +184,7 @@ jobs:
           timeout: 300000
 
       - name: Extract backend bundle and restart Passenger
-        uses: appleboy/ssh-action@v1.1.4
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
