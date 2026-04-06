@@ -104,6 +104,7 @@ jobs:
           port: ${{ secrets.SSH_PORT || '22' }}
           source: "frontend/dist/*"
           target: ${{ secrets.SSH_FRONTEND_PATH }}
+          strip_components: 2
           timeout: 5m
 
       - name: Upload frontend SPA rewrite file
@@ -116,6 +117,7 @@ jobs:
           port: ${{ secrets.SSH_PORT || '22' }}
           source: "frontend/dist/.htaccess"
           target: ${{ secrets.SSH_FRONTEND_PATH }}
+          strip_components: 2
           timeout: 5m
 
       - name: Upload backend to HahuCloud (SFTP)
