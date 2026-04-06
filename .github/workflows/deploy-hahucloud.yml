@@ -56,7 +56,6 @@ jobs:
         server-dir: public_html/
         exclude: ""
         log-level: verbose
-        timeout: 300000
         
     - name: Verify deployment
       run: |
