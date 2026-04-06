@@ -6,6 +6,30 @@ This guide assumes:
 - Backend is hosted on `https://api.40bingo.com`
 - You are using HahuCloud shared hosting with cPanel.
 
+## 0) GitHub Actions Deploy Automation
+
+The repo deploy automation lives in `.github/workflows/deploy.yaml`.
+
+Expected GitHub repository secrets:
+
+- `SSH_HOST`
+- `SSH_USER`
+- `SSH_PRIVATE_KEY` or legacy `SSH_KEY`
+- `SSH_PORT` (optional, defaults to `22`)
+- `SSH_FRONTEND_PATH` (for example `public_html`)
+- `SSH_BACKEND_PATH` (for example `/home/<cpanel-user>/apps/40bingo-backend`)
+- `VITE_API_BASE` (for example `https://api.40bingo.com`)
+- `RUNTIME_API_BASE` (optional runtime override for `runtime-config.js`)
+- `SSH_PASSPHRASE` only if the private key is encrypted
+
+Workflow behavior:
+
+1. Builds the frontend.
+2. Verifies `index.html`, `.htaccess`, and `runtime-config.js` are present in `frontend/dist/`.
+3. Installs backend requirements and validates the FastAPI app can import.
+4. Uploads tar archives over SFTP so hidden files and directory layout are preserved.
+5. Extracts the archives on the server, touches `tmp/restart.txt`, and checks `/api/health`.
+
 ## 1) Backend (FastAPI) via cPanel Python Selector
 
 1. Upload `backend/` to your hosting account (for example: `~/apps/40bingo-backend`).
