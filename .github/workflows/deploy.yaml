@@ -17,14 +17,14 @@ jobs:
       contents: read
     env:
       VITE_API_BASE: ${{ secrets.VITE_API_BASE }}
-      RUNTIME_API_BASE: ${{ secrets.RUNTIME_API_BASE }}
-      SSH_HOST: ${{ secrets.SSH_HOST }}
-      SSH_USER: ${{ secrets.SSH_USER }}
-      SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
+      RUNTIME_API_BASE: ${{ secrets.RUNTIME_API_BASE || secrets.VITE_API_BASE }}
+      SSH_HOST: ${{ secrets.SSH_HOST || secrets.CPANEL_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER || secrets.CPANEL_USER }}
+      SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY || secrets.DEPLOY_SSH_KEY }}
       SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
-      SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
-      SSH_FRONTEND_PATH: ${{ secrets.SSH_FRONTEND_PATH }}
-      SSH_BACKEND_PATH: ${{ secrets.SSH_BACKEND_PATH }}
+      SSH_PORT: ${{ secrets.SSH_PORT || secrets.CPANEL_PORT || '22' }}
+      SSH_FRONTEND_PATH: ${{ secrets.SSH_FRONTEND_PATH || secrets.CPANEL_FRONTEND_PATH }}
+      SSH_BACKEND_PATH: ${{ secrets.SSH_BACKEND_PATH || secrets.CPANEL_BACKEND_PATH }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -97,11 +97,11 @@ jobs:
       - name: SSH handshake to cPanel (diagnostic)
         uses: appleboy/ssh-action@v1.2.5
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
-          passphrase: ${{ secrets.SSH_PASSPHRASE }}
-          port: ${{ secrets.SSH_PORT || '22' }}
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
+          passphrase: ${{ env.SSH_PASSPHRASE }}
+          port: ${{ env.SSH_PORT }}
           timeout: 2m
           command_timeout: 1m
           script: |
@@ -127,13 +127,13 @@ jobs:
       - name: Upload frontend to HahuCloud (SCP recursive)
         uses: appleboy/scp-action@v1.0.0
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
-          passphrase: ${{ secrets.SSH_PASSPHRASE }}
-          port: ${{ secrets.SSH_PORT || '22' }}
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
+          passphrase: ${{ env.SSH_PASSPHRASE }}
+          port: ${{ env.SSH_PORT }}
           source: "frontend/dist/"
-          target: ${{ secrets.SSH_FRONTEND_PATH }}
+          target: ${{ env.SSH_FRONTEND_PATH }}
           strip_components: 2
           overwrite: true
           timeout: 5m
@@ -142,13 +142,13 @@ jobs:
       - name: Upload backend to HahuCloud (SCP recursive)
         uses: appleboy/scp-action@v1.0.0
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
-          passphrase: ${{ secrets.SSH_PASSPHRASE }}
-          port: ${{ secrets.SSH_PORT || '22' }}
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
+          passphrase: ${{ env.SSH_PASSPHRASE }}
+          port: ${{ env.SSH_PORT }}
           source: "backend/"
-          target: ${{ secrets.SSH_BACKEND_PATH }}
+          target: ${{ env.SSH_BACKEND_PATH }}
           overwrite: true
           strip_components: 1
           timeout: 5m
@@ -157,17 +157,17 @@ jobs:
       - name: Verify deploy landed on server (revision files)
         uses: appleboy/ssh-action@v1.2.5
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
-          passphrase: ${{ secrets.SSH_PASSPHRASE }}
-          port: ${{ secrets.SSH_PORT || '22' }}
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
+          passphrase: ${{ env.SSH_PASSPHRASE }}
+          port: ${{ env.SSH_PORT }}
           timeout: 2m
           command_timeout: 1m
           script: |
             set -euo pipefail
-            FE="${{ secrets.SSH_FRONTEND_PATH }}"
-            BE="${{ secrets.SSH_BACKEND_PATH }}"
+            FE="${{ env.SSH_FRONTEND_PATH }}"
+            BE="${{ env.SSH_BACKEND_PATH }}"
             WANT="${{ github.sha }}"
             test -f "$FE/.deploy-revision"
             test -f "$BE/.deploy-revision"
@@ -178,16 +178,16 @@ jobs:
       - name: Restart backend app (Passenger)
         uses: appleboy/ssh-action@v1.2.5
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
-          passphrase: ${{ secrets.SSH_PASSPHRASE }}
-          port: ${{ secrets.SSH_PORT || '22' }}
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
+          passphrase: ${{ env.SSH_PASSPHRASE }}
+          port: ${{ env.SSH_PORT }}
           timeout: 5m
           command_timeout: 2m
           script: |
             set -e
-            BACKEND_PATH="${{ secrets.SSH_BACKEND_PATH }}"
+            BACKEND_PATH="${{ env.SSH_BACKEND_PATH }}"
             if [ ! -d "$BACKEND_PATH" ]; then
               echo "Backend path not found: $BACKEND_PATH"
               exit 1
