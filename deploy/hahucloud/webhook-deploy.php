@@ -117,6 +117,7 @@ try {
     run_command("git -C {$repoArg} fetch --prune origin {$branchArg}");
     run_command("git -C {$repoArg} reset --hard origin/{$allowedBranch}");
     run_command("cd {$repoArg} && npm ci --prefix frontend");
+    run_command("echo 'window.__RUNTIME_CONFIG__ = { API_BASE: \"https://api.40bingo.com\" };' > {$repoArg}/frontend/public/runtime-config.js");
     run_command("cd {$repoArg} && npm run build --prefix frontend");
     run_command("rsync -a --delete {$distArg} {$publicArg}");
 
