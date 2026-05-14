@@ -94,8 +94,22 @@ jobs:
             exit 1
           fi
 
+      - name: SSH handshake to cPanel (diagnostic)
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          timeout: 2m
+          command_timeout: 1m
+          script: |
+            set -e
+            echo "github_actions_ssh_ok user=$(whoami) host=$(hostname -f 2>/dev/null || hostname)"
+
       - name: Upload frontend to HahuCloud (SFTP)
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -106,9 +120,10 @@ jobs:
           target: ${{ secrets.SSH_FRONTEND_PATH }}
           strip_components: 2
           timeout: 5m
+          command_timeout: 10m
 
       - name: Upload frontend SPA rewrite file
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -119,9 +134,19 @@ jobs:
           target: ${{ secrets.SSH_FRONTEND_PATH }}
           strip_components: 2
           timeout: 5m
+          command_timeout: 10m
+
+      - name: Sanitize backend tree for upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          find backend -type d -name __pycache__ -print0 2>/dev/null | xargs -0r rm -rf
+          find backend -type f -name '*.pyc' -delete 2>/dev/null || true
+          rm -rf backend/.venv
+          rm -f backend/.env backend/data/*.db 2>/dev/null || true
 
       - name: Upload backend to HahuCloud (SFTP)
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -132,11 +157,11 @@ jobs:
           target: ${{ secrets.SSH_BACKEND_PATH }}
           overwrite: true
           strip_components: 1
-          exclude: ".env,**/__pycache__/**,**/*.pyc,**/.venv/**,**/data/**,**/*.db"
           timeout: 5m
+          command_timeout: 15m
 
       - name: Restart backend app (Passenger)
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -144,10 +169,10 @@ jobs:
           passphrase: ${{ secrets.SSH_PASSPHRASE }}
           port: ${{ secrets.SSH_PORT || '22' }}
           timeout: 5m
-          script_stop: true
+          command_timeout: 2m
           script: |
             set -e
-            BACKEND_PATH="${{ env.SSH_BACKEND_PATH }}"
+            BACKEND_PATH="${{ secrets.SSH_BACKEND_PATH }}"
             if [ ! -d "$BACKEND_PATH" ]; then
               echo "Backend path not found: $BACKEND_PATH"
               exit 1

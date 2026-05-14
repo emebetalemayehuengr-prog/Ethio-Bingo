@@ -22,12 +22,28 @@ Expected GitHub repository secrets:
 - `RUNTIME_API_BASE` (optional runtime override for `runtime-config.js`)
 - `SSH_PASSPHRASE` only if the private key is encrypted
 
+### When GitHub Actions cannot reach cPanel (SSH/SFTP fails)
+
+The workflow runs on GitHub-hosted runners. If uploads never land on the server, open the failed job log and match the error to the checks below.
+
+1. **Secrets and key format** — In **Settings → Secrets and variables → Actions**, confirm `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY` (or `SSH_KEY`), `SSH_FRONTEND_PATH`, and `SSH_BACKEND_PATH` still exist. The private key must be the full PEM/OpenSSH block (`-----BEGIN` … `-----END`) with normal newlines. Prefer an **ed25519** deploy key; legacy RSA may require host-side `CASignatureAlgorithms +ssh-rsa` (see [appleboy/scp-action](https://github.com/appleboy/scp-action) SSH notes).
+
+2. **Host, port, and paths** — `SSH_HOST` must be a hostname or IP (not `https://`). Set **`SSH_PORT`** if SSH is not on port 22. Use an **absolute** path for `SSH_BACKEND_PATH` (for example `/home/cpaneluser/apps/40bingo-backend`). For the site root, `SSH_FRONTEND_PATH` is often `public_html` or an absolute path under `/home/...`.
+
+3. **Firewall / IP allowlists** — Some hosts only allow SSH from fixed IPs. GitHub Actions egress ranges are listed under `actions` in [api.github.com/meta](https://api.github.com/meta). Allow those ranges for SSH, or temporarily relax the allowlist to confirm.
+
+4. **Server-side SSH** — In cPanel **SSH Access**, install the **public** half of the deploy key into `~/.ssh/authorized_keys` for the same user as `SSH_USER`. Ensure shell access is allowed for that user if your host requires it.
+
+5. **Local sanity check** — From your machine: `ssh -i /path/to/deploy_key -p <port> <user>@<host> 'echo ok'`. If this fails, fix SSH on the server before relying on Actions.
+
+The workflow runs an **SSH handshake** step before file upload. If that step fails, the issue is connectivity or credentials, not the app build.
+
 Workflow behavior:
 
 1. Builds the frontend.
 2. Verifies `index.html`, `.htaccess`, and `runtime-config.js` are present in `frontend/dist/`.
 3. Installs backend requirements and validates the FastAPI app can import.
-4. Uploads frontend and backend files over SFTP (including `.htaccess` and `runtime-config.js`).
+4. Opens a short SSH session to verify cPanel connectivity, then uploads frontend and backend over SCP/SFTP (after stripping `__pycache__` and other junk from the backend copy).
 5. Touches `tmp/restart.txt` to restart Passenger and checks `/api/health`.
 
 ## 1) Backend (FastAPI) via cPanel Python Selector
