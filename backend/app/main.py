@@ -125,6 +125,7 @@ def env_int(name: str, default: int) -> int:
 
 APP_ENV = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).strip().lower()
 IS_PRODUCTION_ENV = APP_ENV in {"prod", "production", "live"}
+REQUIRE_EMAIL_ALERTS_IN_PRODUCTION = env_flag("REQUIRE_EMAIL_ALERTS_IN_PRODUCTION", False)
 
 DEV_CORS_ORIGINS = [
     "http://localhost:5173",
@@ -930,12 +931,18 @@ def is_email_alerts_configured() -> bool:
 
 
 def ensure_runtime_config_ready() -> None:
-    # In production we fail fast on partial/missing SMTP setup because withdraw alerts are operationally required.
-    if IS_PRODUCTION_ENV and not is_email_alerts_configured():
+    # Strict mode is optional for production rollouts where email transport may be staged separately.
+    if IS_PRODUCTION_ENV and REQUIRE_EMAIL_ALERTS_IN_PRODUCTION and not is_email_alerts_configured():
         raise RuntimeError(
             "Email alert config is incomplete. Set at least one recipient via ADMIN_ALERT_EMAILS, "
             "ADMIN_ALERT_SMS_RECIPIENTS, or WITHDRAW_ALERT_PHONES + SMTP_SMS_GATEWAY_DOMAIN, and configure "
             "SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, and SMTP_FROM."
+        )
+    if IS_PRODUCTION_ENV and not is_email_alerts_configured():
+        print(
+            "Warning: email alerts are not fully configured. Withdraw alert emails/SMS gateways are disabled until "
+            "ADMIN_ALERT_EMAILS or ADMIN_ALERT_SMS_RECIPIENTS (or WITHDRAW_ALERT_PHONES + SMTP_SMS_GATEWAY_DOMAIN) "
+            "and SMTP_HOST/SMTP_USERNAME/SMTP_PASSWORD/SMTP_FROM are provided."
         )
 
 

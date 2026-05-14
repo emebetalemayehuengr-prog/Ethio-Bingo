@@ -51,6 +51,20 @@ type WalletTab = "deposit" | "withdraw" | "transfer" | "history" | "admin";
 type CasinoDisplayGame = CasinoGame & { image_url: string; exclusive?: boolean };
 type PendingMarkMap = Record<string, boolean>;
 type ToastTone = "success" | "error" | "info";
+type WalletFieldErrorMap = Partial<
+  Record<
+    | "depositAmount"
+    | "txNo"
+    | "receiptMessage"
+    | "transferPhone"
+    | "transferAmount"
+    | "transferOtp"
+    | "withdrawAccountNumber"
+    | "withdrawAccountHolder"
+    | "withdrawAmount",
+    string
+  >
+>;
 
 const loadCartellaModalContent = () => import("./components/modals/CartellaModalContent");
 const loadDepositModalContent = () => import("./components/modals/DepositModalContent");
@@ -78,6 +92,22 @@ const APP_BACK_GUARD_STATE_KEY = "__40bingo_back_guard";
 const CASINO_ENABLED = false;
 const NOTICE_TIMEOUT_MS = 4500;
 const CARD_RECHARGE_LABEL_TIMEOUT_MS = 2500;
+const SESSION_SHARE_SERVICE_PARAM = "service";
+const SESSION_SHARE_STAKE_PARAM = "stake";
+const SESSION_SHARE_SERVICE_VALUE = "game";
+const SESSION_QR_IMAGE_SIZE = 280;
+
+function readInitialDarkModePreference() {
+  if (typeof window === "undefined") return true;
+  try {
+    const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_THEME_STORAGE_KEY);
+    if (storedTheme === "dark") return true;
+    if (storedTheme === "light") return false;
+  } catch {
+    // ignore storage errors
+  }
+  return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? true;
+}
 
 const services: Array<{ view: ServiceView; label: string }> = [
   { view: "home", label: "Home" },
@@ -87,6 +117,7 @@ const services: Array<{ view: ServiceView; label: string }> = [
   { view: "wallet", label: "Wallet" },
   { view: "history", label: "History" },
   { view: "how", label: "How To Play" },
+  { view: "contact", label: "Contact" },
 ];
 
 const mobileNavViews: ServiceView[] = ["home", "stakes", "game", "wallet", "history"];
@@ -530,6 +561,49 @@ function fallbackCopyText(value: string) {
   return copied;
 }
 
+function readSharedStakeIdFromLocation() {
+  if (typeof window === "undefined") return "";
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const stakeId = params.get(SESSION_SHARE_STAKE_PARAM)?.trim() ?? "";
+    const service = params.get(SESSION_SHARE_SERVICE_PARAM)?.trim() ?? "";
+    if (!stakeId) return "";
+    if (service && service !== SESSION_SHARE_SERVICE_VALUE) return "";
+    return stakeId;
+  } catch {
+    return "";
+  }
+}
+
+function clearSharedStakeParamsFromLocation() {
+  if (typeof window === "undefined") return;
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete(SESSION_SHARE_SERVICE_PARAM);
+    url.searchParams.delete(SESSION_SHARE_STAKE_PARAM);
+    window.history.replaceState(window.history.state, "", url.toString());
+  } catch {
+    // ignore history API failures
+  }
+}
+
+function buildSessionShareLink(stakeId: string) {
+  if (typeof window === "undefined" || !stakeId) return "";
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set(SESSION_SHARE_SERVICE_PARAM, SESSION_SHARE_SERVICE_VALUE);
+    url.searchParams.set(SESSION_SHARE_STAKE_PARAM, stakeId);
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function buildSessionQrImageSrc(value: string) {
+  if (!value) return "";
+  return `https://api.qrserver.com/v1/create-qr-code/?size=${SESSION_QR_IMAGE_SIZE}x${SESSION_QR_IMAGE_SIZE}&data=${encodeURIComponent(value)}`;
+}
+
 function ModalBodyFallback({
   title,
   message,
@@ -762,6 +836,7 @@ export default function App() {
   const backGuardArmedRef = useRef(false);
   const topHeaderRef = useRef<HTMLElement | null>(null);
   const gameSessionPanelRef = useRef<HTMLDivElement | null>(null);
+  const shareDialogRef = useRef<HTMLDivElement | null>(null);
   const drawerDialogRef = useRef<HTMLElement | null>(null);
   const cartellaDialogRef = useRef<HTMLDivElement | null>(null);
   const depositDialogRef = useRef<HTMLDivElement | null>(null);
@@ -771,8 +846,9 @@ export default function App() {
   const overlayWasOpenRef = useRef(false);
   const pendingMarksRef = useRef<PendingMarkMap>({});
   const lastFinishedRoomRef = useRef<string | null>(null);
+  const sharedStakeOpeningRef = useRef(false);
   const [ready, setReady] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const [isDarkMode, setIsDarkMode] = useState(() => readInitialDarkModePreference());
   const [isPageVisible, setIsPageVisible] = useState(() => (typeof document === "undefined" ? true : document.visibilityState !== "hidden"));
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState(false);
@@ -817,6 +893,7 @@ export default function App() {
   const [withdrawAccountNumber, setWithdrawAccountNumber] = useState("");
   const [withdrawAccountHolder, setWithdrawAccountHolder] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("50");
+  const [walletFieldErrors, setWalletFieldErrors] = useState<WalletFieldErrorMap>({});
   const [adminDraftAccounts, setAdminDraftAccounts] = useState<Record<"telebirr" | "cbebirr", Array<{ phone_number: string; owner_name: string }>>>({
     telebirr: [],
     cbebirr: [],
@@ -825,6 +902,9 @@ export default function App() {
   const [adminPayoutRefs, setAdminPayoutRefs] = useState<Record<string, string>>({});
   const [copiedPhone, setCopiedPhone] = useState("");
   const [showBrandModal, setShowBrandModal] = useState(false);
+  const [shareQrOpen, setShareQrOpen] = useState(false);
+  const [shareQrImageError, setShareQrImageError] = useState(false);
+  const [sharedStakeId, setSharedStakeId] = useState(() => readSharedStakeIdFromLocation());
   const [stakeCountdownNow, setStakeCountdownNow] = useState(() => Date.now());
   const [stakeCountdownDeadlines, setStakeCountdownDeadlines] = useState<Record<string, number>>({});
   const [sessionPanelExpanded, setSessionPanelExpanded] = useState(true);
@@ -871,10 +951,22 @@ export default function App() {
   const casinoCircleGames = useMemo(() => casinoCatalog.slice(0, 5), [casinoCatalog]);
   const casinoFeaturedGames = useMemo(() => casinoCatalog.slice(0, Math.min(5, casinoCatalog.length)), [casinoCatalog]);
   const casinoLatestGames = useMemo(() => (casinoCatalog.length > 5 ? casinoCatalog.slice(5) : casinoCatalog), [casinoCatalog]);
-  const overlayOpen = drawerOpen || cartellaOpen || depositGuideOpen || selectedBet !== null || showBrandModal;
+  const overlayOpen = drawerOpen || cartellaOpen || depositGuideOpen || selectedBet !== null || showBrandModal || shareQrOpen;
   const hasPendingMarks = Object.keys(pendingMarks).length > 0;
   const canResumeLiveGame =
     Boolean(room?.id) || (dashboard?.stake_options ?? []).some((stakeOption) => (stakeOption.my_cards_current ?? 0) > 0);
+  const activeStake = useMemo(() => {
+    if (!room) return selectedStake;
+    if (selectedStake && (selectedStake.stake === room.stake || selectedStake.stake === room.card_price)) {
+      return selectedStake;
+    }
+    return (
+      dashboard?.stake_options.find((option) => option.stake === room.stake || option.stake === room.card_price) ??
+      selectedStake
+    );
+  }, [dashboard?.stake_options, room, selectedStake]);
+  const sessionShareLink = useMemo(() => (activeStake?.id ? buildSessionShareLink(activeStake.id) : ""), [activeStake?.id]);
+  const sessionQrImageSrc = useMemo(() => buildSessionQrImageSrc(sessionShareLink), [sessionShareLink]);
 
   const setPendingMarkState = (nextPending: PendingMarkMap) => {
     pendingMarksRef.current = nextPending;
@@ -884,24 +976,6 @@ export default function App() {
   const setRoomWithPendingMarks = (nextRoom: RoomState | null) => {
     setRoom(applyPendingMarksToRoom(nextRoom, pendingMarksRef.current));
   };
-
-  useEffect(() => {
-    try {
-      const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_THEME_STORAGE_KEY);
-      if (storedTheme === "dark") {
-        setIsDarkMode(true);
-        return;
-      }
-      if (storedTheme === "light") {
-        setIsDarkMode(false);
-        return;
-      }
-      const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? true;
-      setIsDarkMode(prefersDark);
-    } catch {
-      // ignore storage errors
-    }
-  }, []);
 
   useEffect(() => {
     const mode = isDarkMode ? "dark" : "light";
@@ -987,6 +1061,7 @@ export default function App() {
       setAuthPassword("");
       setAuthConfirmPassword("");
       setError("");
+      setWalletFieldErrors({});
       setLoading(false);
       setWorking(false);
       setNotice("Session expired. Please sign in again.");
@@ -1089,6 +1164,7 @@ export default function App() {
   }, [service]);
 
   async function openOwnedStakeGame(stake: StakeOption) {
+    setSelectedStake(stake);
     setWorking(true);
     setError("");
     try {
@@ -1326,6 +1402,10 @@ export default function App() {
   }, [profile, walletTab]);
 
   useEffect(() => {
+    setWalletFieldErrors({});
+  }, [walletTab]);
+
+  useEffect(() => {
     if (!profile?.is_admin || walletTab !== "admin" || !isPageVisible) return;
     let inFlight = false;
     const poll = () => {
@@ -1368,6 +1448,9 @@ export default function App() {
       if (!getAuthToken()) return;
       if (showBrandModal) {
         onCloseBrandModal();
+      } else if (shareQrOpen) {
+        setShareQrOpen(false);
+        setShareQrImageError(false);
       } else if (selectedBet) {
         setSelectedBet(null);
       } else if (depositGuideOpen) {
@@ -1394,7 +1477,7 @@ export default function App() {
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [profile?.phone_number, showBrandModal, selectedBet, depositGuideOpen, cartellaOpen, drawerOpen, service, canResumeLiveGame]);
+  }, [profile?.phone_number, showBrandModal, shareQrOpen, selectedBet, depositGuideOpen, cartellaOpen, drawerOpen, service, canResumeLiveGame]);
 
   useEffect(() => {
     if (!profile || !isPageVisible) return;
@@ -1703,6 +1786,7 @@ export default function App() {
     setAuthName("");
     setAuthPassword("");
     setAuthConfirmPassword("");
+    setWalletFieldErrors({});
     if (!rememberPhone) {
       setAuthPhone("");
     }
@@ -1853,94 +1937,90 @@ export default function App() {
     }
   };
 
-  const onDeposit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setWorking(true);
-    setError("");
-    try {
-      const amount = Number(depositAmount);
-      const receiptText = receiptMessage.trim();
-      const directTxNo = normalizeTransactionNumberInput(txNo);
-      const inferredTxNo = extractTransactionNumber(receiptText);
-      const transactionNumber = directTxNo || inferredTxNo;
-      if (!selectedMethod) throw new Error("እባክዎ የክፍያ ዘዴውን ይምረጡ።");
-      if (!amount || amount <= 0) throw new Error("ዋጋ ያለው መጠን ያስገቡ።");
-      if (!receiptText) throw new Error("የተቀበለውን መለያ ለማረጋገጥ የክፍያ ደረሰታ መልእክኛ ይለጥፉ።");
-      if (!hasAssignedRecipientInReceipt(receiptText, selectedMethod.transfer_accounts)) {
-        throw new Error("የደረሰታው መልእክኛ አንድ የተመደበ የተቀበለው ስልክ ቁጥር ወይም የባለሙያ ስም መያዝ አለበት።");
+  useEffect(() => {
+    if (!sharedStakeId || !profile || !(dashboard?.stake_options?.length ?? 0) || sharedStakeOpeningRef.current) return;
+    const linkedStake = dashboard?.stake_options.find((option) => option.id === sharedStakeId) ?? null;
+    if (!linkedStake) {
+      setSharedStakeId("");
+      clearSharedStakeParamsFromLocation();
+      setService("stakes");
+      setNotice("That shared session is no longer available.");
+      return;
+    }
+    sharedStakeOpeningRef.current = true;
+    void (async () => {
+      try {
+        if ((linkedStake.my_cards_current ?? 0) > 0) {
+          await openOwnedStakeGame(linkedStake);
+        } else {
+          await onOpenStake(linkedStake);
+          setService("stakes");
+          setNotice("Shared live session opened. Choose a cartella to join.");
+        }
+      } finally {
+        sharedStakeOpeningRef.current = false;
+        setSharedStakeId("");
+        clearSharedStakeParamsFromLocation();
       }
-      if (transactionNumber.length < 3) throw new Error("ዋጋ ያለው የግብይት ቁጥር ያስገቡ ወይም የደረሰታ መልእክኛውን ይለጥፉ።");
-      const res = await submitDeposit({
-        method: methodCode,
-        amount,
-        transaction_number: transactionNumber,
-        receipt_message: receiptText,
-      });
-      setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
-      setNotice(res.message);
-      setCardRechargeLabel(`Recharged +ETB ${amount.toFixed(2)}`);
-      setTxNo("");
-      setReceiptMessage("");
-      setDepositGuideOpen(false);
-      await refreshHistory();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "ክፍያው አልተሳካም");
-    } finally {
-      setWorking(false);
-    }
+    })();
+  }, [dashboard?.stake_options, profile, sharedStakeId]);
+  const clearWalletFieldError = (field: keyof WalletFieldErrorMap) => {
+    setWalletFieldErrors((prev) => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
   };
 
-  const onTransfer = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setWorking(true);
-    setError("");
-    try {
-      const amount = Number(transferAmount);
-      if (!amount || amount <= 0) throw new Error("ዋጋ ያለው የማስተላለፊያ መጠን ያስገቡ።");
-      if (!transferPhone.trim()) throw new Error("የተቀበለውን ስልክ ቁጥር ያስገቡ።");
-      if (!/^\d{4,6}$/.test(transferOtp.trim())) throw new Error("ዋጋ ያለው ኦቲፒ (ከ4 እስከ 6 አሃዝ) ያስገቡ።");
-      const res = await submitTransfer({
-        phone_number: transferPhone.trim(),
-        amount,
-        otp: transferOtp.trim(),
-      });
-      setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
-      setNotice(res.message);
-      setTransferPhone("");
-      setTransferAmount("10");
-      setTransferOtp("");
-      await refreshHistory();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "ማስተላለፊያው አልተሳካም");
-    } finally {
-      setWorking(false);
+  const validateDepositFields = (
+    amount: number,
+    transactionNumber: string,
+    receiptText: string,
+    method: DepositMethod | null,
+  ): WalletFieldErrorMap => {
+    const nextErrors: WalletFieldErrorMap = {};
+    if (!amount || amount <= 0) {
+      nextErrors.depositAmount = "Enter a valid deposit amount.";
     }
+    if (!receiptText) {
+      nextErrors.receiptMessage = "Paste the full receipt text so payment can be verified.";
+    }
+    if (transactionNumber.length < 3) {
+      nextErrors.txNo = "Enter a valid transaction reference.";
+    }
+    if (method && receiptText && !hasAssignedRecipientInReceipt(receiptText, method.transfer_accounts)) {
+      nextErrors.receiptMessage = "Receipt must include one of the approved transfer numbers or account names.";
+    }
+    return nextErrors;
   };
 
-  const onWithdraw = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setWorking(true);
-    setError("");
-    try {
-      const amount = Number(withdrawAmount);
-      if (!amount || amount <= 0) throw new Error("ዋጋ ያለው መጠን ያስገቡ።");
-      if (!withdrawAccountNumber.trim()) throw new Error("የመለያ ቁጥር ያስገቡ።");
-      if (!withdrawAccountHolder.trim()) throw new Error("የመለያ ባለቤት ስም ያስገቡ።");
-      const res = await submitWithdraw({
-        bank: withdrawBank,
-        account_number: withdrawAccountNumber.trim(),
-        account_holder: withdrawAccountHolder.trim(),
-        amount,
-      });
-      setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
-      setNotice(res.message);
-      setWithdrawAmount("50");
-      await refreshHistory();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "መውሰድ አልተሳካም");
-    } finally {
-      setWorking(false);
+  const validateTransferFields = (amount: number, phone: string, otp: string): WalletFieldErrorMap => {
+    const nextErrors: WalletFieldErrorMap = {};
+    if (!isValidAuthPhoneInput(normalizeAuthPhoneInput(phone))) {
+      nextErrors.transferPhone = "Use 09XXXXXXXX or +2519XXXXXXXX.";
     }
+    if (!amount || amount <= 0) {
+      nextErrors.transferAmount = "Enter a valid transfer amount.";
+    }
+    if (!/^\d{4,6}$/.test(otp.trim())) {
+      nextErrors.transferOtp = "OTP must be 4 to 6 digits.";
+    }
+    return nextErrors;
+  };
+
+  const validateWithdrawFields = (amount: number, accountNumber: string, accountHolder: string): WalletFieldErrorMap => {
+    const nextErrors: WalletFieldErrorMap = {};
+    if (!amount || amount <= 0) {
+      nextErrors.withdrawAmount = "Enter a valid withdraw amount.";
+    }
+    if (accountNumber.trim().length < 6) {
+      nextErrors.withdrawAccountNumber = "Account number must be at least 6 characters.";
+    }
+    if (accountHolder.trim().length < 2) {
+      nextErrors.withdrawAccountHolder = "Enter the account holder name.";
+    }
+    return nextErrors;
   };
 
   const onSaveDepositAccounts = async (methodCodeToSave: "telebirr" | "cbebirr") => {
@@ -1970,23 +2050,35 @@ export default function App() {
 
   const submitDepositForm = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setWorking(true);
     setError("");
+    const amount = Number(depositAmount);
+    const receiptText = receiptMessage.trim();
+    const directTxNo = normalizeTransactionNumberInput(txNo);
+    const inferredTxNo = extractTransactionNumber(receiptText);
+    const transactionNumber = directTxNo || inferredTxNo;
+    if (!selectedMethod) {
+      setError("Choose a deposit method first.");
+      return;
+    }
+    const validationErrors = validateDepositFields(amount, transactionNumber, receiptText, selectedMethod);
+    if (Object.keys(validationErrors).length > 0) {
+      setWalletFieldErrors((prev) => ({
+        ...prev,
+        depositAmount: validationErrors.depositAmount,
+        txNo: validationErrors.txNo,
+        receiptMessage: validationErrors.receiptMessage,
+      }));
+      return;
+    }
+    setWalletFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next.depositAmount;
+      delete next.txNo;
+      delete next.receiptMessage;
+      return next;
+    });
+    setWorking(true);
     try {
-      const amount = Number(depositAmount);
-      const receiptText = receiptMessage.trim();
-      const directTxNo = normalizeTransactionNumberInput(txNo);
-      const inferredTxNo = extractTransactionNumber(receiptText);
-      const transactionNumber = directTxNo || inferredTxNo;
-      if (!selectedMethod) throw new Error("Choose a deposit method first.");
-      if (!amount || amount <= 0) throw new Error("Enter a valid deposit amount.");
-      if (!receiptText) throw new Error("Paste the transfer receipt message so we can verify the payment.");
-      if (!hasAssignedRecipientInReceipt(receiptText, selectedMethod.transfer_accounts)) {
-        throw new Error("The receipt message must include one of the approved transfer numbers or account names.");
-      }
-      if (transactionNumber.length < 3) {
-        throw new Error("Enter a valid transaction reference or paste the full receipt message.");
-      }
       const res = await submitDeposit({
         method: methodCode,
         amount,
@@ -2009,15 +2101,30 @@ export default function App() {
 
   const submitTransferForm = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setWorking(true);
     setError("");
+    const amount = Number(transferAmount);
+    const validationErrors = validateTransferFields(amount, transferPhone, transferOtp);
+    if (Object.keys(validationErrors).length > 0) {
+      setWalletFieldErrors((prev) => ({
+        ...prev,
+        transferPhone: validationErrors.transferPhone,
+        transferAmount: validationErrors.transferAmount,
+        transferOtp: validationErrors.transferOtp,
+      }));
+      return;
+    }
+    setWalletFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next.transferPhone;
+      delete next.transferAmount;
+      delete next.transferOtp;
+      return next;
+    });
+    setWorking(true);
     try {
-      const amount = Number(transferAmount);
-      if (!amount || amount <= 0) throw new Error("Enter a valid transfer amount.");
-      if (!transferPhone.trim()) throw new Error("Enter the receiver phone number.");
-      if (!/^\d{4,6}$/.test(transferOtp.trim())) throw new Error("Enter a valid 4 to 6 digit OTP.");
+      const normalizedPhone = normalizeAuthPhoneInput(transferPhone);
       const res = await submitTransfer({
-        phone_number: transferPhone.trim(),
+        phone_number: normalizedPhone,
         amount,
         otp: transferOtp.trim(),
       });
@@ -2036,13 +2143,27 @@ export default function App() {
 
   const submitWithdrawForm = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setWorking(true);
     setError("");
+    const amount = Number(withdrawAmount);
+    const validationErrors = validateWithdrawFields(amount, withdrawAccountNumber, withdrawAccountHolder);
+    if (Object.keys(validationErrors).length > 0) {
+      setWalletFieldErrors((prev) => ({
+        ...prev,
+        withdrawAmount: validationErrors.withdrawAmount,
+        withdrawAccountNumber: validationErrors.withdrawAccountNumber,
+        withdrawAccountHolder: validationErrors.withdrawAccountHolder,
+      }));
+      return;
+    }
+    setWalletFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next.withdrawAmount;
+      delete next.withdrawAccountNumber;
+      delete next.withdrawAccountHolder;
+      return next;
+    });
+    setWorking(true);
     try {
-      const amount = Number(withdrawAmount);
-      if (!amount || amount <= 0) throw new Error("Enter a valid withdraw amount.");
-      if (!withdrawAccountNumber.trim()) throw new Error("Enter the destination account number.");
-      if (!withdrawAccountHolder.trim()) throw new Error("Enter the account holder name.");
       const res = await submitWithdraw({
         bank: withdrawBank,
         account_number: withdrawAccountNumber.trim(),
@@ -2069,6 +2190,11 @@ export default function App() {
   const closeTopOverlay = () => {
     if (showBrandModal) {
       onCloseBrandModal();
+      return;
+    }
+    if (shareQrOpen) {
+      setShareQrOpen(false);
+      setShareQrImageError(false);
       return;
     }
     if (selectedBet) {
@@ -2107,7 +2233,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [overlayOpen, showBrandModal, selectedBet, depositGuideOpen, cartellaOpen, drawerOpen]);
+  }, [overlayOpen, showBrandModal, shareQrOpen, selectedBet, depositGuideOpen, cartellaOpen, drawerOpen]);
 
   useEffect(() => {
     if (overlayOpen && !overlayWasOpenRef.current) {
@@ -2129,6 +2255,8 @@ export default function App() {
     const target =
       (showBrandModal
         ? brandDialogRef.current
+        : shareQrOpen
+          ? shareDialogRef.current
         : selectedBet
           ? betDialogRef.current
           : depositGuideOpen
@@ -2147,7 +2275,7 @@ export default function App() {
       }
     });
     return () => window.cancelAnimationFrame(frameId);
-  }, [overlayOpen, showBrandModal, selectedBet?.id, depositGuideOpen, cartellaOpen, drawerOpen]);
+  }, [overlayOpen, showBrandModal, shareQrOpen, selectedBet?.id, depositGuideOpen, cartellaOpen, drawerOpen]);
 
   const onCopyPhone = async (phone: string) => {
     try {
@@ -2172,6 +2300,50 @@ export default function App() {
       }
       setError("Clipboard copy failed.");
     }
+  };
+
+  const closeSessionShareModal = () => {
+    setShareQrOpen(false);
+    setShareQrImageError(false);
+  };
+
+  const copySessionLinkToClipboard = async () => {
+    if (!sessionShareLink) return false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(sessionShareLink);
+        return true;
+      }
+      return fallbackCopyText(sessionShareLink);
+    } catch {
+      return fallbackCopyText(sessionShareLink);
+    }
+  };
+
+  const onCopySessionLinkAgain = async () => {
+    const copied = await copySessionLinkToClipboard();
+    if (copied) {
+      setError("");
+      setNotice("Session link copied again.");
+      return;
+    }
+    setError("Clipboard copy failed.");
+  };
+
+  const onShareSession = async () => {
+    if (!sessionShareLink) {
+      setError("No live session link is available right now.");
+      return;
+    }
+    const copied = await copySessionLinkToClipboard();
+    setShareQrImageError(false);
+    setShareQrOpen(true);
+    if (copied) {
+      setError("");
+      setNotice("Session link copied. QR is ready to scan.");
+      return;
+    }
+    setError("QR opened, but copying the session link failed.");
   };
 
   const toggleMarked = async (value: number | string, cardNoParam?: number) => {
@@ -2462,10 +2634,12 @@ export default function App() {
     }));
   };
   const onDepositTxChange = (rawValue: string) => {
+    clearWalletFieldError("txNo");
     const extracted = extractTransactionNumber(rawValue);
     if (/\s/.test(rawValue) && extracted) {
       setTxNo(extracted);
       if (!receiptMessage.trim()) {
+        clearWalletFieldError("receiptMessage");
         setReceiptMessage(rawValue.trim());
       }
       return;
@@ -2473,9 +2647,11 @@ export default function App() {
     setTxNo(rawValue);
   };
   const onDepositReceiptChange = (nextMessage: string) => {
+    clearWalletFieldError("receiptMessage");
     setReceiptMessage(nextMessage);
     const extracted = extractTransactionNumber(nextMessage);
     if (!extracted) return;
+    clearWalletFieldError("txNo");
     setTxNo((current) => {
       const currentNormalized = normalizeTransactionNumberInput(current);
       if (currentNormalized && currentNormalized !== extracted) return current;
@@ -2703,29 +2879,44 @@ export default function App() {
                       id={sessionPanelId}
                       className={`game-session-panel ${sessionPanelExpanded ? "expanded" : "collapsed"}`}
                     >
-                      <button
-                        className="game-session-toggle"
-                        type="button"
-                        aria-expanded={sessionPanelExpanded}
-                        aria-controls={`${sessionPanelId}-body`}
-                        onClick={() => setSessionPanelExpanded((state) => !state)}
-                      >
-                        <span className="game-session-toggle-copy">
-                          <small>Live Session</small>
-                          <strong>{room.phase === "playing" ? "Round In Progress" : room.phase === "selecting" ? "Round Queue" : "Round Status"}</strong>
-                          <span className="game-session-toggle-detail">{gameStatusLabel}</span>
-                        </span>
-                        <span className="game-session-summary-row" aria-hidden="true">
-                          <span className="game-session-pill">Stake {room.card_price}</span>
-                          <span className="game-session-pill">{room.called_numbers.length} Calls</span>
-                          <span className="game-session-pill">{currentPaidCount} Bought</span>
-                        </span>
-                        <span className="game-session-toggle-icon" aria-hidden="true">
-                          <svg viewBox="0 0 20 20" focusable="false">
-                            <path d="M5.5 7.5 10 12l4.5-4.5" />
+                      <div className="game-session-toolbar">
+                        <button
+                          className="game-session-toggle"
+                          type="button"
+                          aria-expanded={sessionPanelExpanded}
+                          aria-controls={`${sessionPanelId}-body`}
+                          onClick={() => setSessionPanelExpanded((state) => !state)}
+                        >
+                          <span className="game-session-toggle-copy">
+                            <small>Live Session</small>
+                            <strong>{room.phase === "playing" ? "Round In Progress" : room.phase === "selecting" ? "Round Queue" : "Round Status"}</strong>
+                            <span className="game-session-toggle-detail">{gameStatusLabel}</span>
+                          </span>
+                          <span className="game-session-summary-row" aria-hidden="true">
+                            <span className="game-session-pill">Stake {room.card_price}</span>
+                            <span className="game-session-pill">{room.called_numbers.length} Calls</span>
+                            <span className="game-session-pill">{currentPaidCount} Bought</span>
+                          </span>
+                          <span className="game-session-toggle-icon" aria-hidden="true">
+                            <svg viewBox="0 0 20 20" focusable="false">
+                              <path d="M5.5 7.5 10 12l4.5-4.5" />
+                            </svg>
+                          </span>
+                        </button>
+                        <button
+                          className="game-session-share-btn"
+                          type="button"
+                          aria-label="Copy session link and open QR"
+                          disabled={!sessionShareLink}
+                          onClick={() => void onShareSession()}
+                        >
+                          <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                            <path d="M12 16V4" />
+                            <path d="m7 9 5-5 5 5" />
+                            <path d="M5 20h14" />
                           </svg>
-                        </span>
-                      </button>
+                        </button>
+                      </div>
                       {sessionPanelExpanded && (
                         <div id={`${sessionPanelId}-body`} className="game-session-body">
                           {room.phase === "selecting" && (
@@ -3068,26 +3259,28 @@ export default function App() {
         {service === "wallet" && (
           <section className="panel wallet-panel">
             <h2>Wallet</h2>
-            <p className="panel-subtitle">የመውሰድ ጥያቄዎች አስተዳዳሪውን በኢሜይል ለእውቅዳለቅ የባንክ ክፍያ ለማድረግ ያሳውቁታል።</p>
+            <p className="panel-subtitle">
+              Manage deposits, transfers, and withdrawals in one place. Withdraw approval alerts are sent through configured admin channels.
+            </p>
             <div className="balance-row">
               <div className="balance-card">
-                <h3>ዋና ሂሳብ</h3>
+                <h3>Main Balance</h3>
                 <strong>{fmtEtb(wallet.main_balance)}</strong>
               </div>
               <div className="balance-card">
-                <h3>ቦነስ ሂሳብ</h3>
+                <h3>Bonus Balance</h3>
                 <strong>{fmtEtb(wallet.bonus_balance)}</strong>
               </div>
             </div>
             <div className="wallet-tabs">
               <button className={`wallet-tab ${walletTab === "deposit" ? "active" : ""}`} type="button" onClick={() => setWalletTab("deposit")}>
-                ክፍያ
+                Deposit
               </button>
               <button className={`wallet-tab ${walletTab === "withdraw" ? "active" : ""}`} type="button" onClick={() => setWalletTab("withdraw")}>
-                መውሰድ
+                Withdraw
               </button>
               <button className={`wallet-tab ${walletTab === "transfer" ? "active" : ""}`} type="button" onClick={() => setWalletTab("transfer")}>
-                ማስተላለፊያ
+                Transfer
               </button>
               <button className={`wallet-tab ${walletTab === "history" ? "active" : ""}`} type="button" onClick={() => setWalletTab("history")}>
                 History
@@ -3112,7 +3305,7 @@ export default function App() {
                   ))}
                 </div>
                 <button className="primary-btn" type="button" onClick={() => setDepositGuideOpen(true)}>
-                  የክፍያ መመሪያን ይክፈቱ
+                  Open Deposit Instructions
                 </button>
               </div>
             )}
@@ -3120,28 +3313,71 @@ export default function App() {
             {walletTab === "withdraw" && (
               <form className="wallet-form wallet-subpanel" onSubmit={submitWithdrawForm}>
                 <label>
-                  ባንክ
+                  Bank
                   <select value={withdrawBank} onChange={(event) => setWithdrawBank(event.target.value)}>
-                    <option value="CBE">ኢኮሚያ</option>
-                    <option value="Awash">አዋሽ</option>
-                    <option value="Dashen">ዳሸን</option>
-                    <option value="BOA">ባንክ ኦፍ አቢሲኒያ</option>
+                    <option value="CBE">Commercial Bank of Ethiopia</option>
+                    <option value="Awash">Awash Bank</option>
+                    <option value="Dashen">Dashen Bank</option>
+                    <option value="BOA">Bank of Abyssinia</option>
                   </select>
                 </label>
                 <label>
-                  የመለያ ቁጥር
-                  <input value={withdrawAccountNumber} onChange={(event) => setWithdrawAccountNumber(event.target.value)} placeholder="የመለያ ቁጥር ያስገቡ" />
+                  Account Number
+                  <input
+                    value={withdrawAccountNumber}
+                    aria-invalid={Boolean(walletFieldErrors.withdrawAccountNumber)}
+                    className={walletFieldErrors.withdrawAccountNumber ? "input-error" : undefined}
+                    onChange={(event) => {
+                      clearWalletFieldError("withdrawAccountNumber");
+                      setWithdrawAccountNumber(event.target.value);
+                    }}
+                    placeholder="Enter destination account number"
+                  />
+                  {walletFieldErrors.withdrawAccountNumber ? (
+                    <small className="wallet-field-error" role="alert">
+                      {walletFieldErrors.withdrawAccountNumber}
+                    </small>
+                  ) : null}
                 </label>
                 <label>
-                  የመለያ ባለቤት
-                  <input value={withdrawAccountHolder} onChange={(event) => setWithdrawAccountHolder(event.target.value)} placeholder="የመለያ ባለቤት ስም ያስገቡ" />
+                  Account Holder
+                  <input
+                    value={withdrawAccountHolder}
+                    aria-invalid={Boolean(walletFieldErrors.withdrawAccountHolder)}
+                    className={walletFieldErrors.withdrawAccountHolder ? "input-error" : undefined}
+                    onChange={(event) => {
+                      clearWalletFieldError("withdrawAccountHolder");
+                      setWithdrawAccountHolder(event.target.value);
+                    }}
+                    placeholder="Enter account holder name"
+                  />
+                  {walletFieldErrors.withdrawAccountHolder ? (
+                    <small className="wallet-field-error" role="alert">
+                      {walletFieldErrors.withdrawAccountHolder}
+                    </small>
+                  ) : null}
                 </label>
                 <label>
-                  መጠን
-                  <input type="number" min={3} value={withdrawAmount} onChange={(event) => setWithdrawAmount(event.target.value)} />
+                  Amount
+                  <input
+                    type="number"
+                    min={3}
+                    value={withdrawAmount}
+                    aria-invalid={Boolean(walletFieldErrors.withdrawAmount)}
+                    className={walletFieldErrors.withdrawAmount ? "input-error" : undefined}
+                    onChange={(event) => {
+                      clearWalletFieldError("withdrawAmount");
+                      setWithdrawAmount(event.target.value);
+                    }}
+                  />
+                  {walletFieldErrors.withdrawAmount ? (
+                    <small className="wallet-field-error" role="alert">
+                      {walletFieldErrors.withdrawAmount}
+                    </small>
+                  ) : null}
                 </label>
                 <button className="primary-btn" type="submit" disabled={working}>
-                  {working ? "በማስገባት ላይ..." : "እጅ መውሰድ"}
+                  {working ? "Submitting..." : "Request Withdraw"}
                 </button>
               </form>
             )}
@@ -3149,19 +3385,62 @@ export default function App() {
             {walletTab === "transfer" && (
               <form className="wallet-form wallet-subpanel" onSubmit={submitTransferForm}>
                 <label>
-                  ስልክ ቁጥር
-                  <input value={transferPhone} onChange={(event) => setTransferPhone(event.target.value)} placeholder="09xxxxxxxx" />
+                  Receiver Phone
+                  <input
+                    value={transferPhone}
+                    aria-invalid={Boolean(walletFieldErrors.transferPhone)}
+                    className={walletFieldErrors.transferPhone ? "input-error" : undefined}
+                    onChange={(event) => {
+                      clearWalletFieldError("transferPhone");
+                      setTransferPhone(event.target.value);
+                    }}
+                    placeholder="09XXXXXXXX or +2519XXXXXXXX"
+                  />
+                  {walletFieldErrors.transferPhone ? (
+                    <small className="wallet-field-error" role="alert">
+                      {walletFieldErrors.transferPhone}
+                    </small>
+                  ) : null}
                 </label>
                 <label>
-                  መጠን
-                  <input type="number" min={1} value={transferAmount} onChange={(event) => setTransferAmount(event.target.value)} />
+                  Amount
+                  <input
+                    type="number"
+                    min={1}
+                    value={transferAmount}
+                    aria-invalid={Boolean(walletFieldErrors.transferAmount)}
+                    className={walletFieldErrors.transferAmount ? "input-error" : undefined}
+                    onChange={(event) => {
+                      clearWalletFieldError("transferAmount");
+                      setTransferAmount(event.target.value);
+                    }}
+                  />
+                  {walletFieldErrors.transferAmount ? (
+                    <small className="wallet-field-error" role="alert">
+                      {walletFieldErrors.transferAmount}
+                    </small>
+                  ) : null}
                 </label>
                 <label>
-                  ኦቲፒ
-                  <input value={transferOtp} onChange={(event) => setTransferOtp(event.target.value)} placeholder="ኦቲፒ ያስገቡ" />
+                  OTP
+                  <input
+                    value={transferOtp}
+                    aria-invalid={Boolean(walletFieldErrors.transferOtp)}
+                    className={walletFieldErrors.transferOtp ? "input-error" : undefined}
+                    onChange={(event) => {
+                      clearWalletFieldError("transferOtp");
+                      setTransferOtp(event.target.value);
+                    }}
+                    placeholder="Enter 4 to 6 digit OTP"
+                  />
+                  {walletFieldErrors.transferOtp ? (
+                    <small className="wallet-field-error" role="alert">
+                      {walletFieldErrors.transferOtp}
+                    </small>
+                  ) : null}
                 </label>
                 <button className="primary-btn" type="submit" disabled={working}>
-                  {working ? "በማስተላለፊያ ላይ..." : "ቀሪ ሂሳብን ያስተላልፉ"}
+                  {working ? "Submitting..." : "Send Transfer"}
                 </button>
               </form>
             )}
@@ -3614,6 +3893,11 @@ export default function App() {
                 isAdmin={profile.is_admin}
                 copiedPhone={copiedPhone}
                 working={working}
+                fieldErrors={{
+                  depositAmount: walletFieldErrors.depositAmount,
+                  txNo: walletFieldErrors.txNo,
+                  receiptMessage: walletFieldErrors.receiptMessage,
+                }}
                 depositAmount={depositAmount}
                 txNo={txNo}
                 receiptMessage={receiptMessage}
@@ -3624,13 +3908,67 @@ export default function App() {
                 onRemoveDraftAccount={onRemoveDraftAccount}
                 onAddDraftAccount={onAddDraftAccount}
                 onSaveAccounts={(code) => void onSaveDepositAccounts(code)}
-                onDepositAmountChange={setDepositAmount}
+                onDepositAmountChange={(value) => {
+                  clearWalletFieldError("depositAmount");
+                  setDepositAmount(value);
+                }}
                 onTxChange={onDepositTxChange}
-                onTxBlur={(value) => setTxNo(normalizeTransactionNumberInput(value))}
+                onTxBlur={(value) => {
+                  clearWalletFieldError("txNo");
+                  setTxNo(normalizeTransactionNumberInput(value));
+                }}
                 onReceiptChange={onDepositReceiptChange}
                 onSubmit={submitDepositForm}
               />
             </Suspense>
+          </div>
+        </div>
+      )}
+
+      {shareQrOpen && sessionShareLink && (
+        <div className="modal-overlay show" onClick={closeSessionShareModal}>
+          <div
+            ref={shareDialogRef}
+            className="modal-card session-share-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="session-share-dialog-title"
+            tabIndex={-1}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <h3 id="session-share-dialog-title">Share Live Session</h3>
+              <button type="button" onClick={closeSessionShareModal} aria-label="Close dialog">
+                &times;
+              </button>
+            </div>
+            <div className="session-share-content">
+              <p className="panel-subtitle">The session link is copied already. Scan the QR code or send the link below to open this room.</p>
+              <div className="session-share-qr-shell">
+                {shareQrImageError || !sessionQrImageSrc ? (
+                  <div className="session-share-qr-fallback">QR preview unavailable</div>
+                ) : (
+                  <img
+                    className="session-share-qr-image"
+                    src={sessionQrImageSrc}
+                    alt="QR code for this live session"
+                    referrerPolicy="no-referrer"
+                    onError={() => setShareQrImageError(true)}
+                  />
+                )}
+              </div>
+              <div className="session-share-link-box" role="status" aria-live="polite">
+                {sessionShareLink}
+              </div>
+              <div className="session-share-actions">
+                <button className="secondary-btn" type="button" onClick={() => void onCopySessionLinkAgain()}>
+                  Copy Link Again
+                </button>
+                <button className="primary-btn" type="button" onClick={closeSessionShareModal}>
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

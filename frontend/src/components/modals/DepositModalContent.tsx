@@ -2,6 +2,7 @@ import type { FormEvent } from "react";
 import type { DepositMethod } from "../../types";
 
 type DraftAccount = { phone_number: string; owner_name: string };
+type DepositFieldErrors = Partial<Record<"depositAmount" | "txNo" | "receiptMessage", string>>;
 
 type Props = {
   selectedMethod: DepositMethod | null;
@@ -9,6 +10,7 @@ type Props = {
   isAdmin: boolean;
   copiedPhone: string;
   working: boolean;
+  fieldErrors: DepositFieldErrors;
   depositAmount: string;
   txNo: string;
   receiptMessage: string;
@@ -32,6 +34,7 @@ export default function DepositModalContent({
   isAdmin,
   copiedPhone,
   working,
+  fieldErrors,
   depositAmount,
   txNo,
   receiptMessage,
@@ -118,7 +121,19 @@ export default function DepositModalContent({
           <form className="wallet-form" onSubmit={onSubmit}>
             <label>
               Amount
-              <input type="number" min={1} value={depositAmount} onChange={(event) => onDepositAmountChange(event.target.value)} />
+              <input
+                type="number"
+                min={1}
+                value={depositAmount}
+                aria-invalid={Boolean(fieldErrors.depositAmount)}
+                className={fieldErrors.depositAmount ? "input-error" : undefined}
+                onChange={(event) => onDepositAmountChange(event.target.value)}
+              />
+              {fieldErrors.depositAmount ? (
+                <small className="wallet-field-error" role="alert">
+                  {fieldErrors.depositAmount}
+                </small>
+              ) : null}
             </label>
             <label>
               Transaction Number
@@ -128,9 +143,16 @@ export default function DepositModalContent({
                 autoCapitalize="characters"
                 autoCorrect="off"
                 spellCheck={false}
+                aria-invalid={Boolean(fieldErrors.txNo)}
+                className={fieldErrors.txNo ? "input-error" : undefined}
                 onChange={(event) => onTxChange(event.target.value)}
                 onBlur={(event) => onTxBlur(event.target.value)}
               />
+              {fieldErrors.txNo ? (
+                <small className="wallet-field-error" role="alert">
+                  {fieldErrors.txNo}
+                </small>
+              ) : null}
             </label>
             <label>
               Receipt Message
@@ -140,8 +162,15 @@ export default function DepositModalContent({
                 value={receiptMessage}
                 placeholder={`Paste the payment SMS or receipt text here. Example transaction number: ${selectedMethod.receipt_example}`}
                 spellCheck={false}
+                aria-invalid={Boolean(fieldErrors.receiptMessage)}
+                className={fieldErrors.receiptMessage ? "input-error" : undefined}
                 onChange={(event) => onReceiptChange(event.target.value)}
               />
+              {fieldErrors.receiptMessage ? (
+                <small className="wallet-field-error" role="alert">
+                  {fieldErrors.receiptMessage}
+                </small>
+              ) : null}
             </label>
             <small className="receipt-tip">If the transaction number appears inside the receipt text, we will try to fill it automatically.</small>
             <small>Use the same phone number and account name that appear on your payment receipt whenever possible.</small>

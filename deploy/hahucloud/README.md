@@ -27,8 +27,8 @@ Workflow behavior:
 1. Builds the frontend.
 2. Verifies `index.html`, `.htaccess`, and `runtime-config.js` are present in `frontend/dist/`.
 3. Installs backend requirements and validates the FastAPI app can import.
-4. Uploads tar archives over SFTP so hidden files and directory layout are preserved.
-5. Extracts the archives on the server, touches `tmp/restart.txt`, and checks `/api/health`.
+4. Uploads frontend and backend files over SFTP (including `.htaccess` and `runtime-config.js`).
+5. Touches `tmp/restart.txt` to restart Passenger and checks `/api/health`.
 
 ## 1) Backend (FastAPI) via cPanel Python Selector
 
@@ -87,6 +87,7 @@ Minimum required:
 - `SIGNUP_INITIAL_MAIN_BALANCE=0`
 - `SIGNUP_INITIAL_BONUS_BALANCE=0`
 - `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`
+- `REQUIRE_EMAIL_ALERTS_IN_PRODUCTION=true` if you want production boot to fail when email alerts are not configured
 - SMTP transport flags:
   - For implicit SSL (`SMTP_PORT=465`): `SMTP_USE_SSL=true`, `SMTP_USE_TLS=false`
   - For STARTTLS (`SMTP_PORT=587`): `SMTP_USE_SSL=false`, `SMTP_USE_TLS=true`
@@ -99,6 +100,7 @@ Optional:
 
 - `DATABASE_URL=<postgres-url>` if using Postgres instead of SQLite.
 - `TELEGRAM_BOT_TOKEN=<token>` if Telegram auth is enabled.
+- `REQUIRE_EMAIL_ALERTS_IN_PRODUCTION=false` (default) if you want app startup to continue while email alerts are being staged.
 
 ## 4) Post-Deploy Checklist
 
