@@ -16,15 +16,15 @@ jobs:
     permissions:
       contents: read
     env:
-      VITE_API_BASE: ${{ secrets.VITE_API_BASE }}
-      RUNTIME_API_BASE: ${{ secrets.RUNTIME_API_BASE || secrets.VITE_API_BASE }}
+      VITE_API_BASE: ${{ secrets.VITE_API_BASE || 'https://api.40bingo.com' }}
+      RUNTIME_API_BASE: ${{ secrets.RUNTIME_API_BASE || secrets.VITE_API_BASE || 'https://api.40bingo.com' }}
       SSH_HOST: ${{ secrets.SSH_HOST || secrets.CPANEL_HOST }}
       SSH_USER: ${{ secrets.SSH_USER || secrets.CPANEL_USER }}
       SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY || secrets.DEPLOY_SSH_KEY }}
       SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
       SSH_PORT: ${{ secrets.SSH_PORT || secrets.CPANEL_PORT || '22' }}
-      SSH_FRONTEND_PATH: ${{ secrets.SSH_FRONTEND_PATH || secrets.CPANEL_FRONTEND_PATH }}
-      SSH_BACKEND_PATH: ${{ secrets.SSH_BACKEND_PATH || secrets.CPANEL_BACKEND_PATH }}
+      SSH_FRONTEND_PATH: ${{ secrets.SSH_FRONTEND_PATH || secrets.CPANEL_FRONTEND_PATH || '~/public_html' }}
+      SSH_BACKEND_PATH: ${{ secrets.SSH_BACKEND_PATH || secrets.CPANEL_BACKEND_PATH || '~/apps/40bingo-backend' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -84,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=()
-          for name in SSH_HOST SSH_USER SSH_KEY SSH_FRONTEND_PATH SSH_BACKEND_PATH; do
+          for name in SSH_HOST SSH_USER SSH_KEY; do
             if [ -z "${!name:-}" ]; then
               missing+=("$name")
             fi
