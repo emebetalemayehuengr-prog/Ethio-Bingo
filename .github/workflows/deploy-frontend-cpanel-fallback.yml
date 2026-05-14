@@ -1,0 +1,125 @@
+﻿name: Deploy Frontend to cPanel (Fallback)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-frontend-cpanel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VITE_API_BASE: ${{ secrets.VITE_API_BASE || 'https://api.40bingo.com' }}
+      RUNTIME_API_BASE: ${{ secrets.RUNTIME_API_BASE || secrets.VITE_API_BASE || 'https://api.40bingo.com' }}
+      SITE_URL: ${{ secrets.SITE_URL || 'https://40bingo.com' }}
+      CPANEL_HOST: ${{ secrets.CPANEL_HOST || secrets.SSH_HOST }}
+      CPANEL_USER: ${{ secrets.CPANEL_USER || secrets.SSH_USER }}
+      CPANEL_PORT: ${{ secrets.CPANEL_PORT || secrets.SSH_PORT || '22' }}
+      CPANEL_FRONTEND_PATH: ${{ secrets.CPANEL_FRONTEND_PATH || secrets.SSH_FRONTEND_PATH || '~/public_html' }}
+      CPANEL_FTP_FRONTEND_PATH: ${{ secrets.CPANEL_FTP_FRONTEND_PATH || '/public_html' }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY || secrets.CPANEL_SSH_KEY || secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
+      CPANEL_PASSWORD: ${{ secrets.CPANEL_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Override runtime API base
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'window.__RUNTIME_CONFIG__ = { API_BASE: "%s" };\n' "$RUNTIME_API_BASE" > frontend/dist/runtime-config.js
+
+      - name: Stamp deploy revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${GITHUB_SHA}" > frontend/dist/.deploy-revision
+
+      - name: Validate deploy credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -z "${CPANEL_HOST:-}" ] && missing+=("CPANEL_HOST/SSH_HOST")
+          [ -z "${CPANEL_USER:-}" ] && missing+=("CPANEL_USER/SSH_USER")
+          if [ -z "${DEPLOY_SSH_KEY:-}" ] && [ -z "${CPANEL_PASSWORD:-}" ]; then
+            missing+=("DEPLOY_SSH_KEY|CPANEL_SSH_KEY|SSH_PRIVATE_KEY|SSH_KEY or CPANEL_PASSWORD")
+          fi
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing deploy credentials: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Upload frontend via SSH/SCP
+        if: ${{ env.DEPLOY_SSH_KEY != '' }}
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ env.CPANEL_HOST }}
+          username: ${{ env.CPANEL_USER }}
+          key: ${{ env.DEPLOY_SSH_KEY }}
+          port: ${{ env.CPANEL_PORT }}
+          source: "frontend/dist/"
+          target: ${{ env.CPANEL_FRONTEND_PATH }}
+          strip_components: 2
+          overwrite: true
+          timeout: 5m
+          command_timeout: 15m
+
+      - name: Upload frontend via FTPS
+        if: ${{ env.DEPLOY_SSH_KEY == '' && env.CPANEL_PASSWORD != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y lftp
+
+          lftp -u "${CPANEL_USER}","${CPANEL_PASSWORD}" "${CPANEL_HOST}" <<LFTP
+          set ftp:ssl-force true
+          set ftp:ssl-protect-data true
+          set ftp:passive-mode true
+          mirror -R --delete --verbose frontend/dist "${CPANEL_FTP_FRONTEND_PATH}"
+          bye
+          LFTP
+
+      - name: Verify frontend revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          SITE="${SITE_URL%/}"
+          WANT="${GITHUB_SHA}"
+          REV=""
+          for i in 1 2 3 4 5; do
+            REV=$(curl -fsS --max-time 12 "${SITE}/.deploy-revision" 2>/dev/null || true)
+            if [ "$REV" = "$WANT" ]; then
+              echo "frontend_revision_ok $REV"
+              exit 0
+            fi
+            echo "Attempt ${i}: got '${REV}', waiting..."
+            sleep 4
+          done
+          echo "::error::Frontend deploy revision mismatch. Expected ${WANT}, got '${REV}'"
+          exit 1
+
