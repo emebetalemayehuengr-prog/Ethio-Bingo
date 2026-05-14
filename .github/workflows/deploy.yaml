@@ -18,13 +18,14 @@ jobs:
     env:
       VITE_API_BASE: ${{ secrets.VITE_API_BASE || 'https://api.40bingo.com' }}
       RUNTIME_API_BASE: ${{ secrets.RUNTIME_API_BASE || secrets.VITE_API_BASE || 'https://api.40bingo.com' }}
+      SITE_URL: ${{ secrets.SITE_URL || 'https://40bingo.com' }}
       SSH_HOST: ${{ secrets.SSH_HOST || secrets.CPANEL_HOST }}
       SSH_USER: ${{ secrets.SSH_USER || secrets.CPANEL_USER }}
       SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY || secrets.DEPLOY_SSH_KEY }}
       SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
       SSH_PORT: ${{ secrets.SSH_PORT || secrets.CPANEL_PORT || '22' }}
-      SSH_FRONTEND_PATH: ${{ secrets.SSH_FRONTEND_PATH || secrets.CPANEL_FRONTEND_PATH || '~/public_html' }}
-      SSH_BACKEND_PATH: ${{ secrets.SSH_BACKEND_PATH || secrets.CPANEL_BACKEND_PATH || '~/apps/40bingo-backend' }}
+      SSH_FRONTEND_PATH: ${{ secrets.CPANEL_FRONTEND_PATH || secrets.SSH_FRONTEND_PATH || format('/home/{0}/public_html', secrets.CPANEL_USER || secrets.SSH_USER) }}
+      SSH_BACKEND_PATH: ${{ secrets.CPANEL_BACKEND_PATH || secrets.SSH_BACKEND_PATH || format('/home/{0}/apps/40bingo-backend', secrets.CPANEL_USER || secrets.SSH_USER) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -174,6 +175,24 @@ jobs:
             test "$(tr -d '\n' < "$FE/.deploy-revision")" = "$WANT"
             test "$(tr -d '\n' < "$BE/.deploy-revision")" = "$WANT"
             echo "deploy_revision_ok $WANT"
+
+      - name: Verify frontend revision is live on public domain
+        shell: bash
+        run: |
+          set -euo pipefail
+          SITE="${SITE_URL%/}"
+          WANT="${GITHUB_SHA}"
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            LIVE_REV="$(curl --fail --show-error --silent --max-time 12 "$SITE/.deploy-revision" || true)"
+            echo "attempt $i: live='$LIVE_REV' expected='$WANT'"
+            if [ "$LIVE_REV" = "$WANT" ]; then
+              echo "live_revision_ok $LIVE_REV"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "::error::Live domain still serves old frontend revision."
+          exit 1
 
       - name: Restart backend app (Passenger)
         uses: appleboy/ssh-action@v1.2.5
