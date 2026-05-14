@@ -108,34 +108,6 @@ jobs:
             set -e
             echo "github_actions_ssh_ok user=$(whoami) host=$(hostname -f 2>/dev/null || hostname)"
 
-      - name: Upload frontend to HahuCloud (SFTP)
-        uses: appleboy/scp-action@v1.0.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
-          passphrase: ${{ secrets.SSH_PASSPHRASE }}
-          port: ${{ secrets.SSH_PORT || '22' }}
-          source: "frontend/dist/*"
-          target: ${{ secrets.SSH_FRONTEND_PATH }}
-          strip_components: 2
-          timeout: 5m
-          command_timeout: 10m
-
-      - name: Upload frontend SPA rewrite file
-        uses: appleboy/scp-action@v1.0.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
-          passphrase: ${{ secrets.SSH_PASSPHRASE }}
-          port: ${{ secrets.SSH_PORT || '22' }}
-          source: "frontend/dist/.htaccess"
-          target: ${{ secrets.SSH_FRONTEND_PATH }}
-          strip_components: 2
-          timeout: 5m
-          command_timeout: 10m
-
       - name: Sanitize backend tree for upload
         shell: bash
         run: |
@@ -145,7 +117,14 @@ jobs:
           rm -rf backend/.venv
           rm -f backend/.env backend/data/*.db 2>/dev/null || true
 
-      - name: Upload backend to HahuCloud (SFTP)
+      - name: Stamp deploy revision on artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${GITHUB_SHA}" > frontend/dist/.deploy-revision
+          printf '%s\n' "${GITHUB_SHA}" > backend/.deploy-revision
+
+      - name: Upload frontend to HahuCloud (SCP recursive)
         uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -153,12 +132,48 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
           passphrase: ${{ secrets.SSH_PASSPHRASE }}
           port: ${{ secrets.SSH_PORT || '22' }}
-          source: "backend/**"
+          source: "frontend/dist/"
+          target: ${{ secrets.SSH_FRONTEND_PATH }}
+          strip_components: 2
+          overwrite: true
+          timeout: 5m
+          command_timeout: 15m
+
+      - name: Upload backend to HahuCloud (SCP recursive)
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          source: "backend/"
           target: ${{ secrets.SSH_BACKEND_PATH }}
           overwrite: true
           strip_components: 1
           timeout: 5m
           command_timeout: 15m
+
+      - name: Verify deploy landed on server (revision files)
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          timeout: 2m
+          command_timeout: 1m
+          script: |
+            set -euo pipefail
+            FE="${{ secrets.SSH_FRONTEND_PATH }}"
+            BE="${{ secrets.SSH_BACKEND_PATH }}"
+            WANT="${{ github.sha }}"
+            test -f "$FE/.deploy-revision"
+            test -f "$BE/.deploy-revision"
+            test "$(tr -d '\n' < "$FE/.deploy-revision")" = "$WANT"
+            test "$(tr -d '\n' < "$BE/.deploy-revision")" = "$WANT"
+            echo "deploy_revision_ok $WANT"
 
       - name: Restart backend app (Passenger)
         uses: appleboy/ssh-action@v1.2.5
