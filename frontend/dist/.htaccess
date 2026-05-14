@@ -1,9 +1,0 @@
-RewriteEngine On
-
-# Keep direct file and directory requests working.
-RewriteCond %{REQUEST_FILENAME} -f [OR]
-RewriteCond %{REQUEST_FILENAME} -d
-RewriteRule ^ - [L]
-
-# SPA fallback.
-RewriteRule ^ index.html [L]
