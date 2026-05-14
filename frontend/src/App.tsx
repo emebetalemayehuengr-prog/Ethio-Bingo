@@ -2277,6 +2277,45 @@ export default function App() {
     return () => window.cancelAnimationFrame(frameId);
   }, [overlayOpen, showBrandModal, shareQrOpen, selectedBet?.id, depositGuideOpen, cartellaOpen, drawerOpen]);
 
+  useEffect(() => {
+    const showResultOverlay = room?.phase === "finished" && (room?.winners?.length ?? 0) > 0;
+    if (service !== "game" || !room || !card || showResultOverlay) return;
+
+    let frameId = 0;
+    const updateToggleTop = () => {
+      frameId = 0;
+      const headerBottom = topHeaderRef.current?.getBoundingClientRect().bottom ?? 0;
+      const sessionBottom = gameSessionPanelRef.current?.getBoundingClientRect().bottom ?? 0;
+      const anchorBottom = Math.max(headerBottom, sessionBottom > headerBottom ? sessionBottom : 0);
+      const nextTop = Math.max(12, Math.round(anchorBottom + 10));
+      setNowPlayingToggleTop((prev) => (prev === nextTop ? prev : nextTop));
+    };
+
+    const scheduleUpdate = () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(updateToggleTop);
+    };
+
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(scheduleUpdate) : null;
+    if (topHeaderRef.current) resizeObserver?.observe(topHeaderRef.current);
+    if (gameSessionPanelRef.current) resizeObserver?.observe(gameSessionPanelRef.current);
+
+    scheduleUpdate();
+    window.addEventListener("resize", scheduleUpdate);
+    window.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.visualViewport?.addEventListener("resize", scheduleUpdate);
+    window.visualViewport?.addEventListener("scroll", scheduleUpdate);
+
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", scheduleUpdate);
+      window.removeEventListener("scroll", scheduleUpdate);
+      window.visualViewport?.removeEventListener("resize", scheduleUpdate);
+      window.visualViewport?.removeEventListener("scroll", scheduleUpdate);
+    };
+  }, [service, room, card]);
+
   const onCopyPhone = async (phone: string) => {
     try {
       if (navigator.clipboard?.writeText) {
@@ -2513,43 +2552,6 @@ export default function App() {
   const insufficientCardBalance = cardBuyAmount > 0 && wallet.main_balance < cardBuyAmount;
   const latestBallLetter = typeof room?.latest_number === "number" ? toBingoLetter(room.latest_number) : null;
   const latestBallClass = latestBallLetter ? `call-${latestBallLetter.toLowerCase()}` : "call-idle";
-  useEffect(() => {
-    if (service !== "game" || !room || !card || showResultOverlay) return;
-
-    let frameId = 0;
-    const updateToggleTop = () => {
-      frameId = 0;
-      const headerBottom = topHeaderRef.current?.getBoundingClientRect().bottom ?? 0;
-      const sessionBottom = gameSessionPanelRef.current?.getBoundingClientRect().bottom ?? 0;
-      const anchorBottom = Math.max(headerBottom, sessionBottom > headerBottom ? sessionBottom : 0);
-      const nextTop = Math.max(12, Math.round(anchorBottom + 10));
-      setNowPlayingToggleTop((prev) => (prev === nextTop ? prev : nextTop));
-    };
-
-    const scheduleUpdate = () => {
-      if (frameId) window.cancelAnimationFrame(frameId);
-      frameId = window.requestAnimationFrame(updateToggleTop);
-    };
-
-    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(scheduleUpdate) : null;
-    if (topHeaderRef.current) resizeObserver?.observe(topHeaderRef.current);
-    if (gameSessionPanelRef.current) resizeObserver?.observe(gameSessionPanelRef.current);
-
-    scheduleUpdate();
-    window.addEventListener("resize", scheduleUpdate);
-    window.addEventListener("scroll", scheduleUpdate, { passive: true });
-    window.visualViewport?.addEventListener("resize", scheduleUpdate);
-    window.visualViewport?.addEventListener("scroll", scheduleUpdate);
-
-    return () => {
-      if (frameId) window.cancelAnimationFrame(frameId);
-      resizeObserver?.disconnect();
-      window.removeEventListener("resize", scheduleUpdate);
-      window.removeEventListener("scroll", scheduleUpdate);
-      window.visualViewport?.removeEventListener("resize", scheduleUpdate);
-      window.visualViewport?.removeEventListener("scroll", scheduleUpdate);
-    };
-  }, [service, room, card, showResultOverlay]);
 
   const renderBoughtCard = (ownedCard: BingoCard, rail: "desktop" | "panel" = "desktop") => {
     const isActive = selectedCardNo === ownedCard.card_no;
