@@ -1,9 +1,6 @@
 name: Deploy Frontend to cPanel (Fallback)
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:
@@ -27,6 +24,7 @@ jobs:
       CPANEL_HOME: ${{ format('/home/{0}', secrets.CPANEL_USER || secrets.SSH_USER || 'bingoco1') }}
       CPANEL_FRONTEND_PATH: ${{ secrets.CPANEL_FRONTEND_PATH || secrets.SSH_FRONTEND_PATH || format('/home/{0}/public_html', secrets.CPANEL_USER || secrets.SSH_USER || 'bingoco1') }}
       DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY || secrets.CPANEL_SSH_KEY || secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
+      FRONTEND_ARCHIVE: frontend-${{ github.sha }}.tgz
 
     steps:
       - name: Checkout
@@ -75,7 +73,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tar -C frontend/dist -czf frontend-dist.tgz .
+          tar -C frontend/dist -czf "${FRONTEND_ARCHIVE}" .
 
       - name: Validate deploy credentials
         shell: bash
@@ -98,7 +96,7 @@ jobs:
           key: ${{ env.DEPLOY_SSH_KEY }}
           passphrase: ${{ env.CPANEL_SSH_PASSPHRASE }}
           port: ${{ env.CPANEL_PORT }}
-          source: "frontend-dist.tgz"
+          source: ${{ env.FRONTEND_ARCHIVE }}
           target: ${{ env.CPANEL_HOME }}
           overwrite: true
           timeout: 5m
@@ -118,7 +116,7 @@ jobs:
             set -euo pipefail
             HOME_DIR="$(cd ~ && pwd)"
             DOCROOT="${{ env.CPANEL_FRONTEND_PATH }}"
-            ARCHIVE="$HOME_DIR/frontend-dist.tgz"
+            ARCHIVE="$HOME_DIR/${{ env.FRONTEND_ARCHIVE }}"
             WANT="${{ github.sha }}"
 
             if [ "$(whoami)" != "${{ env.EXPECTED_CPANEL_USER }}" ]; then
@@ -127,10 +125,7 @@ jobs:
             fi
 
             if [ ! -f "$ARCHIVE" ]; then
-              ARCHIVE="$(find "$HOME_DIR" -maxdepth 5 -type f -name 'frontend-dist.tgz' 2>/dev/null | head -n1 || true)"
-            fi
-            if [ ! -f "$ARCHIVE" ]; then
-              echo "frontend-dist.tgz not found on server home directory."
+              echo "frontend archive not found: $ARCHIVE"
               exit 1
             fi
 
@@ -146,6 +141,8 @@ jobs:
                 find "$cache_root" -mindepth 1 -maxdepth 6 -exec rm -rf {} + 2>/dev/null || true
               fi
             done
+
+            rm -f "$ARCHIVE"
 
       - name: Verify frontend bundle
         shell: bash

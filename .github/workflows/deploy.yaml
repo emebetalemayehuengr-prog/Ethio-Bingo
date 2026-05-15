@@ -28,6 +28,7 @@ jobs:
       SSH_HOME: ${{ format('/home/{0}', secrets.SSH_USER || secrets.CPANEL_USER || 'bingoco1') }}
       SSH_FRONTEND_PATH: ${{ secrets.CPANEL_FRONTEND_PATH || secrets.SSH_FRONTEND_PATH || format('/home/{0}/public_html', secrets.SSH_USER || secrets.CPANEL_USER || 'bingoco1') }}
       SSH_BACKEND_PATH: ${{ secrets.CPANEL_BACKEND_PATH || secrets.SSH_BACKEND_PATH || format('/home/{0}/apps/40bingo-backend', secrets.SSH_USER || secrets.CPANEL_USER || 'bingoco1') }}
+      FRONTEND_ARCHIVE: frontend-${{ github.sha }}.tgz
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -148,7 +149,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tar -C frontend/dist -czf frontend-dist.tgz .
+          tar -C frontend/dist -czf "${FRONTEND_ARCHIVE}" .
 
       - name: Upload frontend package
         uses: appleboy/scp-action@v1.0.0
@@ -158,7 +159,7 @@ jobs:
           key: ${{ env.SSH_KEY }}
           passphrase: ${{ env.SSH_PASSPHRASE }}
           port: ${{ env.SSH_PORT }}
-          source: "frontend-dist.tgz"
+          source: ${{ env.FRONTEND_ARCHIVE }}
           target: ${{ env.SSH_HOME }}
           overwrite: true
           timeout: 5m
@@ -178,7 +179,7 @@ jobs:
             set -euo pipefail
             DOCROOT="${{ env.SSH_FRONTEND_PATH }}"
             HOME_DIR="$(cd ~ && pwd)"
-            ARCHIVE="$HOME_DIR/frontend-dist.tgz"
+            ARCHIVE="$HOME_DIR/${{ env.FRONTEND_ARCHIVE }}"
             WANT="${{ github.sha }}"
 
             if [ "$(whoami)" != "${{ env.EXPECTED_CPANEL_USER }}" ]; then
@@ -187,10 +188,7 @@ jobs:
             fi
 
             if [ ! -f "$ARCHIVE" ]; then
-              ARCHIVE="$(find "$HOME_DIR" -maxdepth 5 -type f -name 'frontend-dist.tgz' 2>/dev/null | head -n1 || true)"
-            fi
-            if [ ! -f "$ARCHIVE" ]; then
-              echo "frontend-dist.tgz not found on server home directory."
+              echo "frontend archive not found: $ARCHIVE"
               exit 1
             fi
 
@@ -206,6 +204,8 @@ jobs:
                 find "$cache_root" -mindepth 1 -maxdepth 6 -exec rm -rf {} + 2>/dev/null || true
               fi
             done
+
+            rm -f "$ARCHIVE"
 
       - name: Upload backend to HahuCloud
         uses: appleboy/scp-action@v1.0.0
