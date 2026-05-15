@@ -192,6 +192,13 @@ jobs:
               exit 1
             fi
 
+            for cache_root in "$HOME_DIR/lscache" "$HOME_DIR/tmp/lscache" "$HOME_DIR/public_html/lscache"; do
+              if [ -d "$cache_root" ]; then
+                find "$cache_root" -mindepth 1 -maxdepth 6 -exec rm -rf {} + 2>/dev/null || true
+                echo "purged_cache_root $cache_root"
+              fi
+            done
+
             echo "frontend_docroots_synced:"
             printf '%s\n' "$DEPLOYED" | sed '/^$/d'
 
@@ -219,7 +226,10 @@ jobs:
           WANT="${GITHUB_SHA}"
           REV=""
           for i in 1 2 3 4 5; do
-            REV=$(curl -fsS --max-time 12 "${SITE}/.deploy-revision" 2>/dev/null || true)
+            REV=$(curl -fsS --max-time 12 \
+              -H 'Cache-Control: no-cache, no-store, max-age=0' \
+              -H 'Pragma: no-cache' \
+              "${SITE}/.deploy-revision?cb=${GITHUB_RUN_ID}-${i}" 2>/dev/null || true)
             if [ "$REV" = "$WANT" ]; then
               echo "frontend_revision_ok $REV"
               exit 0
