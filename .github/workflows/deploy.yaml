@@ -18,17 +18,16 @@ jobs:
     env:
       VITE_API_BASE: ${{ secrets.VITE_API_BASE || 'https://api.40bingo.com' }}
       RUNTIME_API_BASE: ${{ secrets.RUNTIME_API_BASE || secrets.VITE_API_BASE || 'https://api.40bingo.com' }}
-      SITE_URL: ${{ secrets.SITE_URL || 'https://40bingo.com' }}
+      SITE_URL: ${{ secrets.SITE_URL || 'https://www.40bingo.com' }}
       SSH_HOST: ${{ secrets.SSH_HOST || secrets.CPANEL_HOST }}
       SSH_USER: ${{ secrets.SSH_USER || secrets.CPANEL_USER }}
       SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY || secrets.DEPLOY_SSH_KEY }}
-      SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
+      SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE || secrets.CPANEL_SSH_PASSPHRASE }}
       SSH_PORT: ${{ secrets.SSH_PORT || secrets.CPANEL_PORT || '22' }}
       EXPECTED_CPANEL_USER: ${{ secrets.EXPECTED_CPANEL_USER || 'bingoco1' }}
-      LEGACY_FRONTEND_BUNDLE_HINTS: ${{ secrets.LEGACY_FRONTEND_BUNDLE_HINTS || 'index-CXHwv-Nc.js,index-CAC1dxb9.js' }}
-      SSH_FRONTEND_STAGING_PATH: ${{ format('/home/{0}/.gha-frontend-staging-{1}', secrets.CPANEL_USER || secrets.SSH_USER, github.run_id) }}
-      SSH_FRONTEND_PATH: ${{ secrets.CPANEL_FRONTEND_PATH || secrets.SSH_FRONTEND_PATH || format('/home/{0}/public_html', secrets.CPANEL_USER || secrets.SSH_USER) }}
-      SSH_BACKEND_PATH: ${{ secrets.CPANEL_BACKEND_PATH || secrets.SSH_BACKEND_PATH || format('/home/{0}/apps/40bingo-backend', secrets.CPANEL_USER || secrets.SSH_USER) }}
+      SSH_HOME: ${{ format('/home/{0}', secrets.SSH_USER || secrets.CPANEL_USER || 'bingoco1') }}
+      SSH_FRONTEND_PATH: ${{ secrets.CPANEL_FRONTEND_PATH || secrets.SSH_FRONTEND_PATH || format('/home/{0}/public_html', secrets.SSH_USER || secrets.CPANEL_USER || 'bingoco1') }}
+      SSH_BACKEND_PATH: ${{ secrets.CPANEL_BACKEND_PATH || secrets.SSH_BACKEND_PATH || format('/home/{0}/apps/40bingo-backend', secrets.SSH_USER || secrets.CPANEL_USER || 'bingoco1') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,12 +52,22 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Override runtime API base (optional)
-        if: ${{ env.RUNTIME_API_BASE != '' }}
+      - name: Override runtime API base
         shell: bash
         run: |
           set -euo pipefail
           printf 'window.__RUNTIME_CONFIG__ = { API_BASE: "%s" };\n' "$RUNTIME_API_BASE" > frontend/dist/runtime-config.js
+
+      - name: Detect expected frontend bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED_JS="$(grep -oE 'assets/index-[^"]+\.js' frontend/dist/index.html | head -n1 || true)"
+          if [ -z "$EXPECTED_JS" ]; then
+            echo "::error::Could not detect expected frontend JS bundle from dist/index.html"
+            exit 1
+          fi
+          echo "EXPECTED_FRONTEND_JS=$EXPECTED_JS" >> "$GITHUB_ENV"
 
       - name: Verify frontend build artifacts
         shell: bash
@@ -67,6 +76,7 @@ jobs:
           test -f frontend/dist/index.html
           test -f frontend/dist/.htaccess
           test -f frontend/dist/runtime-config.js
+          test -n "${EXPECTED_FRONTEND_JS:-}"
 
       - name: Install backend deps
         working-directory: backend
@@ -98,7 +108,7 @@ jobs:
             exit 1
           fi
 
-      - name: SSH handshake to cPanel (diagnostic)
+      - name: SSH handshake to cPanel
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.SSH_HOST }}
@@ -140,7 +150,7 @@ jobs:
           set -euo pipefail
           tar -C frontend/dist -czf frontend-dist.tgz .
 
-      - name: Upload frontend package to server staging
+      - name: Upload frontend package
         uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ env.SSH_HOST }}
@@ -149,12 +159,12 @@ jobs:
           passphrase: ${{ env.SSH_PASSPHRASE }}
           port: ${{ env.SSH_PORT }}
           source: "frontend-dist.tgz"
-          target: ${{ env.SSH_FRONTEND_STAGING_PATH }}
+          target: ${{ env.SSH_HOME }}
           overwrite: true
           timeout: 5m
           command_timeout: 15m
 
-      - name: Promote frontend staging build to active cPanel docroots
+      - name: Deploy frontend package to docroot
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.SSH_HOST }}
@@ -166,128 +176,38 @@ jobs:
           command_timeout: 2m
           script: |
             set -euo pipefail
-            STAGING="${{ env.SSH_FRONTEND_STAGING_PATH }}"
-            PRIMARY="${{ env.SSH_FRONTEND_PATH }}"
-            WANT="${{ github.sha }}"
-            SITE_URL="${{ env.SITE_URL }}"
+            DOCROOT="${{ env.SSH_FRONTEND_PATH }}"
             HOME_DIR="$(cd ~ && pwd)"
-            SITE_HOST="$(printf '%s' "$SITE_URL" | sed -E 's#^https?://##; s#/.*$##')"
-            SITE_HOST="${SITE_HOST#www.}"
+            ARCHIVE="$HOME_DIR/frontend-dist.tgz"
+            WANT="${{ github.sha }}"
 
-            STAGING_TGZ="$STAGING/frontend-dist.tgz"
-            STAGING_SRC="$STAGING"
-
-            if [ ! -d "$STAGING" ]; then
-              echo "Frontend staging path not found: $STAGING"
+            if [ "$(whoami)" != "${{ env.EXPECTED_CPANEL_USER }}" ]; then
+              echo "Wrong cPanel account. Expected '${{ env.EXPECTED_CPANEL_USER }}' but got '$(whoami)'."
               exit 1
             fi
 
-            FOUND_TGZ="$(find "$STAGING" -maxdepth 5 -type f -name 'frontend-dist.tgz' 2>/dev/null | head -n1 || true)"
-            if [ -n "$FOUND_TGZ" ]; then
-              STAGING_TGZ="$FOUND_TGZ"
+            if [ ! -f "$ARCHIVE" ]; then
+              ARCHIVE="$(find "$HOME_DIR" -maxdepth 5 -type f -name 'frontend-dist.tgz' 2>/dev/null | head -n1 || true)"
             fi
-
-            if [ -f "$STAGING_TGZ" ]; then
-              rm -rf "$STAGING/current"
-              mkdir -p "$STAGING/current"
-              tar -xzf "$STAGING_TGZ" -C "$STAGING/current"
-              STAGING_SRC="$STAGING/current"
-            fi
-
-            if [ ! -f "$STAGING_SRC/index.html" ]; then
-              echo "Frontend staging source missing index.html at: $STAGING_SRC"
+            if [ ! -f "$ARCHIVE" ]; then
+              echo "frontend-dist.tgz not found on server home directory."
               exit 1
             fi
 
-            deploy_target() {
-              target="$1"
-              allow_any="$2"
-              target="${target%/}"
-              [ -z "$target" ] && return 0
-              if [ "$allow_any" != "yes" ]; then
-                case "$target" in
-                  "$HOME_DIR"/*) ;;
-                  *) return 0 ;;
-                esac
-              fi
-              [ -d "$target" ] || return 0
-              if printf '%s\n' "$DEPLOYED" | grep -Fx -- "$target" >/dev/null 2>&1; then
-                return 0
-              fi
+            mkdir -p "$DOCROOT"
+            find "$DOCROOT" -mindepth 1 -maxdepth 1 ! -name '.well-known' -exec rm -rf {} + 2>/dev/null || true
+            tar -xzf "$ARCHIVE" -C "$DOCROOT"
+            printf '%s\n' "$WANT" > "$DOCROOT/.deploy-revision"
+            printf '%s\n' "$WANT" > "$DOCROOT/deploy-revision.txt"
+            test -f "$DOCROOT/index.html"
 
-              echo "sync_frontend_to $target"
-              if command -v rsync >/dev/null 2>&1; then
-                rsync -a --delete --exclude '.well-known' "$STAGING_SRC"/ "$target"/
-              else
-                find "$target" -mindepth 1 -maxdepth 1 ! -name '.well-known' -exec rm -rf {} + 2>/dev/null || true
-                cp -a "$STAGING_SRC"/. "$target"/
-              fi
-              printf '%s\n' "$WANT" > "$target/.deploy-revision"
-              printf '%s\n' "$WANT" > "$target/deploy-revision.txt"
-              DEPLOYED="$(printf '%s\n%s\n' "$DEPLOYED" "$target" | sed '/^$/d')"
-            }
-
-            DEPLOYED=""
-            deploy_target "$PRIMARY" yes
-            deploy_target "$HOME_DIR/public_html" no
-            deploy_target "$HOME_DIR/public_html/$SITE_HOST" no
-            deploy_target "$HOME_DIR/public_html/www.$SITE_HOST" no
-            deploy_target "$HOME_DIR/$SITE_HOST" no
-            deploy_target "$HOME_DIR/www/$SITE_HOST" no
-
-            LIVE_BASE="${SITE_URL%/}"
-            LIVE_REV_BEFORE="$(curl --fail --show-error --silent --max-time 12 "$LIVE_BASE/deploy-revision.txt" || true)"
-            if [ -z "$LIVE_REV_BEFORE" ]; then
-              LIVE_REV_BEFORE="$(curl --fail --show-error --silent --max-time 12 "$LIVE_BASE/.deploy-revision" || true)"
-            fi
-            if [ -n "$LIVE_REV_BEFORE" ]; then
-              for revfile in $(find "$HOME_DIR" -maxdepth 8 -type f -name '.deploy-revision' 2>/dev/null); do
-                got="$(tr -d '\n' < "$revfile" 2>/dev/null || true)"
-                [ "$got" = "$LIVE_REV_BEFORE" ] || continue
-                deploy_target "$(dirname "$revfile")" no
-              done
-              for revfile in $(find "$HOME_DIR" -maxdepth 8 -type f -name 'deploy-revision.txt' 2>/dev/null); do
-                got="$(tr -d '\n' < "$revfile" 2>/dev/null || true)"
-                [ "$got" = "$LIVE_REV_BEFORE" ] || continue
-                deploy_target "$(dirname "$revfile")" no
-              done
-            fi
-
-            LIVE_INDEX_JS="$(curl --fail --show-error --silent --max-time 12 "$LIVE_BASE/index.html" 2>/dev/null | tr -d '\r' | grep -oE 'assets/index-[^"[:space:]]+\.js' | head -n1 || true)"
-            if [ -n "$LIVE_INDEX_JS" ]; then
-              for idx in $(find "$HOME_DIR" -maxdepth 8 -type f -name 'index.html' 2>/dev/null); do
-                if grep -Fq "$LIVE_INDEX_JS" "$idx" 2>/dev/null; then
-                  deploy_target "$(dirname "$idx")" no
-                fi
-              done
-            fi
-
-            IFS=',' read -r -a LEGACY_HINTS <<< "${{ env.LEGACY_FRONTEND_BUNDLE_HINTS }}"
-            for hint in "${LEGACY_HINTS[@]}"; do
-              [ -n "$hint" ] || continue
-              for idx in $(find "$HOME_DIR" -maxdepth 8 -type f -name 'index.html' 2>/dev/null); do
-                if grep -Fq "$hint" "$idx" 2>/dev/null; then
-                  deploy_target "$(dirname "$idx")" no
-                fi
-              done
-            done
-
-            if [ -z "$DEPLOYED" ]; then
-              echo "No deployable frontend docroot candidates found."
-              exit 1
-            fi
-
-            for cache_root in "$HOME_DIR/lscache" "$HOME_DIR/tmp/lscache" "$HOME_DIR/public_html/lscache"; do
+            for cache_root in "$HOME_DIR/lscache" "$HOME_DIR/tmp/lscache" "$DOCROOT/lscache"; do
               if [ -d "$cache_root" ]; then
                 find "$cache_root" -mindepth 1 -maxdepth 6 -exec rm -rf {} + 2>/dev/null || true
-                echo "purged_cache_root $cache_root"
               fi
             done
 
-            echo "frontend_docroots_synced:"
-            printf '%s\n' "$DEPLOYED" | sed '/^$/d'
-
-      - name: Upload backend to HahuCloud (SCP recursive)
+      - name: Upload backend to HahuCloud
         uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ env.SSH_HOST }}
@@ -302,7 +222,7 @@ jobs:
           timeout: 5m
           command_timeout: 15m
 
-      - name: Verify deploy landed on server (revision files)
+      - name: Verify deploy landed on server
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.SSH_HOST }}
@@ -314,71 +234,36 @@ jobs:
           command_timeout: 1m
           script: |
             set -euo pipefail
-            HOME_DIR="$(cd ~ && pwd)"
             FE="${{ env.SSH_FRONTEND_PATH }}"
             BE="${{ env.SSH_BACKEND_PATH }}"
             WANT="${{ github.sha }}"
+            test -f "$FE/deploy-revision.txt"
             test -f "$BE/.deploy-revision"
+            test "$(tr -d '\n' < "$FE/deploy-revision.txt")" = "$WANT"
             test "$(tr -d '\n' < "$BE/.deploy-revision")" = "$WANT"
-            SITE_URL="${{ env.SITE_URL }}"
-            SITE_HOST="$(printf '%s' "$SITE_URL" | sed -E 's#^https?://##; s#/.*$##')"
-            SITE_HOST="${SITE_HOST#www.}"
-
-            has_frontend_revision() {
-              target="$1"
-              target="${target%/}"
-              [ -z "$target" ] && return 1
-              if [ -f "$target/deploy-revision.txt" ] && [ "$(tr -d '\n' < "$target/deploy-revision.txt")" = "$WANT" ]; then
-                return 0
-              fi
-              [ -f "$target/.deploy-revision" ] || return 1
-              [ "$(tr -d '\n' < "$target/.deploy-revision")" = "$WANT" ]
-            }
-
-            if has_frontend_revision "$FE" ||
-               has_frontend_revision "$HOME_DIR/public_html" ||
-               has_frontend_revision "$HOME_DIR/public_html/$SITE_HOST" ||
-               has_frontend_revision "$HOME_DIR/public_html/www.$SITE_HOST" ||
-               has_frontend_revision "$HOME_DIR/$SITE_HOST" ||
-               has_frontend_revision "$HOME_DIR/www/$SITE_HOST"; then
-              echo "frontend_revision_ok $WANT"
-            else
-              echo "No frontend docroot candidate has revision $WANT"
-              exit 1
-            fi
+            test -f "$FE/index.html"
             echo "deploy_revision_ok $WANT"
 
-      - name: Verify frontend revision is live on public domain
+      - name: Verify frontend bundle is live on public domain
         shell: bash
         run: |
           set -euo pipefail
           SITE="${SITE_URL%/}"
-          WANT="${GITHUB_SHA}"
-          read_live_rev() {
-            local i="$1"
-            local rev
-            rev="$(curl --fail --show-error --silent --max-time 12 \
+          WANT_BUNDLE="${EXPECTED_FRONTEND_JS}"
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            LIVE_INDEX="$(curl --fail --show-error --silent --max-time 15 \
               -H 'Cache-Control: no-cache, no-store, max-age=0' \
               -H 'Pragma: no-cache' \
-              "$SITE/deploy-revision.txt?cb=${GITHUB_RUN_ID}-${i}" || true)"
-            if [ -z "$rev" ]; then
-              rev="$(curl --fail --show-error --silent --max-time 12 \
-                -H 'Cache-Control: no-cache, no-store, max-age=0' \
-                -H 'Pragma: no-cache' \
-                "$SITE/.deploy-revision?cb=${GITHUB_RUN_ID}-${i}" || true)"
-            fi
-            printf '%s' "$rev"
-          }
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            LIVE_REV="$(read_live_rev "$i")"
-            echo "attempt $i: live='$LIVE_REV' expected='$WANT'"
-            if [ "$LIVE_REV" = "$WANT" ]; then
-              echo "live_revision_ok $LIVE_REV"
+              "$SITE/index.html?cb=${GITHUB_RUN_ID}-${i}" || true)"
+            LIVE_BUNDLE="$(printf '%s' "$LIVE_INDEX" | grep -oE 'assets/index-[^"[:space:]]+\.js' | head -n1 || true)"
+            echo "attempt $i: live_bundle='$LIVE_BUNDLE' expected_bundle='$WANT_BUNDLE'"
+            if [ "$LIVE_BUNDLE" = "$WANT_BUNDLE" ]; then
+              echo "live_bundle_ok $LIVE_BUNDLE"
               exit 0
             fi
             sleep 6
           done
-          echo "::error::Live domain still serves old frontend revision."
+          echo "::error::Live domain is still not serving the expected frontend bundle."
           exit 1
 
       - name: Restart backend app (Passenger)
