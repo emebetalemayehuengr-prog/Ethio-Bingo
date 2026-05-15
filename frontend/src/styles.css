@@ -830,7 +830,7 @@ textarea {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease;
-  z-index: 20;
+  z-index: 33;
 }
 
 .drawer-overlay.show {
@@ -848,7 +848,7 @@ textarea {
   color: #121212;
   transform: translateX(-102%);
   transition: transform 0.22s ease;
-  z-index: 22;
+  z-index: 34;
   display: grid;
   grid-template-rows: auto 1fr;
   padding: 18px;
@@ -890,9 +890,11 @@ textarea {
 
 .side-drawer nav {
   overflow-y: auto;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   margin-top: 14px;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
 }
 
 .menu-item {
@@ -908,6 +910,15 @@ textarea {
 .menu-item.active {
   background: #1e74ff;
   color: #fff;
+}
+
+.menu-item.logout-item {
+  margin-top: auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  border-color: rgba(157, 39, 56, 0.24);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 246, 250, 0.98));
 }
 
 .fade-up {
@@ -5119,6 +5130,19 @@ body {
   color: #9d2738;
 }
 
+.brand-menu-trigger {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
 .main-content {
   max-width: 1320px;
   margin-inline: auto;
@@ -6012,6 +6036,7 @@ body {
 .modal-card:focus-visible,
 .side-drawer:focus-visible,
 .menu-item:focus-visible,
+.brand-menu-trigger:focus-visible,
 .mobile-bottom-nav-item:focus-visible,
 .method-card:focus-visible,
 .player-card-select:focus-visible,
@@ -6129,6 +6154,14 @@ body {
 }
 
 @media (max-width: 760px) {
+  .fortybingo-app.drawer-open .mobile-bottom-nav {
+    display: none;
+  }
+
+  .side-drawer nav {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+  }
+
   .toast-rail {
     top: auto;
     bottom: calc(env(safe-area-inset-bottom, 0px) + 84px);

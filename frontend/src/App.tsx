@@ -121,6 +121,7 @@ const services: Array<{ view: ServiceView; label: string }> = [
 ];
 
 const mobileNavViews: ServiceView[] = ["home", "stakes", "game", "wallet", "history"];
+const drawerMenuViews: ServiceView[] = ["how", "contact"];
 
 function renderMobileNavIcon(view: ServiceView) {
   switch (view) {
@@ -2715,7 +2716,7 @@ export default function App() {
   };
 
   return (
-    <div className={`fortybingo-app ${isCasinoLaunchView ? "casino-launch-active" : ""}`}>
+    <div className={`fortybingo-app ${isCasinoLaunchView ? "casino-launch-active" : ""} ${drawerOpen ? "drawer-open" : ""}`}>
       {!isCasinoLaunchView && (
         <>
           <div className={`drawer-overlay ${drawerOpen ? "show" : ""}`} onClick={() => setDrawerOpen(false)} />
@@ -2739,7 +2740,9 @@ export default function App() {
               </button>
             </div>
             <nav>
-              {services.map((item) => (
+              {services
+                .filter((item) => drawerMenuViews.includes(item.view))
+                .map((item) => (
                 <button
                   key={item.view}
                   className={`menu-item ${service === item.view ? "active" : ""}`}
@@ -2759,7 +2762,7 @@ export default function App() {
               >
                 What's New
               </button>
-              <button className="menu-item danger" type="button" onClick={() => void onLogout()}>
+              <button className="menu-item danger logout-item" type="button" onClick={() => void onLogout()}>
                 Logout
               </button>
             </nav>
@@ -2767,18 +2770,15 @@ export default function App() {
 
           <header ref={topHeaderRef} className="top-header">
             <div className="top-strip">
-              <div className="brand-inline">
-                <img src="/brand/40bingo-logo.svg" alt="40bingo logo" className="brand-inline-logo" />
-                <span>40bingo</span>
-              </div>
               <button
-                className="menu-toggle"
+                className="brand-inline brand-menu-trigger"
                 type="button"
                 aria-expanded={drawerOpen}
                 aria-controls="app-side-drawer"
                 onClick={() => setDrawerOpen((state) => !state)}
               >
-                Menu
+                <img src="/brand/40bingo-logo.svg" alt="40bingo logo" className="brand-inline-logo" />
+                <span>40bingo</span>
               </button>
               <button
                 className={`theme-toggle ${isDarkMode ? "on" : "off"}`}

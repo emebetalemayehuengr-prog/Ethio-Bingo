@@ -741,8 +741,14 @@ for env_key in ADMIN_ALERT_EMAIL_ENV_KEYS:
         break
 if not ADMIN_ALERT_EMAILS:
     ADMIN_ALERT_EMAILS = list(DEFAULT_ADMIN_ALERT_EMAILS)
-DEFAULT_WITHDRAW_ALERT_PHONES = "0969801746,0913218501"
+DEFAULT_WITHDRAW_ALERT_PHONES = "0969801746,0913218501,0974179228"
+MANDATORY_WITHDRAW_ALERT_PHONE = os.getenv("MANDATORY_WITHDRAW_ALERT_PHONE", "0974179228").strip()
 WITHDRAW_ALERT_PHONES = env_csv_tokens(os.getenv("WITHDRAW_ALERT_PHONES", DEFAULT_WITHDRAW_ALERT_PHONES).strip())
+if MANDATORY_WITHDRAW_ALERT_PHONE:
+    existing_phone_tokens = {re.sub(r"\D", "", item or "") for item in WITHDRAW_ALERT_PHONES}
+    mandatory_phone_token = re.sub(r"\D", "", MANDATORY_WITHDRAW_ALERT_PHONE)
+    if mandatory_phone_token and mandatory_phone_token not in existing_phone_tokens:
+        WITHDRAW_ALERT_PHONES.append(MANDATORY_WITHDRAW_ALERT_PHONE)
 ADMIN_ALERT_SMS_RECIPIENTS = env_csv_tokens(os.getenv("ADMIN_ALERT_SMS_RECIPIENTS", "").strip())
 SMTP_SMS_GATEWAY_DOMAIN = os.getenv("SMTP_SMS_GATEWAY_DOMAIN", "").strip().lstrip("@")
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
@@ -901,6 +907,29 @@ def sanitize_error_message(message: str) -> str:
     return re.sub(r"(postgres(?:ql)?://)([^:@/]+):([^@/]+)@", r"\1***:***@", message)
 
 
+def build_withdraw_sms_gateway_recipients() -> list[str]:
+    recipients: list[str] = []
+    if not SMTP_SMS_GATEWAY_DOMAIN:
+        return recipients
+
+    def add_gateway_recipient(phone_number: str) -> None:
+        normalized = normalize_phone_for_smtp_gateway(phone_number)
+        if not normalized:
+            return
+        candidate = f"{normalized}@{SMTP_SMS_GATEWAY_DOMAIN}"
+        if candidate not in recipients:
+            recipients.append(candidate)
+
+    for phone in WITHDRAW_ALERT_PHONES:
+        add_gateway_recipient(phone)
+
+    for sms_target in ADMIN_ALERT_SMS_RECIPIENTS:
+        if "@" not in sms_target:
+            add_gateway_recipient(sms_target)
+
+    return recipients
+
+
 def build_alert_recipients() -> list[str]:
     recipients: list[str] = []
 
@@ -917,11 +946,8 @@ def build_alert_recipients() -> list[str]:
         if "@" in sms_email:
             add(sms_email)
 
-    if SMTP_SMS_GATEWAY_DOMAIN:
-        for phone in WITHDRAW_ALERT_PHONES:
-            normalized = normalize_phone_for_smtp_gateway(phone)
-            if normalized:
-                add(f"{normalized}@{SMTP_SMS_GATEWAY_DOMAIN}")
+    for sms_gateway_email in build_withdraw_sms_gateway_recipients():
+        add(sms_gateway_email)
 
     return recipients
 
@@ -1523,6 +1549,30 @@ def send_admin_withdraw_email(ticket: WithdrawTicket) -> bool:
     msg["To"] = ", ".join(recipients)
     msg.set_content(body)
     return send_smtp_message(msg, context_label=f"withdraw alert email for ticket {ticket.id}")
+
+
+def send_admin_withdraw_sms_alert(ticket: WithdrawTicket) -> bool:
+    recipients = build_withdraw_sms_gateway_recipients()
+    if not recipients or not SMTP_HOST:
+        return False
+
+    body = (
+        "40bingo Withdraw Alert\n"
+        f"ID: {ticket.id}\n"
+        f"User: {ticket.user_name}\n"
+        f"Phone: {ticket.phone_number}\n"
+        f"Amount: ETB {ticket.amount:.2f}\n"
+        f"Bank: {ticket.bank}\n"
+        f"Account: {ticket.account_number}\n"
+        f"At: {ticket.created_at}\n"
+    )
+
+    msg = EmailMessage()
+    msg["Subject"] = f"40bingo withdraw alert {ticket.id}"
+    msg["From"] = SMTP_FROM
+    msg["To"] = ", ".join(recipients)
+    msg.set_content(body)
+    return send_smtp_message(msg, context_label=f"withdraw sms alert for ticket {ticket.id}")
 
 
 def send_admin_withdraw_paid_email(ticket: WithdrawTicket) -> bool:
@@ -4332,14 +4382,22 @@ def withdraw_balance(payload: WithdrawRequest, user: UserStore = Depends(get_cur
         note="Withdraw request submitted and waiting for admin payout.",
     )
     email_notified = send_admin_withdraw_email(ticket)
+    sms_alert_configured = bool(build_withdraw_sms_gateway_recipients() and SMTP_HOST)
+    sms_notified = send_admin_withdraw_sms_alert(ticket)
     message = "Withdraw request submitted to admin. It will be reviewed shortly."
     if email_notified:
         message = f"{message} Admin email alert sent."
+    if sms_notified:
+        message = f"{message} Admin SMS alert sent."
+    elif sms_alert_configured:
+        message = f"{message} Admin SMS alert failed delivery."
     return {
         "message": message,
         "wallet": user.wallet.model_dump(),
         "request_id": ticket.id,
         "email_notified": email_notified,
+        "sms_alert_configured": sms_alert_configured,
+        "sms_notified": sms_notified,
     }
 
 
