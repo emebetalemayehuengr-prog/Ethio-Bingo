@@ -148,6 +148,25 @@ jobs:
             deploy_target "$HOME_DIR/$SITE_HOST" no
             deploy_target "$HOME_DIR/www/$SITE_HOST" no
 
+            LIVE_BASE="${SITE_URL%/}"
+            LIVE_REV_BEFORE="$(curl --fail --show-error --silent --max-time 12 "$LIVE_BASE/.deploy-revision" || true)"
+            if [ -n "$LIVE_REV_BEFORE" ]; then
+              for revfile in $(find "$HOME_DIR" -maxdepth 8 -type f -name '.deploy-revision' 2>/dev/null); do
+                got="$(tr -d '\n' < "$revfile" 2>/dev/null || true)"
+                [ "$got" = "$LIVE_REV_BEFORE" ] || continue
+                deploy_target "$(dirname "$revfile")" no
+              done
+            fi
+
+            LIVE_INDEX_JS="$(curl --fail --show-error --silent --max-time 12 "$LIVE_BASE/index.html" 2>/dev/null | tr -d '\r' | grep -oE 'assets/index-[^"[:space:]]+\.js' | head -n1 || true)"
+            if [ -n "$LIVE_INDEX_JS" ]; then
+              for idx in $(find "$HOME_DIR" -maxdepth 8 -type f -name 'index.html' 2>/dev/null); do
+                if grep -Fq "$LIVE_INDEX_JS" "$idx" 2>/dev/null; then
+                  deploy_target "$(dirname "$idx")" no
+                fi
+              done
+            fi
+
             if [ -z "$DEPLOYED" ]; then
               echo "No deployable frontend docroot candidates found."
               exit 1
