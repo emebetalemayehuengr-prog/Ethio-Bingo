@@ -24,6 +24,7 @@ jobs:
       SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY || secrets.DEPLOY_SSH_KEY }}
       SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
       SSH_PORT: ${{ secrets.SSH_PORT || secrets.CPANEL_PORT || '22' }}
+      EXPECTED_CPANEL_USER: ${{ secrets.EXPECTED_CPANEL_USER || 'bingoco1' }}
       LEGACY_FRONTEND_BUNDLE_HINTS: ${{ secrets.LEGACY_FRONTEND_BUNDLE_HINTS || 'index-CXHwv-Nc.js,index-CAC1dxb9.js' }}
       SSH_FRONTEND_STAGING_PATH: ${{ format('/home/{0}/.gha-frontend-staging-{1}', secrets.CPANEL_USER || secrets.SSH_USER, github.run_id) }}
       SSH_FRONTEND_PATH: ${{ secrets.CPANEL_FRONTEND_PATH || secrets.SSH_FRONTEND_PATH || format('/home/{0}/public_html', secrets.CPANEL_USER || secrets.SSH_USER) }}
@@ -110,6 +111,10 @@ jobs:
           script: |
             set -e
             echo "github_actions_ssh_ok user=$(whoami) host=$(hostname -f 2>/dev/null || hostname)"
+            if [ "$(whoami)" != "${{ env.EXPECTED_CPANEL_USER }}" ]; then
+              echo "Wrong cPanel account. Expected '${{ env.EXPECTED_CPANEL_USER }}' but got '$(whoami)'."
+              exit 1
+            fi
 
       - name: Sanitize backend tree for upload
         shell: bash
@@ -175,6 +180,11 @@ jobs:
               exit 1
             fi
 
+            FOUND_TGZ="$(find "$STAGING" -maxdepth 5 -type f -name 'frontend-dist.tgz' 2>/dev/null | head -n1 || true)"
+            if [ -n "$FOUND_TGZ" ]; then
+              STAGING_TGZ="$FOUND_TGZ"
+            fi
+
             if [ -f "$STAGING_TGZ" ]; then
               rm -rf "$STAGING/current"
               mkdir -p "$STAGING/current"
@@ -207,6 +217,7 @@ jobs:
               if command -v rsync >/dev/null 2>&1; then
                 rsync -a --delete --exclude '.well-known' "$STAGING_SRC"/ "$target"/
               else
+                find "$target" -mindepth 1 -maxdepth 1 ! -name '.well-known' -exec rm -rf {} + 2>/dev/null || true
                 cp -a "$STAGING_SRC"/. "$target"/
               fi
               printf '%s\n' "$WANT" > "$target/.deploy-revision"

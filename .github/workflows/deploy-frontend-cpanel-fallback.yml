@@ -22,9 +22,11 @@ jobs:
       CPANEL_HOST: ${{ secrets.CPANEL_HOST || secrets.SSH_HOST }}
       CPANEL_USER: ${{ secrets.CPANEL_USER || secrets.SSH_USER }}
       CPANEL_PORT: ${{ secrets.CPANEL_PORT || secrets.SSH_PORT || '22' }}
+      CPANEL_SSH_PASSPHRASE: ${{ secrets.CPANEL_SSH_PASSPHRASE || secrets.SSH_PASSPHRASE }}
+      EXPECTED_CPANEL_USER: ${{ secrets.EXPECTED_CPANEL_USER || 'bingoco1' }}
       LEGACY_FRONTEND_BUNDLE_HINTS: ${{ secrets.LEGACY_FRONTEND_BUNDLE_HINTS || 'index-CXHwv-Nc.js,index-CAC1dxb9.js' }}
       CPANEL_FRONTEND_STAGING_PATH: ${{ format('/home/{0}/.gha-frontend-staging-{1}', secrets.CPANEL_USER || secrets.SSH_USER, github.run_id) }}
-      CPANEL_FRONTEND_PATH: ${{ secrets.CPANEL_FRONTEND_PATH || secrets.SSH_FRONTEND_PATH || '~/public_html' }}
+      CPANEL_FRONTEND_PATH: ${{ secrets.CPANEL_FRONTEND_PATH || secrets.SSH_FRONTEND_PATH || format('/home/{0}/public_html', secrets.CPANEL_USER || secrets.SSH_USER) }}
       CPANEL_FTP_FRONTEND_PATH: ${{ secrets.CPANEL_FTP_FRONTEND_PATH || '/public_html' }}
       DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY || secrets.CPANEL_SSH_KEY || secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
       CPANEL_PASSWORD: ${{ secrets.CPANEL_PASSWORD }}
@@ -88,6 +90,7 @@ jobs:
           host: ${{ env.CPANEL_HOST }}
           username: ${{ env.CPANEL_USER }}
           key: ${{ env.DEPLOY_SSH_KEY }}
+          passphrase: ${{ env.CPANEL_SSH_PASSPHRASE }}
           port: ${{ env.CPANEL_PORT }}
           source: "frontend-dist.tgz"
           target: ${{ env.CPANEL_FRONTEND_STAGING_PATH }}
@@ -102,11 +105,16 @@ jobs:
           host: ${{ env.CPANEL_HOST }}
           username: ${{ env.CPANEL_USER }}
           key: ${{ env.DEPLOY_SSH_KEY }}
+          passphrase: ${{ env.CPANEL_SSH_PASSPHRASE }}
           port: ${{ env.CPANEL_PORT }}
           timeout: 5m
           command_timeout: 2m
           script: |
             set -euo pipefail
+            if [ "$(whoami)" != "${{ env.EXPECTED_CPANEL_USER }}" ]; then
+              echo "Wrong cPanel account. Expected '${{ env.EXPECTED_CPANEL_USER }}' but got '$(whoami)'."
+              exit 1
+            fi
             STAGING="${{ env.CPANEL_FRONTEND_STAGING_PATH }}"
             PRIMARY="${{ env.CPANEL_FRONTEND_PATH }}"
             WANT="${{ github.sha }}"
@@ -121,6 +129,11 @@ jobs:
             if [ ! -d "$STAGING" ]; then
               echo "Frontend staging path not found: $STAGING"
               exit 1
+            fi
+
+            FOUND_TGZ="$(find "$STAGING" -maxdepth 5 -type f -name 'frontend-dist.tgz' 2>/dev/null | head -n1 || true)"
+            if [ -n "$FOUND_TGZ" ]; then
+              STAGING_TGZ="$FOUND_TGZ"
             fi
 
             if [ -f "$STAGING_TGZ" ]; then
@@ -155,6 +168,7 @@ jobs:
               if command -v rsync >/dev/null 2>&1; then
                 rsync -a --delete --exclude '.well-known' "$STAGING_SRC"/ "$target"/
               else
+                find "$target" -mindepth 1 -maxdepth 1 ! -name '.well-known' -exec rm -rf {} + 2>/dev/null || true
                 cp -a "$STAGING_SRC"/. "$target"/
               fi
               printf '%s\n' "$WANT" > "$target/.deploy-revision"
