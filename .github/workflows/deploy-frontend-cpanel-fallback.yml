@@ -22,6 +22,7 @@ jobs:
       CPANEL_HOST: ${{ secrets.CPANEL_HOST || secrets.SSH_HOST }}
       CPANEL_USER: ${{ secrets.CPANEL_USER || secrets.SSH_USER }}
       CPANEL_PORT: ${{ secrets.CPANEL_PORT || secrets.SSH_PORT || '22' }}
+      CPANEL_FRONTEND_STAGING_PATH: ${{ format('/home/{0}/.gha-frontend-staging-{1}', secrets.CPANEL_USER || secrets.SSH_USER, github.run_id) }}
       CPANEL_FRONTEND_PATH: ${{ secrets.CPANEL_FRONTEND_PATH || secrets.SSH_FRONTEND_PATH || '~/public_html' }}
       CPANEL_FTP_FRONTEND_PATH: ${{ secrets.CPANEL_FTP_FRONTEND_PATH || '/public_html' }}
       DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY || secrets.CPANEL_SSH_KEY || secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
@@ -82,11 +83,78 @@ jobs:
           key: ${{ env.DEPLOY_SSH_KEY }}
           port: ${{ env.CPANEL_PORT }}
           source: "frontend/dist/"
-          target: ${{ env.CPANEL_FRONTEND_PATH }}
+          target: ${{ env.CPANEL_FRONTEND_STAGING_PATH }}
           strip_components: 2
           overwrite: true
           timeout: 5m
           command_timeout: 15m
+
+      - name: Promote frontend staging build to active cPanel docroots
+        if: ${{ env.DEPLOY_SSH_KEY != '' }}
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ env.CPANEL_HOST }}
+          username: ${{ env.CPANEL_USER }}
+          key: ${{ env.DEPLOY_SSH_KEY }}
+          port: ${{ env.CPANEL_PORT }}
+          timeout: 5m
+          command_timeout: 2m
+          script: |
+            set -euo pipefail
+            STAGING="${{ env.CPANEL_FRONTEND_STAGING_PATH }}"
+            PRIMARY="${{ env.CPANEL_FRONTEND_PATH }}"
+            WANT="${{ github.sha }}"
+            SITE_URL="${{ env.SITE_URL }}"
+            HOME_DIR="$(cd ~ && pwd)"
+            SITE_HOST="$(printf '%s' "$SITE_URL" | sed -E 's#^https?://##; s#/.*$##')"
+            SITE_HOST="${SITE_HOST#www.}"
+
+            if [ ! -d "$STAGING" ]; then
+              echo "Frontend staging directory not found: $STAGING"
+              exit 1
+            fi
+
+            deploy_target() {
+              target="$1"
+              allow_any="$2"
+              target="${target%/}"
+              [ -z "$target" ] && return 0
+              if [ "$allow_any" != "yes" ]; then
+                case "$target" in
+                  "$HOME_DIR"/*) ;;
+                  *) return 0 ;;
+                esac
+              fi
+              [ -d "$target" ] || return 0
+              if printf '%s\n' "$DEPLOYED" | grep -Fx -- "$target" >/dev/null 2>&1; then
+                return 0
+              fi
+
+              echo "sync_frontend_to $target"
+              if command -v rsync >/dev/null 2>&1; then
+                rsync -a --delete --exclude '.well-known' "$STAGING"/ "$target"/
+              else
+                cp -a "$STAGING"/. "$target"/
+              fi
+              printf '%s\n' "$WANT" > "$target/.deploy-revision"
+              DEPLOYED="$(printf '%s\n%s\n' "$DEPLOYED" "$target" | sed '/^$/d')"
+            }
+
+            DEPLOYED=""
+            deploy_target "$PRIMARY" yes
+            deploy_target "$HOME_DIR/public_html" no
+            deploy_target "$HOME_DIR/public_html/$SITE_HOST" no
+            deploy_target "$HOME_DIR/public_html/www.$SITE_HOST" no
+            deploy_target "$HOME_DIR/$SITE_HOST" no
+            deploy_target "$HOME_DIR/www/$SITE_HOST" no
+
+            if [ -z "$DEPLOYED" ]; then
+              echo "No deployable frontend docroot candidates found."
+              exit 1
+            fi
+
+            echo "frontend_docroots_synced:"
+            printf '%s\n' "$DEPLOYED" | sed '/^$/d'
 
       - name: Upload frontend via FTPS
         if: ${{ env.DEPLOY_SSH_KEY == '' && env.CPANEL_PASSWORD != '' }}
