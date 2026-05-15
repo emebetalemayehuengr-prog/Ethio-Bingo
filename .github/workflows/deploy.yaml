@@ -126,7 +126,13 @@ jobs:
           printf '%s\n' "${GITHUB_SHA}" > frontend/dist/.deploy-revision
           printf '%s\n' "${GITHUB_SHA}" > backend/.deploy-revision
 
-      - name: Upload frontend to server staging (SCP recursive)
+      - name: Package frontend build for transfer
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -C frontend/dist -czf frontend-dist.tgz .
+
+      - name: Upload frontend package to server staging
         uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ env.SSH_HOST }}
@@ -134,9 +140,8 @@ jobs:
           key: ${{ env.SSH_KEY }}
           passphrase: ${{ env.SSH_PASSPHRASE }}
           port: ${{ env.SSH_PORT }}
-          source: "frontend/dist/"
+          source: "frontend-dist.tgz"
           target: ${{ env.SSH_FRONTEND_STAGING_PATH }}
-          strip_components: 2
           overwrite: true
           timeout: 5m
           command_timeout: 15m
@@ -161,8 +166,23 @@ jobs:
             SITE_HOST="$(printf '%s' "$SITE_URL" | sed -E 's#^https?://##; s#/.*$##')"
             SITE_HOST="${SITE_HOST#www.}"
 
+            STAGING_TGZ="$STAGING/frontend-dist.tgz"
+            STAGING_SRC="$STAGING"
+
             if [ ! -d "$STAGING" ]; then
-              echo "Frontend staging directory not found: $STAGING"
+              echo "Frontend staging path not found: $STAGING"
+              exit 1
+            fi
+
+            if [ -f "$STAGING_TGZ" ]; then
+              rm -rf "$STAGING/current"
+              mkdir -p "$STAGING/current"
+              tar -xzf "$STAGING_TGZ" -C "$STAGING/current"
+              STAGING_SRC="$STAGING/current"
+            fi
+
+            if [ ! -f "$STAGING_SRC/index.html" ]; then
+              echo "Frontend staging source missing index.html at: $STAGING_SRC"
               exit 1
             fi
 
@@ -184,9 +204,9 @@ jobs:
 
               echo "sync_frontend_to $target"
               if command -v rsync >/dev/null 2>&1; then
-                rsync -a --delete --exclude '.well-known' "$STAGING"/ "$target"/
+                rsync -a --delete --exclude '.well-known' "$STAGING_SRC"/ "$target"/
               else
-                cp -a "$STAGING"/. "$target"/
+                cp -a "$STAGING_SRC"/. "$target"/
               fi
               printf '%s\n' "$WANT" > "$target/.deploy-revision"
               DEPLOYED="$(printf '%s\n%s\n' "$DEPLOYED" "$target" | sed '/^$/d')"
