@@ -26,7 +26,7 @@ jobs:
       SSH_PORT: ${{ secrets.SSH_PORT || secrets.CPANEL_PORT || '22' }}
       EXPECTED_CPANEL_USER: ${{ secrets.EXPECTED_CPANEL_USER || 'bingoco1' }}
       SSH_HOME: ${{ format('/home/{0}', secrets.SSH_USER || secrets.CPANEL_USER || 'bingoco1') }}
-      SSH_FRONTEND_PATH: ${{ secrets.CPANEL_FRONTEND_PATH || secrets.SSH_FRONTEND_PATH || format('/home/{0}/public_html', secrets.SSH_USER || secrets.CPANEL_USER || 'bingoco1') }}
+      SSH_FRONTEND_PATH: ${{ format('/home/{0}/public_html', secrets.EXPECTED_CPANEL_USER || secrets.SSH_USER || secrets.CPANEL_USER || 'bingoco1') }}
       SSH_BACKEND_PATH: ${{ secrets.CPANEL_BACKEND_PATH || secrets.SSH_BACKEND_PATH || format('/home/{0}/apps/40bingo-backend', secrets.SSH_USER || secrets.CPANEL_USER || 'bingoco1') }}
       FRONTEND_ARCHIVE: frontend-${{ github.sha }}.tgz
     steps:
@@ -188,24 +188,29 @@ jobs:
             fi
 
             if [ ! -f "$ARCHIVE" ]; then
+              ARCHIVE="$(find "$HOME_DIR" -maxdepth 6 -type f -name "${{ env.FRONTEND_ARCHIVE }}" 2>/dev/null | head -n1 || true)"
+            fi
+            if [ ! -f "$ARCHIVE" ]; then
               echo "frontend archive not found: $ARCHIVE"
               exit 1
             fi
 
             mkdir -p "$DOCROOT"
+            echo "deploy_docroot=$DOCROOT"
+            echo "deploy_archive=$ARCHIVE"
             find "$DOCROOT" -mindepth 1 -maxdepth 1 ! -name '.well-known' -exec rm -rf {} + 2>/dev/null || true
             tar -xzf "$ARCHIVE" -C "$DOCROOT"
             printf '%s\n' "$WANT" > "$DOCROOT/.deploy-revision"
             printf '%s\n' "$WANT" > "$DOCROOT/deploy-revision.txt"
             test -f "$DOCROOT/index.html"
+            echo "server_bundle=$(grep -oE 'assets/index-[^\"[:space:]]+\\.js' "$DOCROOT/index.html" | head -n1 || true)"
+            echo "server_revision=$(tr -d '\n' < "$DOCROOT/deploy-revision.txt")"
 
             for cache_root in "$HOME_DIR/lscache" "$HOME_DIR/tmp/lscache" "$DOCROOT/lscache"; do
               if [ -d "$cache_root" ]; then
                 find "$cache_root" -mindepth 1 -maxdepth 6 -exec rm -rf {} + 2>/dev/null || true
               fi
             done
-
-            rm -f "$ARCHIVE"
 
       - name: Upload backend to HahuCloud
         uses: appleboy/scp-action@v1.0.0
