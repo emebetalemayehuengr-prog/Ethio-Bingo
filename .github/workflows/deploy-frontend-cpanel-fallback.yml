@@ -22,6 +22,7 @@ jobs:
       CPANEL_HOST: ${{ secrets.CPANEL_HOST || secrets.SSH_HOST }}
       CPANEL_USER: ${{ secrets.CPANEL_USER || secrets.SSH_USER }}
       CPANEL_PORT: ${{ secrets.CPANEL_PORT || secrets.SSH_PORT || '22' }}
+      LEGACY_FRONTEND_BUNDLE_HINTS: ${{ secrets.LEGACY_FRONTEND_BUNDLE_HINTS || 'index-CXHwv-Nc.js,index-CAC1dxb9.js' }}
       CPANEL_FRONTEND_STAGING_PATH: ${{ format('/home/{0}/.gha-frontend-staging-{1}', secrets.CPANEL_USER || secrets.SSH_USER, github.run_id) }}
       CPANEL_FRONTEND_PATH: ${{ secrets.CPANEL_FRONTEND_PATH || secrets.SSH_FRONTEND_PATH || '~/public_html' }}
       CPANEL_FTP_FRONTEND_PATH: ${{ secrets.CPANEL_FTP_FRONTEND_PATH || '/public_html' }}
@@ -186,6 +187,16 @@ jobs:
                 fi
               done
             fi
+
+            IFS=',' read -r -a LEGACY_HINTS <<< "${{ env.LEGACY_FRONTEND_BUNDLE_HINTS }}"
+            for hint in "${LEGACY_HINTS[@]}"; do
+              [ -n "$hint" ] || continue
+              for idx in $(find "$HOME_DIR" -maxdepth 8 -type f -name 'index.html' 2>/dev/null); do
+                if grep -Fq "$hint" "$idx" 2>/dev/null; then
+                  deploy_target "$(dirname "$idx")" no
+                fi
+              done
+            done
 
             if [ -z "$DEPLOYED" ]; then
               echo "No deployable frontend docroot candidates found."

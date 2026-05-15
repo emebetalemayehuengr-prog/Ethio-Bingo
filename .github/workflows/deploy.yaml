@@ -24,6 +24,7 @@ jobs:
       SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY || secrets.DEPLOY_SSH_KEY }}
       SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
       SSH_PORT: ${{ secrets.SSH_PORT || secrets.CPANEL_PORT || '22' }}
+      LEGACY_FRONTEND_BUNDLE_HINTS: ${{ secrets.LEGACY_FRONTEND_BUNDLE_HINTS || 'index-CXHwv-Nc.js,index-CAC1dxb9.js' }}
       SSH_FRONTEND_STAGING_PATH: ${{ format('/home/{0}/.gha-frontend-staging-{1}', secrets.CPANEL_USER || secrets.SSH_USER, github.run_id) }}
       SSH_FRONTEND_PATH: ${{ secrets.CPANEL_FRONTEND_PATH || secrets.SSH_FRONTEND_PATH || format('/home/{0}/public_html', secrets.CPANEL_USER || secrets.SSH_USER) }}
       SSH_BACKEND_PATH: ${{ secrets.CPANEL_BACKEND_PATH || secrets.SSH_BACKEND_PATH || format('/home/{0}/apps/40bingo-backend', secrets.CPANEL_USER || secrets.SSH_USER) }}
@@ -238,6 +239,16 @@ jobs:
                 fi
               done
             fi
+
+            IFS=',' read -r -a LEGACY_HINTS <<< "${{ env.LEGACY_FRONTEND_BUNDLE_HINTS }}"
+            for hint in "${LEGACY_HINTS[@]}"; do
+              [ -n "$hint" ] || continue
+              for idx in $(find "$HOME_DIR" -maxdepth 8 -type f -name 'index.html' 2>/dev/null); do
+                if grep -Fq "$hint" "$idx" 2>/dev/null; then
+                  deploy_target "$(dirname "$idx")" no
+                fi
+              done
+            done
 
             if [ -z "$DEPLOYED" ]; then
               echo "No deployable frontend docroot candidates found."
