@@ -130,7 +130,9 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s\n' "${GITHUB_SHA}" > frontend/dist/.deploy-revision
+          printf '%s\n' "${GITHUB_SHA}" > frontend/dist/deploy-revision.txt
           printf '%s\n' "${GITHUB_SHA}" > backend/.deploy-revision
+          printf '%s\n' "${GITHUB_SHA}" > backend/deploy-revision.txt
 
       - name: Package frontend build for transfer
         shell: bash
@@ -221,6 +223,7 @@ jobs:
                 cp -a "$STAGING_SRC"/. "$target"/
               fi
               printf '%s\n' "$WANT" > "$target/.deploy-revision"
+              printf '%s\n' "$WANT" > "$target/deploy-revision.txt"
               DEPLOYED="$(printf '%s\n%s\n' "$DEPLOYED" "$target" | sed '/^$/d')"
             }
 
@@ -233,9 +236,17 @@ jobs:
             deploy_target "$HOME_DIR/www/$SITE_HOST" no
 
             LIVE_BASE="${SITE_URL%/}"
-            LIVE_REV_BEFORE="$(curl --fail --show-error --silent --max-time 12 "$LIVE_BASE/.deploy-revision" || true)"
+            LIVE_REV_BEFORE="$(curl --fail --show-error --silent --max-time 12 "$LIVE_BASE/deploy-revision.txt" || true)"
+            if [ -z "$LIVE_REV_BEFORE" ]; then
+              LIVE_REV_BEFORE="$(curl --fail --show-error --silent --max-time 12 "$LIVE_BASE/.deploy-revision" || true)"
+            fi
             if [ -n "$LIVE_REV_BEFORE" ]; then
               for revfile in $(find "$HOME_DIR" -maxdepth 8 -type f -name '.deploy-revision' 2>/dev/null); do
+                got="$(tr -d '\n' < "$revfile" 2>/dev/null || true)"
+                [ "$got" = "$LIVE_REV_BEFORE" ] || continue
+                deploy_target "$(dirname "$revfile")" no
+              done
+              for revfile in $(find "$HOME_DIR" -maxdepth 8 -type f -name 'deploy-revision.txt' 2>/dev/null); do
                 got="$(tr -d '\n' < "$revfile" 2>/dev/null || true)"
                 [ "$got" = "$LIVE_REV_BEFORE" ] || continue
                 deploy_target "$(dirname "$revfile")" no
@@ -317,6 +328,9 @@ jobs:
               target="$1"
               target="${target%/}"
               [ -z "$target" ] && return 1
+              if [ -f "$target/deploy-revision.txt" ] && [ "$(tr -d '\n' < "$target/deploy-revision.txt")" = "$WANT" ]; then
+                return 0
+              fi
               [ -f "$target/.deploy-revision" ] || return 1
               [ "$(tr -d '\n' < "$target/.deploy-revision")" = "$WANT" ]
             }
@@ -340,11 +354,23 @@ jobs:
           set -euo pipefail
           SITE="${SITE_URL%/}"
           WANT="${GITHUB_SHA}"
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            LIVE_REV="$(curl --fail --show-error --silent --max-time 12 \
+          read_live_rev() {
+            local i="$1"
+            local rev
+            rev="$(curl --fail --show-error --silent --max-time 12 \
               -H 'Cache-Control: no-cache, no-store, max-age=0' \
               -H 'Pragma: no-cache' \
-              "$SITE/.deploy-revision?cb=${GITHUB_RUN_ID}-${i}" || true)"
+              "$SITE/deploy-revision.txt?cb=${GITHUB_RUN_ID}-${i}" || true)"
+            if [ -z "$rev" ]; then
+              rev="$(curl --fail --show-error --silent --max-time 12 \
+                -H 'Cache-Control: no-cache, no-store, max-age=0' \
+                -H 'Pragma: no-cache' \
+                "$SITE/.deploy-revision?cb=${GITHUB_RUN_ID}-${i}" || true)"
+            fi
+            printf '%s' "$rev"
+          }
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            LIVE_REV="$(read_live_rev "$i")"
             echo "attempt $i: live='$LIVE_REV' expected='$WANT'"
             if [ "$LIVE_REV" = "$WANT" ]; then
               echo "live_revision_ok $LIVE_REV"
