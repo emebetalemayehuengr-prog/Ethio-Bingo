@@ -2545,7 +2545,8 @@ body {
 }
 
 .game-panel .grid .cell.marking {
-  opacity: 0.72;
+  opacity: 1;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.62);
 }
 
 .owned-cards {
@@ -6169,17 +6170,38 @@ body {
   }
 
   .mobile-bottom-nav-item {
+    display: grid;
+    justify-items: center;
+    align-content: center;
+    gap: 4px;
     border: 1px solid transparent;
     border-radius: 14px;
-    min-height: 46px;
+    min-height: 52px;
     padding: 8px 6px;
     background: transparent;
     color: #c7dced;
-    font-size: 0.76rem;
+    font-size: 0.72rem;
     font-weight: 700;
-    line-height: 1.2;
+    line-height: 1.15;
     text-align: center;
     cursor: pointer;
+  }
+
+  .mobile-bottom-nav-icon {
+    width: 18px;
+    height: 18px;
+    display: inline-grid;
+    place-items: center;
+  }
+
+  .mobile-bottom-nav-icon svg {
+    width: 18px;
+    height: 18px;
+    fill: currentColor;
+  }
+
+  .mobile-bottom-nav-label {
+    letter-spacing: 0.01em;
   }
 
   .mobile-bottom-nav-item.active {

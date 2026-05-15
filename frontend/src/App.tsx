@@ -122,6 +122,47 @@ const services: Array<{ view: ServiceView; label: string }> = [
 
 const mobileNavViews: ServiceView[] = ["home", "stakes", "game", "wallet", "history"];
 
+function renderMobileNavIcon(view: ServiceView) {
+  switch (view) {
+    case "home":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z" />
+        </svg>
+      );
+    case "stakes":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" />
+        </svg>
+      );
+    case "game":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 2a6 6 0 0 0-6 6c0 3.2 2.5 5.2 4.7 7 1.1.9 2.3 1.8 3.3 2.9 1-1.1 2.2-2 3.3-2.9 2.2-1.8 4.7-3.8 4.7-7a6 6 0 0 0-6-6zM12 7.2a1.8 1.8 0 1 1 0 3.6 1.8 1.8 0 0 1 0-3.6z" />
+        </svg>
+      );
+    case "wallet":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M4 7a3 3 0 0 1 3-3h10v3H7a1 1 0 0 0 0 2h13v9a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3zM15 12a2 2 0 1 0 0 4h5v-4z" />
+        </svg>
+      );
+    case "history":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 4a8 8 0 1 1-7.6 10.5H2l3.2-3.8L8.4 14H6.6A5.5 5.5 0 1 0 12 6.5V4zm-1 4h2v5h4v2h-6V8z" />
+        </svg>
+      );
+    default:
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="8" />
+        </svg>
+      );
+  }
+}
+
 const calledBoard = Array.from({ length: 75 }, (_, idx) => idx + 1);
 const callerLetters = ["B", "I", "N", "G", "O"] as const;
 const callerRows = Array.from({ length: 15 }, (_, idx) => [idx + 1, idx + 16, idx + 31, idx + 46, idx + 61]);
@@ -438,6 +479,28 @@ const applyPendingMarksToRoom = (state: RoomState | null, pendingMarks: PendingM
     nextState = applyMarkMutationToRoom(nextState, cardNo, value, marked);
   }
   return nextState;
+};
+
+const hasMarkedNumbers = (markMap: Record<string, number[]>) => Object.values(markMap).some((values) => values.length > 0);
+
+const stabilizeRoomMarks = (previous: RoomState | null, incoming: RoomState | null) => {
+  if (!incoming || !previous) return incoming;
+  if (incoming.id !== previous.id || incoming.phase !== "playing") return incoming;
+
+  const incomingMap = incoming.my_marked_numbers_by_card ?? {};
+  const previousMap = previous.my_marked_numbers_by_card ?? {};
+  if (hasMarkedNumbers(incomingMap) || !hasMarkedNumbers(previousMap)) return incoming;
+
+  const fallbackMarked =
+    incoming.my_cartella != null
+      ? previousMap[String(incoming.my_cartella)] ?? incoming.my_marked_numbers
+      : incoming.my_marked_numbers;
+
+  return {
+    ...incoming,
+    my_marked_numbers_by_card: previousMap,
+    my_marked_numbers: fallbackMarked,
+  };
 };
 
 const resolveSyncedCards = (nextRoom: RoomState, nextCards: BingoCard[], previousCards: BingoCard[]) => {
@@ -922,8 +985,6 @@ export default function App() {
   const [room, setRoom] = useState<RoomState | null>(null);
   const [cards, setCards] = useState<BingoCard[]>([]);
   const [selectedCardNo, setSelectedCardNo] = useState<number | null>(null);
-  const [card, setCard] = useState<BingoCard | null>(null);
-  const [markedNumbers, setMarkedNumbers] = useState<number[]>([]);
   const [pendingMarks, setPendingMarks] = useState<PendingMarkMap>({});
   const [claimingBingo, setClaimingBingo] = useState(false);
   const [autoClaimRequested, setAutoClaimRequested] = useState(false);
@@ -939,6 +1000,11 @@ export default function App() {
   }, [pickerRoom, selectedCartella]);
   const selectedCartellaHeld = selectedCartella != null && pickerRoom?.my_held_cartella === selectedCartella;
   const calledSet = useMemo(() => new Set(room?.called_numbers ?? []), [room?.called_numbers]);
+  const card = useMemo(() => {
+    if (!selectedCardNo) return null;
+    return cards.find((item) => item.card_no === selectedCardNo) ?? null;
+  }, [cards, selectedCardNo]);
+  const markedNumbers = useMemo(() => marksForCard(room, selectedCardNo), [room, selectedCardNo]);
   const casinoCatalog = useMemo<CasinoDisplayGame[]>(
     () =>
       (casinoGames.length > 0 ? casinoGames : fallbackCasinoGames).map((game, idx) => ({
@@ -974,7 +1040,10 @@ export default function App() {
   };
 
   const setRoomWithPendingMarks = (nextRoom: RoomState | null) => {
-    setRoom(applyPendingMarksToRoom(nextRoom, pendingMarksRef.current));
+    setRoom((previousRoom) => {
+      const stabilizedRoom = stabilizeRoomMarks(previousRoom, nextRoom);
+      return applyPendingMarksToRoom(stabilizedRoom, pendingMarksRef.current);
+    });
   };
 
   useEffect(() => {
@@ -1049,8 +1118,6 @@ export default function App() {
       setRoom(null);
       setCards([]);
       setSelectedCardNo(null);
-      setCard(null);
-      setMarkedNumbers([]);
       setService("home");
       setDrawerOpen(false);
       setCartellaOpen(false);
@@ -1539,7 +1606,6 @@ export default function App() {
   useEffect(() => {
     if (!cards.length) {
       setSelectedCardNo(null);
-      setCard(null);
       return;
     }
     setSelectedCardNo((prev) => {
@@ -1547,17 +1613,6 @@ export default function App() {
       return cards[0].card_no;
     });
   }, [cards]);
-
-  useEffect(() => {
-    if (!selectedCardNo) {
-      setCard(null);
-      setMarkedNumbers([]);
-      return;
-    }
-    const selected = cards.find((item) => item.card_no === selectedCardNo) ?? null;
-    setCard(selected);
-    setMarkedNumbers(marksForCard(room, selectedCardNo));
-  }, [selectedCardNo, cards, room]);
 
   useEffect(() => {
     if (service === "game") {
@@ -1770,8 +1825,6 @@ export default function App() {
     setRoom(null);
     setCards([]);
     setSelectedCardNo(null);
-    setCard(null);
-    setMarkedNumbers([]);
     setService("home");
     setDrawerOpen(false);
     setShowBrandModal(false);
@@ -3810,7 +3863,8 @@ export default function App() {
                 aria-current={service === item.view ? "page" : undefined}
                 onClick={() => openService(item.view)}
               >
-                {item.label}
+                <span className="mobile-bottom-nav-icon">{renderMobileNavIcon(item.view)}</span>
+                <span className="mobile-bottom-nav-label">{item.label}</span>
               </button>
             ))}
         </nav>
