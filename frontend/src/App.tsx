@@ -2463,6 +2463,10 @@ export default function App() {
 
     const currentMarks = targetCardNo === selectedCardNo ? markedNumbers : marksForCard(room, targetCardNo);
     const nextMarked = !currentMarks.includes(value);
+    if (room.auto_mark_called_numbers && !nextMarked) {
+      setNotice("Called numbers are auto-marked for this room.");
+      return;
+    }
     setSelectedCardNo(targetCardNo);
     setPendingMarkState({ ...pendingMarksRef.current, [requestKey]: nextMarked });
     setRoom((prev) => applyMarkMutationToRoom(prev, targetCardNo, value, nextMarked));

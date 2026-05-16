@@ -388,6 +388,7 @@ class RoomState(BaseModel):
     latest_number: int | None = None
     my_marked_numbers: list[int] = Field(default_factory=list)
     my_marked_numbers_by_card: dict[str, list[int]] = Field(default_factory=dict)
+    auto_mark_called_numbers: bool = False
     winner_name: str | None = None
     winner_cartella: int | None = None
     winner_payout: float | None = None
@@ -633,6 +634,7 @@ MAX_CARDS_PER_USER = 10
 CLAIM_GRACE_SECONDS = 2
 ENABLE_DEMO_SEED = env_flag("ENABLE_DEMO_SEED", False)
 ENABLE_SIMULATED_ACTIVITY = env_flag("ENABLE_SIMULATED_ACTIVITY", True)
+ENABLE_AUTO_MARK_CALLED_NUMBERS = env_flag("ENABLE_AUTO_MARK_CALLED_NUMBERS", True)
 SIMULATED_SELECTING_MAX_PAID = max(0, env_int("SIMULATED_SELECTING_MAX_PAID", 60))
 SIMULATED_PLAYING_MAX_PAID = max(SIMULATED_SELECTING_MAX_PAID, env_int("SIMULATED_PLAYING_MAX_PAID", 120))
 SIMULATED_SELECTING_STEP_SECONDS = max(1, env_int("SIMULATED_SELECTING_STEP_SECONDS", 3))
@@ -3279,6 +3281,26 @@ def get_user_marked_numbers(room: RoomStore, phone_number: str, cartella_no: int
     return clean
 
 
+def compute_effective_marks_for_user_card(
+    room: RoomStore,
+    phone_number: str,
+    cartella_no: int,
+    called_set: set[int],
+) -> tuple[list[int], bool]:
+    key = mark_key(phone_number, cartella_no)
+    existing = get_user_marked_numbers(room, phone_number, cartella_no)
+    allowed_marks = sorted(called_set.intersection(card_numbers_set(cartella_no)))
+    if ENABLE_AUTO_MARK_CALLED_NUMBERS:
+        next_marks = allowed_marks
+    else:
+        allowed_set = set(allowed_marks)
+        next_marks = [value for value in existing if value in allowed_set]
+    changed = next_marks != existing
+    if changed:
+        room.marked_by_user_card[key] = next_marks
+    return next_marks, changed
+
+
 def card_numbers_set(cartella_no: int) -> set[int]:
     card = create_bingo_card(cartella_no)
     values: set[int] = set()
@@ -3349,6 +3371,23 @@ def compute_called_numbers(room: RoomStore, reference_time: datetime) -> list[in
     call_count = int(play_elapsed // CALL_INTERVAL_SECONDS)
     call_count = max(0, min(call_count, len(room.called_sequence)))
     return room.called_sequence[:call_count]
+
+
+def compute_call_countdown_seconds(room: RoomStore, reference_time: datetime) -> int:
+    if room.ended_at is not None:
+        return 0
+    elapsed_total = max(0.0, (reference_time - room.started_at).total_seconds())
+    if elapsed_total < SELECT_PHASE_SECONDS:
+        return 0
+
+    play_elapsed = max(0.0, elapsed_total - SELECT_PHASE_SECONDS)
+    call_count = len(compute_called_numbers(room, reference_time))
+    if call_count >= len(room.called_sequence):
+        return 0
+
+    next_call_at = (call_count + 1) * CALL_INTERVAL_SECONDS
+    seconds_left = max(0.0, next_call_at - play_elapsed)
+    return max(1, int(math.ceil(seconds_left - 1e-9)))
 
 
 def start_next_round(room: RoomStore, now: datetime) -> None:
@@ -3719,11 +3758,8 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
     else:
         phase = "playing"
         countdown_seconds = 0
-        play_elapsed_seconds = max(0.0, (now - room.started_at).total_seconds() - SELECT_PHASE_SECONDS)
-        remainder = play_elapsed_seconds % CALL_INTERVAL_SECONDS
-        seconds_left = CALL_INTERVAL_SECONDS - remainder
-        call_countdown_seconds = max(1, int(math.ceil(seconds_left - 1e-9)))
         called_numbers = compute_called_numbers(room, now)
+        call_countdown_seconds = compute_call_countdown_seconds(room, now)
 
     my_cartellas = get_user_cartellas_from_map(room.taken_cartellas, user_phone)
     next_my_cartellas = get_user_cartellas_from_map(room.next_taken_cartellas, user_phone)
@@ -3731,11 +3767,19 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
 
     my_marked_numbers_by_card: dict[str, list[int]] = {}
     called_set = set(called_numbers)
+    marks_changed = False
     for cartella_no in my_cartellas:
-        allowed_marks = called_set.intersection(card_numbers_set(cartella_no))
-        marks = [value for value in get_user_marked_numbers(room, user_phone, cartella_no) if value in allowed_marks]
-        room.marked_by_user_card[mark_key(user_phone, cartella_no)] = marks
+        marks, changed = compute_effective_marks_for_user_card(
+            room=room,
+            phone_number=user_phone,
+            cartella_no=cartella_no,
+            called_set=called_set,
+        )
+        marks_changed = marks_changed or changed
         my_marked_numbers_by_card[str(cartella_no)] = marks
+
+    if marks_changed:
+        persist_room(room)
 
     my_marked_numbers = my_marked_numbers_by_card.get(str(my_cartella), []) if my_cartella is not None else []
 
@@ -3802,6 +3846,7 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
         latest_number=called_numbers[-1] if called_numbers else None,
         my_marked_numbers=my_marked_numbers,
         my_marked_numbers_by_card=my_marked_numbers_by_card,
+        auto_mark_called_numbers=ENABLE_AUTO_MARK_CALLED_NUMBERS,
         winner_name=winner_entry.user_name if winner_entry else (winner_user.user_name if winner_user else None),
         winner_cartella=winner_entry.cartella_no if winner_entry else room.winner_cartella,
         winner_payout=winner_entry.payout if winner_entry else room.winner_payout,

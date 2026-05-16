@@ -173,6 +173,7 @@ export type RoomState = {
   latest_number: number | null;
   my_marked_numbers: number[];
   my_marked_numbers_by_card: Record<string, number[]>;
+  auto_mark_called_numbers?: boolean;
   winner_name: string | null;
   winner_cartella: number | null;
   winner_payout: number | null;
