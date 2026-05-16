@@ -96,6 +96,9 @@ const SESSION_SHARE_SERVICE_PARAM = "service";
 const SESSION_SHARE_STAKE_PARAM = "stake";
 const SESSION_SHARE_SERVICE_VALUE = "game";
 const SESSION_QR_IMAGE_SIZE = 280;
+const ROOM_EMPTY_POLL_GRACE_MS = 8000;
+const ROOM_EMPTY_POLL_GRACE_COUNT = 3;
+const LIVE_COUNTDOWN_TICK_MS = 250;
 
 function readInitialDarkModePreference() {
   if (typeof window === "undefined") return true;
@@ -909,6 +912,14 @@ export default function App() {
   const overlayReturnFocusRef = useRef<HTMLElement | null>(null);
   const overlayWasOpenRef = useRef(false);
   const pendingMarksRef = useRef<PendingMarkMap>({});
+  const roomSyncReceivedAtRef = useRef<number>(Date.now());
+  const pickerRoomSyncReceivedAtRef = useRef<number>(Date.now());
+  const lastStableGameSnapshotRef = useRef<{ room: RoomState; cards: BingoCard[]; at: number } | null>(null);
+  const emptyGameSyncPollCountRef = useRef(0);
+  const latestRoomRef = useRef<RoomState | null>(null);
+  const latestCardsRef = useRef<BingoCard[]>([]);
+  const lastRoomTransitionLogRef = useRef<string>("");
+  const lastPickerTransitionLogRef = useRef<string>("");
   const lastFinishedRoomRef = useRef<string | null>(null);
   const sharedStakeOpeningRef = useRef(false);
   const [ready, setReady] = useState(false);
@@ -971,6 +982,7 @@ export default function App() {
   const [shareQrImageError, setShareQrImageError] = useState(false);
   const [sharedStakeId, setSharedStakeId] = useState(() => readSharedStakeIdFromLocation());
   const [stakeCountdownNow, setStakeCountdownNow] = useState(() => Date.now());
+  const [liveCountdownNow, setLiveCountdownNow] = useState(() => Date.now());
   const [stakeCountdownDeadlines, setStakeCountdownDeadlines] = useState<Record<string, number>>({});
   const [sessionPanelExpanded, setSessionPanelExpanded] = useState(true);
   const [nowPlayingExpanded, setNowPlayingExpanded] = useState(true);
@@ -1041,12 +1053,58 @@ export default function App() {
     setPendingMarks(nextPending);
   };
 
+  const logRoomTransition = (source: "game" | "picker", nextRoom: RoomState | null) => {
+    if (!nextRoom) return;
+    const signature = [
+      nextRoom.id,
+      nextRoom.round_id,
+      nextRoom.phase,
+      nextRoom.call_countdown_seconds,
+      nextRoom.called_numbers.length,
+      nextRoom.my_cartellas.length,
+      nextRoom.next_my_cartellas.length,
+    ].join("|");
+    const signatureRef = source === "game" ? lastRoomTransitionLogRef : lastPickerTransitionLogRef;
+    if (signatureRef.current === signature) return;
+    signatureRef.current = signature;
+    console.info("[room-transition]", {
+      source,
+      room_id: nextRoom.id,
+      round_id: nextRoom.round_id,
+      phase: nextRoom.phase,
+      call_countdown_seconds: nextRoom.call_countdown_seconds,
+      called_count: nextRoom.called_numbers.length,
+      my_cartellas: nextRoom.my_cartellas,
+      next_my_cartellas: nextRoom.next_my_cartellas,
+    });
+  };
+
   const setRoomWithPendingMarks = (nextRoom: RoomState | null) => {
+    if (nextRoom) {
+      roomSyncReceivedAtRef.current = Date.now();
+      logRoomTransition("game", nextRoom);
+    }
     setRoom((previousRoom) => {
       const stabilizedRoom = stabilizeRoomMarks(previousRoom, nextRoom);
       return applyPendingMarksToRoom(stabilizedRoom, pendingMarksRef.current);
     });
   };
+
+  const setPickerRoomWithSyncMeta = (nextRoom: RoomState | null) => {
+    if (nextRoom) {
+      pickerRoomSyncReceivedAtRef.current = Date.now();
+      logRoomTransition("picker", nextRoom);
+    }
+    setPickerRoom(nextRoom);
+  };
+
+  useEffect(() => {
+    latestRoomRef.current = room;
+  }, [room]);
+
+  useEffect(() => {
+    latestCardsRef.current = cards;
+  }, [cards]);
 
   useEffect(() => {
     const mode = isDarkMode ? "dark" : "light";
@@ -1176,6 +1234,14 @@ export default function App() {
   }, [service]);
 
   useEffect(() => {
+    if (service !== "game" && !cartellaOpen) return;
+    const tick = () => setLiveCountdownNow(Date.now());
+    tick();
+    const timer = window.setInterval(tick, LIVE_COUNTDOWN_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [service, cartellaOpen]);
+
+  useEffect(() => {
     const stakeOptions = dashboard?.stake_options ?? [];
     if (!stakeOptions.length) {
       setStakeCountdownDeadlines({});
@@ -1238,7 +1304,7 @@ export default function App() {
     setError("");
     try {
       const res = await fetchStakeRoom(stake.id);
-      setPickerRoom(res.room);
+      setPickerRoomWithSyncMeta(res.room);
       setRoomWithPendingMarks(res.room);
       const ownedCards = res.cards ?? (res.card ? [res.card] : []);
       setCards(ownedCards);
@@ -1579,6 +1645,14 @@ export default function App() {
 
   useEffect(() => {
     if (!room?.id || service !== "game" || !isPageVisible) return;
+    emptyGameSyncPollCountRef.current = 0;
+    if (latestRoomRef.current && latestCardsRef.current.length > 0) {
+      lastStableGameSnapshotRef.current = {
+        room: latestRoomRef.current,
+        cards: latestCardsRef.current,
+        at: Date.now(),
+      };
+    }
     let inFlight = false;
     const pollRoom = () => {
       if (inFlight) return;
@@ -1587,9 +1661,30 @@ export default function App() {
         try {
           const synced = await syncRoom(room.id);
           const syncedCards = synced.cards ?? (synced.card ? [synced.card] : []);
+          const previousCards = latestCardsRef.current;
+          const resolvedCards = resolveSyncedCards(synced.room, syncedCards, previousCards);
+          const hasCurrentOwnership = (synced.room.my_cartellas?.length ?? 0) > 0;
+          const hasSyncedCards = syncedCards.length > 0;
+          const emptySnapshot = !hasCurrentOwnership && !hasSyncedCards;
+          if (emptySnapshot) {
+            emptyGameSyncPollCountRef.current += 1;
+            const stable = lastStableGameSnapshotRef.current;
+            const withinGraceWindow =
+              !!stable &&
+              stable.room.id === synced.room.id &&
+              Date.now() - stable.at <= ROOM_EMPTY_POLL_GRACE_MS &&
+              emptyGameSyncPollCountRef.current < ROOM_EMPTY_POLL_GRACE_COUNT;
+            if (withinGraceWindow) {
+              return;
+            }
+          } else {
+            emptyGameSyncPollCountRef.current = 0;
+            lastStableGameSnapshotRef.current = { room: synced.room, cards: resolvedCards, at: Date.now() };
+          }
+
           startTransition(() => {
             setRoomWithPendingMarks(synced.room);
-            setCards((prev) => resolveSyncedCards(synced.room, syncedCards, prev));
+            setCards(resolvedCards);
           });
         } catch {
           // keep polling
@@ -1633,7 +1728,7 @@ export default function App() {
         try {
           const res = await fetchStakeRoom(selectedStake.id);
           startTransition(() => {
-            setPickerRoom(res.room);
+            setPickerRoomWithSyncMeta(res.room);
             if (res.room.my_held_cartella && cartellaStep === "pick" && !selectedCartella) {
               setSelectedCartella(res.room.my_held_cartella);
             }
@@ -1858,7 +1953,7 @@ export default function App() {
     setError("");
     try {
       const res = await fetchStakeRoom(stake.id);
-      setPickerRoom(res.room);
+      setPickerRoomWithSyncMeta(res.room);
       setRoomWithPendingMarks(res.room);
       setCards(res.cards ?? (res.card ? [res.card] : []));
       if (res.room.my_cartella) {
@@ -1898,7 +1993,7 @@ export default function App() {
     setError("");
     try {
       const res = await previewCard(selectedStake.id, cartellaNo);
-      setPickerRoom(res.room);
+      setPickerRoomWithSyncMeta(res.room);
       setRoomWithPendingMarks(res.room);
       setSelectedCartella(cartellaNo);
       setPreview(res.card);
@@ -1930,7 +2025,11 @@ export default function App() {
     setWorking(true);
     setError("");
     try {
-      const res = await joinStake(selectedStake.id, selectedCartella);
+      const preferredRoundId =
+        pickerRoom?.active_queue === "next"
+          ? pickerRoom?.next_round_id
+          : pickerRoom?.round_id ?? room?.round_id;
+      const res = await joinStake(selectedStake.id, selectedCartella, preferredRoundId);
       setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
       setDashboard((prev) => {
         if (!prev || !selectedStake) return prev;
@@ -1944,7 +2043,7 @@ export default function App() {
         });
         return { ...prev, stake_options: updatedOptions };
       });
-      setPickerRoom(res.room);
+      setPickerRoomWithSyncMeta(res.room);
       setRoomWithPendingMarks(res.room);
       const returnedCards = res.cards ?? (res.card ? [res.card] : []);
       const mergedCards =
@@ -2572,12 +2671,22 @@ export default function App() {
     return Math.max(0, Math.ceil((deadline - stakeCountdownNow) / 1000));
   };
 
+  const getAuthoritativeCallCountdown = (state: RoomState | null, syncedAtMs: number) => {
+    if (!state || state.phase !== "playing") return Math.max(0, state?.call_countdown_seconds ?? 0);
+    const fallback = Math.max(0, state.call_countdown_seconds);
+    if (typeof state.server_time_ms !== "number" || typeof state.next_call_at_ms !== "number") return fallback;
+    const elapsedSinceSyncMs = Math.max(0, liveCountdownNow - syncedAtMs);
+    const virtualServerNowMs = state.server_time_ms + elapsedSinceSyncMs;
+    return Math.max(0, Math.ceil((state.next_call_at_ms - virtualServerNowMs) / 1000));
+  };
+
   const bingoClaimable = room?.phase === "playing" && !!card ? hasBingo(card, room?.called_numbers ?? [], markedNumbers) : false;
+  const liveCallCountdown = getAuthoritativeCallCountdown(room, roomSyncReceivedAtRef.current);
   const gameCountdownValue =
     room?.phase === "selecting"
       ? room.countdown_seconds
       : room?.phase === "playing"
-        ? room.call_countdown_seconds
+        ? liveCallCountdown
         : room?.announcement_seconds ?? 0;
   const gameCountdownLabel = `0:${String(Math.max(0, gameCountdownValue)).padStart(2, "0")}`;
   const gameStatusLabel =
@@ -2586,10 +2695,11 @@ export default function App() {
       : room?.phase === "playing"
         ? room.claim_window_seconds > 0
           ? `Checking winners ${room.claim_window_seconds}s`
-          : `Next call in ${Math.max(0, room.call_countdown_seconds)}s`
+          : `Next call in ${Math.max(0, liveCallCountdown)}s`
         : room?.announcement_seconds
           ? `Next game in ${room.announcement_seconds}s`
           : "Round Complete";
+  const pickerLiveCallCountdown = getAuthoritativeCallCountdown(pickerRoom, pickerRoomSyncReceivedAtRef.current);
   const currentPaidCount = room?.current_paid_count ?? room?.display_paid_count ?? room?.paid_cartellas.length ?? 0;
   const currentTotalSales = room ? room.current_total_sales ?? currentPaidCount * room.card_price : 0;
   const currentHouseCommission = room ? room.current_house_commission ?? currentTotalSales * 0.15 : 0;
@@ -2605,7 +2715,7 @@ export default function App() {
     pickerRoom?.phase === "selecting"
       ? pickerRoom.countdown_seconds
       : pickerRoom?.phase === "playing"
-        ? pickerRoom.call_countdown_seconds
+        ? pickerLiveCallCountdown
         : pickerRoom?.announcement_seconds ?? 0;
   const pickerPaidCount = pickerRoom?.display_paid_count ?? pickerRoom?.paid_cartellas.length ?? 0;
   const pickerPhase = pickerRoom?.phase ?? "selecting";

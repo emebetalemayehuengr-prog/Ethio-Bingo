@@ -347,6 +347,7 @@ class PreviewCardRequest(BaseModel):
 class JoinStakeRequest(BaseModel):
     stake_id: str
     cartella_no: int = Field(ge=1, le=200)
+    round_id: str | None = Field(default=None, min_length=3, max_length=120)
 
 
 class MarkNumberRequest(BaseModel):
@@ -363,12 +364,16 @@ class ClaimBingoRequest(BaseModel):
 
 class RoomState(BaseModel):
     id: str
+    round_id: str
+    next_round_id: str
     stake: int
     card_price: int
     players: int
     phase: Literal["selecting", "playing", "finished"]
     countdown_seconds: int
     call_countdown_seconds: int = 0
+    server_time_ms: int = 0
+    next_call_at_ms: int | None = None
     cartella_total: int
     paid_cartellas: list[int]
     simulated_paid_cartellas: list[int] = Field(default_factory=list)
@@ -436,6 +441,7 @@ class RoomStore(BaseModel):
     stake_id: str
     stake: int
     card_price: int
+    round_number: int = 1
     players_seed: int
     started_at: datetime
     called_sequence: list[int]
@@ -456,6 +462,7 @@ class RoomStore(BaseModel):
     claim_window_reference_time: datetime | None = None
     winners: list[WinnerEntry] = Field(default_factory=list)
     result_until: datetime | None = None
+    queue_round_locks: dict[str, int] = Field(default_factory=dict)
 
 
 BRAND = {
@@ -3075,6 +3082,7 @@ def create_room(stake: StakeOption) -> RoomStore:
         stake_id=stake.id,
         stake=stake.stake,
         card_price=stake.stake,
+        round_number=1,
         players_seed=randint(36, 120),
         started_at=utc_now(),
         called_sequence=generate_called_sequence(),
@@ -3235,6 +3243,44 @@ def mark_key(phone_number: str, cartella_no: int) -> str:
     return f"{phone_number}:{cartella_no}"
 
 
+def round_id_for_room(room: RoomStore, round_number: int | None = None) -> str:
+    if round_number is None:
+        round_number = room.round_number
+    return f"{room.id}:r{round_number}"
+
+
+def queue_lock_key(queue: Literal["current", "next"], phone_number: str, cartella_no: int) -> str:
+    return f"{queue}:{phone_number}:{cartella_no}"
+
+
+def get_queue_round_lock(
+    room: RoomStore,
+    queue: Literal["current", "next"],
+    phone_number: str,
+    cartella_no: int,
+) -> int | None:
+    return room.queue_round_locks.get(queue_lock_key(queue, phone_number, cartella_no))
+
+
+def set_queue_round_lock(
+    room: RoomStore,
+    queue: Literal["current", "next"],
+    phone_number: str,
+    cartella_no: int,
+    round_number: int,
+) -> None:
+    room.queue_round_locks[queue_lock_key(queue, phone_number, cartella_no)] = round_number
+
+
+def drop_queue_round_lock(
+    room: RoomStore,
+    queue: Literal["current", "next"],
+    phone_number: str,
+    cartella_no: int,
+) -> None:
+    room.queue_round_locks.pop(queue_lock_key(queue, phone_number, cartella_no), None)
+
+
 def get_user_cartellas_from_map(cartella_map: dict[int, str], phone_number: str) -> list[int]:
     return sorted([cartella_no for cartella_no, owner in cartella_map.items() if owner == phone_number])
 
@@ -3363,6 +3409,23 @@ def prune_holds(room: RoomStore) -> bool:
     return changed_current or changed_next
 
 
+def prune_queue_round_locks(room: RoomStore) -> bool:
+    valid_keys: set[str] = set()
+    for cartella_no, owner in room.taken_cartellas.items():
+        valid_keys.add(queue_lock_key("current", owner, cartella_no))
+    for cartella_no, owner in room.held_cartellas.items():
+        valid_keys.add(queue_lock_key("current", owner, cartella_no))
+    for cartella_no, owner in room.next_taken_cartellas.items():
+        valid_keys.add(queue_lock_key("next", owner, cartella_no))
+    for cartella_no, owner in room.next_held_cartellas.items():
+        valid_keys.add(queue_lock_key("next", owner, cartella_no))
+
+    stale_keys = [key for key in room.queue_round_locks.keys() if key not in valid_keys]
+    for key in stale_keys:
+        room.queue_round_locks.pop(key, None)
+    return bool(stale_keys)
+
+
 def compute_called_numbers(room: RoomStore, reference_time: datetime) -> list[int]:
     elapsed_seconds = int((reference_time - room.started_at).total_seconds())
     if elapsed_seconds < SELECT_PHASE_SECONDS:
@@ -3391,7 +3454,24 @@ def compute_call_countdown_seconds(room: RoomStore, reference_time: datetime) ->
 
 
 def start_next_round(room: RoomStore, now: datetime) -> None:
+    next_round_number = room.round_number + 1
+    next_round_locks: dict[str, int] = {}
+    for cartella_no, owner in room.next_taken_cartellas.items():
+        inherited_lock = get_queue_round_lock(room, "next", owner, cartella_no)
+        next_round_locks[queue_lock_key("current", owner, cartella_no)] = (
+            inherited_lock if inherited_lock is not None else next_round_number
+        )
+
+    for cartella_no, owner in room.next_held_cartellas.items():
+        if cartella_no in room.next_taken_cartellas:
+            continue
+        inherited_lock = get_queue_round_lock(room, "next", owner, cartella_no)
+        next_round_locks[queue_lock_key("current", owner, cartella_no)] = (
+            inherited_lock if inherited_lock is not None else next_round_number
+        )
+
     room.started_at = now
+    room.round_number = next_round_number
     room.called_sequence = generate_called_sequence()
     room.taken_cartellas = dict(room.next_taken_cartellas)
     room.next_taken_cartellas = {}
@@ -3415,6 +3495,7 @@ def start_next_round(room: RoomStore, now: datetime) -> None:
     room.claim_window_reference_time = None
     room.winners = []
     room.result_until = None
+    room.queue_round_locks = next_round_locks
     persist_room(room)
 
 
@@ -3737,7 +3818,7 @@ def compute_simulated_paid_cartellas(
 
 def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
     advance_room_if_needed(room)
-    if prune_holds(room):
+    if prune_holds(room) or prune_queue_round_locks(room):
         persist_room(room)
     now = utc_now()
     reference_time = room.ended_at or now
@@ -3760,6 +3841,14 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
         countdown_seconds = 0
         called_numbers = compute_called_numbers(room, now)
         call_countdown_seconds = compute_call_countdown_seconds(room, now)
+
+    server_time_ms = int(now.timestamp() * 1000)
+    next_call_at_ms: int | None = None
+    if phase == "playing" and call_countdown_seconds > 0 and len(called_numbers) < len(room.called_sequence):
+        next_call_at = room.started_at + timedelta(
+            seconds=SELECT_PHASE_SECONDS + ((len(called_numbers) + 1) * CALL_INTERVAL_SECONDS)
+        )
+        next_call_at_ms = int(next_call_at.timestamp() * 1000)
 
     my_cartellas = get_user_cartellas_from_map(room.taken_cartellas, user_phone)
     next_my_cartellas = get_user_cartellas_from_map(room.next_taken_cartellas, user_phone)
@@ -3821,12 +3910,16 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
 
     return RoomState(
         id=room.id,
+        round_id=round_id_for_room(room),
+        next_round_id=round_id_for_room(room, room.round_number + 1),
         stake=room.stake,
         card_price=room.card_price,
         players=room.players_seed + len(room.taken_cartellas) + len(room.next_taken_cartellas),
         phase=phase,
         countdown_seconds=countdown_seconds,
         call_countdown_seconds=call_countdown_seconds,
+        server_time_ms=server_time_ms,
+        next_call_at_ms=next_call_at_ms,
         cartella_total=CARTELLA_TOTAL,
         paid_cartellas=paid_cartellas,
         simulated_paid_cartellas=simulated_paid_cartellas,
@@ -4733,15 +4826,30 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
     stake = find_stake(payload.stake_id)
     room = get_or_create_room(stake)
     room_state = build_room_state(room, user.phone_number)
+    current_round_id = round_id_for_room(room)
+    next_round_id = round_id_for_room(room, room.round_number + 1)
+
+    if payload.round_id and payload.round_id not in {current_round_id, next_round_id}:
+        raise HTTPException(status_code=409, detail="Round changed. Refresh and choose your cartella again.")
+
     queue = room_state.active_queue
+    if payload.round_id == current_round_id:
+        queue = "current"
+    elif payload.round_id == next_round_id:
+        queue = "next"
 
     # Boundary guard: if countdown just flipped to playing but this cartella is
     # still held by the same user in the current queue, keep the purchase in
     # the current round instead of silently pushing it to next.
     if queue == "next":
+        current_lock_round = get_queue_round_lock(room, "current", user.phone_number, payload.cartella_no)
         current_owner = room.taken_cartellas.get(payload.cartella_no)
         current_held_owner = room.held_cartellas.get(payload.cartella_no)
-        if current_owner == user.phone_number or current_held_owner == user.phone_number:
+        if (
+            current_lock_round == room.round_number
+            or current_owner == user.phone_number
+            or current_held_owner == user.phone_number
+        ):
             queue = "current"
 
     taken_map, held_map, held_updated_at = get_queue_maps(room, queue)
@@ -4789,23 +4897,29 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
     snapshot_taken = dict(snapshot.get(taken_key, {}))
     snapshot_held = dict(snapshot.get(held_key, {}))
     snapshot_held_updated = dict(snapshot.get(held_updated_key, {}))
+    snapshot_round_locks = dict(snapshot.get("queue_round_locks", {}))
     if previous_hold is not None and previous_hold != payload.cartella_no:
         snapshot_held.pop(previous_hold, None)
         snapshot_held.pop(str(previous_hold), None)
         snapshot_held_updated.pop(previous_hold, None)
         snapshot_held_updated.pop(str(previous_hold), None)
+        snapshot_round_locks.pop(queue_lock_key(queue, user.phone_number, previous_hold), None)
 
     snapshot_taken[str(payload.cartella_no)] = user.phone_number
     snapshot_held.pop(payload.cartella_no, None)
     snapshot_held.pop(str(payload.cartella_no), None)
     snapshot_held_updated.pop(payload.cartella_no, None)
     snapshot_held_updated.pop(str(payload.cartella_no), None)
+    snapshot_round_locks[queue_lock_key(queue, user.phone_number, payload.cartella_no)] = (
+        room.round_number if queue == "current" else (room.round_number + 1)
+    )
     snapshot_marks = dict(snapshot.get("marked_by_user_card", {}))
     snapshot_marks[mark_key(user.phone_number, payload.cartella_no)] = []
     snapshot[taken_key] = snapshot_taken
     snapshot[held_key] = snapshot_held
     snapshot[held_updated_key] = snapshot_held_updated
     snapshot["marked_by_user_card"] = snapshot_marks
+    snapshot["queue_round_locks"] = snapshot_round_locks
 
     if PG_STORE.enabled():
         try:
@@ -4829,9 +4943,17 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
     if previous_hold is not None and previous_hold != payload.cartella_no:
         held_map.pop(previous_hold, None)
         held_updated_at.pop(previous_hold, None)
+        drop_queue_round_lock(room, queue, user.phone_number, previous_hold)
     taken_map[payload.cartella_no] = user.phone_number
     held_map.pop(payload.cartella_no, None)
     held_updated_at.pop(payload.cartella_no, None)
+    set_queue_round_lock(
+        room=room,
+        queue=queue,
+        phone_number=user.phone_number,
+        cartella_no=payload.cartella_no,
+        round_number=room.round_number if queue == "current" else (room.round_number + 1),
+    )
     room.marked_by_user_card[mark_key(user.phone_number, payload.cartella_no)] = []
     if not PG_STORE.enabled():
         persist_room(room)

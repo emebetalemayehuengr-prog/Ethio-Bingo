@@ -148,12 +148,16 @@ export type WinnerEntry = {
 
 export type RoomState = {
   id: string;
+  round_id: string;
+  next_round_id: string;
   stake: number;
   card_price: number;
   players: number;
   phase: "selecting" | "playing" | "finished";
   countdown_seconds: number;
   call_countdown_seconds: number;
+  server_time_ms?: number;
+  next_call_at_ms?: number | null;
   cartella_total: number;
   paid_cartellas: number[];
   simulated_paid_cartellas?: number[];
