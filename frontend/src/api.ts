@@ -306,6 +306,13 @@ export function markNumberForCard(roomId: string, number: number, marked: boolea
   });
 }
 
+export function setAutoMarkPreference(roomId: string, enabled: boolean) {
+  return request<{ message: string; room: RoomSyncResponse["room"] }>("/api/game/auto-mark", {
+    method: "POST",
+    body: JSON.stringify({ room_id: roomId, enabled }),
+  });
+}
+
 export function claimBingo(roomId: string, cartellaNo?: number) {
   return request<{ message: string; room: RoomSyncResponse["room"]; wallet?: Wallet }>("/api/game/claim-bingo", {
     method: "POST",

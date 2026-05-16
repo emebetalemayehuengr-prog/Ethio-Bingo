@@ -96,6 +96,8 @@ export default function CartellaModalContent({
     const paidSet = new Set(paidCartellas);
     const simulatedSet = new Set(simulatedPaidCartellas);
     const heldSet = new Set(heldCartellas);
+    const myCurrentSet = new Set(pickerRoom?.my_cartellas ?? []);
+    const myNextSet = new Set(pickerRoom?.next_my_cartellas ?? []);
     const myHeldCartella = pickerRoom?.my_held_cartella ?? null;
 
     return cartellaNumbers.map((num) => {
@@ -104,6 +106,7 @@ export default function CartellaModalContent({
       const held = heldSet.has(num);
       const heldByOther = held && !mineHeld;
       const simulated = simulatedSet.has(num);
+      const mineOwned = myCurrentSet.has(num) || myNextSet.has(num);
       const processing = processingCartella === num || held;
       const selected = selectedCartella === num;
       return {
@@ -114,12 +117,14 @@ export default function CartellaModalContent({
         selected,
         heldByOther,
         mineHeld,
-        disabled: paid || heldByOther || working,
+        disabled: (paid && !mineOwned) || heldByOther || working,
       };
     });
   }, [
     heldSignature,
     paidSignature,
+    pickerRoom?.my_cartellas,
+    pickerRoom?.next_my_cartellas,
     pickerRoom?.my_held_cartella,
     processingCartella,
     selectedCartella,

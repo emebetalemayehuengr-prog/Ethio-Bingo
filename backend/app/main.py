@@ -357,6 +357,11 @@ class MarkNumberRequest(BaseModel):
     cartella_no: int | None = Field(default=None, ge=1, le=200)
 
 
+class AutoMarkPreferenceRequest(BaseModel):
+    room_id: str
+    enabled: bool
+
+
 class ClaimBingoRequest(BaseModel):
     room_id: str
     cartella_no: int | None = Field(default=None, ge=1, le=200)
@@ -463,6 +468,7 @@ class RoomStore(BaseModel):
     winners: list[WinnerEntry] = Field(default_factory=list)
     result_until: datetime | None = None
     queue_round_locks: dict[str, int] = Field(default_factory=dict)
+    user_auto_mark_enabled: dict[str, bool] = Field(default_factory=dict)
 
 
 BRAND = {
@@ -3327,16 +3333,24 @@ def get_user_marked_numbers(room: RoomStore, phone_number: str, cartella_no: int
     return clean
 
 
+def get_user_auto_mark_enabled(room: RoomStore, phone_number: str) -> bool:
+    preference = room.user_auto_mark_enabled.get(phone_number)
+    if preference is None:
+        return ENABLE_AUTO_MARK_CALLED_NUMBERS
+    return bool(preference)
+
+
 def compute_effective_marks_for_user_card(
     room: RoomStore,
     phone_number: str,
     cartella_no: int,
     called_set: set[int],
+    auto_mark_enabled: bool,
 ) -> tuple[list[int], bool]:
     key = mark_key(phone_number, cartella_no)
     existing = get_user_marked_numbers(room, phone_number, cartella_no)
     allowed_marks = sorted(called_set.intersection(card_numbers_set(cartella_no)))
-    if ENABLE_AUTO_MARK_CALLED_NUMBERS:
+    if auto_mark_enabled:
         next_marks = allowed_marks
     else:
         allowed_set = set(allowed_marks)
@@ -3853,6 +3867,7 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
     my_cartellas = get_user_cartellas_from_map(room.taken_cartellas, user_phone)
     next_my_cartellas = get_user_cartellas_from_map(room.next_taken_cartellas, user_phone)
     my_cartella = my_cartellas[0] if my_cartellas else None
+    auto_mark_enabled = get_user_auto_mark_enabled(room, user_phone)
 
     my_marked_numbers_by_card: dict[str, list[int]] = {}
     called_set = set(called_numbers)
@@ -3863,6 +3878,7 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
             phone_number=user_phone,
             cartella_no=cartella_no,
             called_set=called_set,
+            auto_mark_enabled=auto_mark_enabled,
         )
         marks_changed = marks_changed or changed
         my_marked_numbers_by_card[str(cartella_no)] = marks
@@ -3939,7 +3955,7 @@ def build_room_state(room: RoomStore, user_phone: str) -> RoomState:
         latest_number=called_numbers[-1] if called_numbers else None,
         my_marked_numbers=my_marked_numbers,
         my_marked_numbers_by_card=my_marked_numbers_by_card,
-        auto_mark_called_numbers=ENABLE_AUTO_MARK_CALLED_NUMBERS,
+        auto_mark_called_numbers=auto_mark_enabled,
         winner_name=winner_entry.user_name if winner_entry else (winner_user.user_name if winner_user else None),
         winner_cartella=winner_entry.cartella_no if winner_entry else room.winner_cartella,
         winner_payout=winner_entry.payout if winner_entry else room.winner_payout,
@@ -4807,9 +4823,17 @@ def preview_card(payload: PreviewCardRequest, user: UserStore = Depends(get_curr
     if previous_hold is not None and previous_hold != payload.cartella_no:
         held_map.pop(previous_hold, None)
         held_updated_at.pop(previous_hold, None)
+        drop_queue_round_lock(room, queue, user.phone_number, previous_hold)
 
     held_map[payload.cartella_no] = user.phone_number
     held_updated_at[payload.cartella_no] = utc_now()
+    set_queue_round_lock(
+        room=room,
+        queue=queue,
+        phone_number=user.phone_number,
+        cartella_no=payload.cartella_no,
+        round_number=room.round_number if queue == "current" else (room.round_number + 1),
+    )
     persist_room(room)
 
     card = create_bingo_card(payload.cartella_no)
@@ -5029,6 +5053,22 @@ def mark_number(payload: MarkNumberRequest, user: UserStore = Depends(get_curren
 
     return {
         "message": "Mark updated",
+        "room": build_room_state(room, user.phone_number).model_dump(),
+    }
+
+
+@app.post("/api/game/auto-mark")
+def set_auto_mark_preference(payload: AutoMarkPreferenceRequest, user: UserStore = Depends(get_current_user)) -> dict:
+    room = get_room_by_id(payload.room_id)
+    room_state = build_room_state(room, user.phone_number)
+    has_presence = bool(room_state.my_cartellas or room_state.next_my_cartellas or room_state.my_held_cartella)
+    if not has_presence:
+        raise HTTPException(status_code=400, detail="Join or hold a cartella before changing auto-mark preference")
+
+    room.user_auto_mark_enabled[user.phone_number] = payload.enabled
+    persist_room(room)
+    return {
+        "message": "Auto-mark enabled" if payload.enabled else "Auto-mark disabled",
         "room": build_room_state(room, user.phone_number).model_dump(),
     }
 

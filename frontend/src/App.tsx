@@ -14,6 +14,7 @@ import {
   joinStake,
   loginWithTelegram,
   markNumberForCard,
+  setAutoMarkPreference,
   login as loginRequest,
   markPaidAdminWithdrawRequest,
   launchCasinoGame,
@@ -1002,6 +1003,7 @@ export default function App() {
   const [pendingMarks, setPendingMarks] = useState<PendingMarkMap>({});
   const [claimingBingo, setClaimingBingo] = useState(false);
   const [autoClaimRequested, setAutoClaimRequested] = useState(false);
+  const [autoMarkUpdating, setAutoMarkUpdating] = useState(false);
 
   const wallet: Wallet = dashboard?.wallet ?? { currency: "ETB", main_balance: 0, bonus_balance: 0 };
   const selectedMethod = useMemo(
@@ -2029,7 +2031,23 @@ export default function App() {
         pickerRoom?.active_queue === "next"
           ? pickerRoom?.next_round_id
           : pickerRoom?.round_id ?? room?.round_id;
-      const res = await joinStake(selectedStake.id, selectedCartella, preferredRoundId);
+      let res;
+      try {
+        res = await joinStake(selectedStake.id, selectedCartella, preferredRoundId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message.toLowerCase() : "";
+        if (!message.includes("round changed")) {
+          throw err;
+        }
+        const refreshed = await fetchStakeRoom(selectedStake.id);
+        setPickerRoomWithSyncMeta(refreshed.room);
+        setRoomWithPendingMarks(refreshed.room);
+        const refreshedRoundId =
+          refreshed.room.active_queue === "next"
+            ? refreshed.room.next_round_id
+            : refreshed.room.round_id;
+        res = await joinStake(selectedStake.id, selectedCartella, refreshedRoundId);
+      }
       setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
       setDashboard((prev) => {
         if (!prev || !selectedStake) return prev;
@@ -2088,6 +2106,22 @@ export default function App() {
     } finally {
       setProcessingCartella(null);
       setWorking(false);
+    }
+  };
+
+  const onToggleAutoMark = async () => {
+    if (!room?.id) return;
+    const nextEnabled = !Boolean(room.auto_mark_called_numbers);
+    setAutoMarkUpdating(true);
+    setError("");
+    try {
+      const res = await setAutoMarkPreference(room.id, nextEnabled);
+      setRoomWithPendingMarks(res.room);
+      setNotice(res.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update auto-mark setting");
+    } finally {
+      setAutoMarkUpdating(false);
     }
   };
 
@@ -3122,6 +3156,22 @@ export default function App() {
                               <small>Bought</small>
                               <strong>{currentPaidCount}</strong>
                             </div>
+                            <button
+                              type="button"
+                              className="stat-box"
+                              aria-label="Toggle auto mark"
+                              onClick={() => void onToggleAutoMark()}
+                              disabled={autoMarkUpdating || room.phase === "finished"}
+                            >
+                              <small>Auto Mark</small>
+                              <strong>
+                                {autoMarkUpdating
+                                  ? "..."
+                                  : room.auto_mark_called_numbers
+                                    ? "On"
+                                    : "Off"}
+                              </strong>
+                            </button>
                             <button type="button" className="stat-box stat-sound" aria-label="sound">
                               (( ))
                             </button>
