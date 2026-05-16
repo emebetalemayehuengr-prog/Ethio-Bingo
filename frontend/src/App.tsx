@@ -916,6 +916,7 @@ export default function App() {
   const [isPageVisible, setIsPageVisible] = useState(() => (typeof document === "undefined" ? true : document.visibilityState !== "hidden"));
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState(false);
+  const [depositSubmitting, setDepositSubmitting] = useState(false);
   const [cardRechargeLabel, setCardRechargeLabel] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -2034,6 +2035,7 @@ export default function App() {
     method: DepositMethod | null,
   ): WalletFieldErrorMap => {
     const nextErrors: WalletFieldErrorMap = {};
+    const hasReceiptLink = extractReceiptLinks(receiptText).length > 0;
     if (!amount || amount <= 0) {
       nextErrors.depositAmount = "Enter a valid deposit amount.";
     }
@@ -2043,7 +2045,7 @@ export default function App() {
     if (transactionNumber.length < 3) {
       nextErrors.txNo = "Enter a valid transaction reference.";
     }
-    if (method && receiptText && !hasAssignedRecipientInReceipt(receiptText, method.transfer_accounts)) {
+    if (method && receiptText && !hasReceiptLink && !hasAssignedRecipientInReceipt(receiptText, method.transfer_accounts)) {
       nextErrors.receiptMessage = "Receipt must include one of the approved transfer numbers or account names.";
     }
     return nextErrors;
@@ -2131,7 +2133,7 @@ export default function App() {
       delete next.receiptMessage;
       return next;
     });
-    setWorking(true);
+    setDepositSubmitting(true);
     try {
       const res = await submitDeposit({
         method: methodCode,
@@ -2144,12 +2146,21 @@ export default function App() {
       setCardRechargeLabel(`Recharged +ETB ${amount.toFixed(2)}`);
       setTxNo("");
       setReceiptMessage("");
+      await Promise.allSettled([
+        refreshHistory(),
+        (async () => {
+          const dash = await fetchDashboard();
+          startTransition(() => {
+            setDashboard(dash);
+            setProfile(dash.user);
+          });
+        })(),
+      ]);
       setDepositGuideOpen(false);
-      await refreshHistory();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deposit request failed.");
     } finally {
-      setWorking(false);
+      setDepositSubmitting(false);
     }
   };
 
@@ -3948,7 +3959,8 @@ export default function App() {
                 selectedMethodDraftAccounts={selectedMethodDraftAccounts}
                 isAdmin={profile.is_admin}
                 copiedPhone={copiedPhone}
-                working={working}
+                adminWorking={working}
+                submitWorking={depositSubmitting}
                 fieldErrors={{
                   depositAmount: walletFieldErrors.depositAmount,
                   txNo: walletFieldErrors.txNo,

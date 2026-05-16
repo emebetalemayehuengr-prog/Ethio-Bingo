@@ -9,7 +9,8 @@ type Props = {
   selectedMethodDraftAccounts: DraftAccount[];
   isAdmin: boolean;
   copiedPhone: string;
-  working: boolean;
+  adminWorking: boolean;
+  submitWorking: boolean;
   fieldErrors: DepositFieldErrors;
   depositAmount: string;
   txNo: string;
@@ -33,7 +34,8 @@ export default function DepositModalContent({
   selectedMethodDraftAccounts,
   isAdmin,
   copiedPhone,
-  working,
+  adminWorking,
+  submitWorking,
   fieldErrors,
   depositAmount,
   txNo,
@@ -51,6 +53,7 @@ export default function DepositModalContent({
   onReceiptChange,
   onSubmit,
 }: Props) {
+  const formBusy = adminWorking || submitWorking;
   return (
     <>
       <div className="modal-head">
@@ -113,8 +116,8 @@ export default function DepositModalContent({
               <button className="secondary-btn" type="button" onClick={onAddDraftAccount}>
                 Add Account
               </button>
-              <button className="primary-btn" type="button" disabled={working} onClick={() => onSaveAccounts(selectedMethod.code)}>
-                {working ? "Saving..." : "Save Accounts"}
+              <button className="primary-btn" type="button" disabled={formBusy} onClick={() => onSaveAccounts(selectedMethod.code)}>
+                {adminWorking ? "Saving..." : submitWorking ? "Adding Balance..." : "Save Accounts"}
               </button>
             </div>
           )}
@@ -174,8 +177,8 @@ export default function DepositModalContent({
             </label>
             <small className="receipt-tip">If the transaction number appears inside the receipt text, we will try to fill it automatically.</small>
             <small>Use the same phone number and account name that appear on your payment receipt whenever possible.</small>
-            <button className="primary-btn" type="submit" disabled={working}>
-              {working ? "Submitting..." : "Submit Deposit"}
+            <button className="primary-btn" type="submit" disabled={formBusy}>
+              {submitWorking ? "Adding Balance..." : "Submit Deposit"}
             </button>
           </form>
         </>

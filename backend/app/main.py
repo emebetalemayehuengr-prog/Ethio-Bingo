@@ -2907,7 +2907,7 @@ def has_assigned_owner_name_in_receipt(method: DepositMethod, message: str | Non
     return False
 
 
-def validate_receipt_recipient(method: DepositMethod, message: str | None) -> None:
+def validate_receipt_recipient(method: DepositMethod, message: str | None, source_links: list[str] | None = None) -> None:
     if not message or not message.strip():
         raise HTTPException(
             status_code=400,
@@ -2919,6 +2919,8 @@ def validate_receipt_recipient(method: DepositMethod, message: str | None) -> No
     if assigned_numbers.intersection(mentioned_numbers):
         return
     if has_assigned_owner_name_in_receipt(method, message):
+        return
+    if source_links:
         return
 
     assigned_display = ", ".join(account.phone_number for account in method.transfer_accounts)
@@ -3554,8 +3556,10 @@ def compute_simulated_target(
 
         return baseline_target
 
-    _ = (called_numbers,)
-    return 0
+    calls_seen = max(0, len(called_numbers))
+    baseline = min(CARTELLA_TOTAL, SIMULATED_SELECTING_MAX_PAID)
+    playing_target = baseline + (calls_seen * SIMULATED_PLAYING_CARDS_PER_CALL)
+    return min(CARTELLA_TOTAL, SIMULATED_PLAYING_MAX_PAID, playing_target)
 
 
 def ensure_simulated_cards_for_queue(
@@ -3611,7 +3615,10 @@ def ensure_simulated_activity(room: RoomStore, now: datetime) -> None:
         countdown_seconds = SELECT_PHASE_SECONDS - elapsed_seconds
         called_numbers: list[int] = []
     else:
-        return
+        phase = "playing"
+        queue = "current"
+        countdown_seconds = 0
+        called_numbers = compute_called_numbers(room, now)
 
     target = compute_simulated_target(room, phase, countdown_seconds, called_numbers)
     changed_room, changed_user_phones = ensure_simulated_cards_for_queue(room, queue, target)
@@ -4254,9 +4261,9 @@ def submit_deposit(payload: DepositRequest, user: UserStore = Depends(get_curren
             detail="Transaction number is required. Paste your receipt message to auto-detect it.",
         )
     method = find_deposit_method(payload.method)
-    validate_receipt_recipient(method, payload.receipt_message)
     ensure_valid_transaction_number(tx_number)
     links = validate_receipt_source_links(method.code, payload.receipt_message)
+    validate_receipt_recipient(method, payload.receipt_message, source_links=links)
     reserve_deposit_receipt(tx_number, user.phone_number, links)
 
     amount = round(float(payload.amount), 2)
@@ -4682,6 +4689,16 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
     room = get_or_create_room(stake)
     room_state = build_room_state(room, user.phone_number)
     queue = room_state.active_queue
+
+    # Boundary guard: if countdown just flipped to playing but this cartella is
+    # still held by the same user in the current queue, keep the purchase in
+    # the current round instead of silently pushing it to next.
+    if queue == "next":
+        current_owner = room.taken_cartellas.get(payload.cartella_no)
+        current_held_owner = room.held_cartellas.get(payload.cartella_no)
+        if current_owner == user.phone_number or current_held_owner == user.phone_number:
+            queue = "current"
+
     taken_map, held_map, held_updated_at = get_queue_maps(room, queue)
 
     owner = taken_map.get(payload.cartella_no)
