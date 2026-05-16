@@ -6283,3 +6283,171 @@ body {
     background-position: -200% 0;
   }
 }
+
+/* Header standardization: mobile-first clarity and stable touch targets */
+.top-header {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.top-strip-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.brand-inline-text {
+  white-space: nowrap;
+}
+
+.wallet-pill-label {
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.wallet-pill-value {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .top-strip {
+    display: flex !important;
+    align-items: center;
+    flex-wrap: nowrap !important;
+    gap: 7px;
+    padding: 8px 10px;
+    overflow: hidden;
+  }
+
+  .brand-menu-trigger {
+    min-height: 40px;
+    border-radius: 10px;
+    padding: 0 2px;
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+
+  .brand-inline-logo {
+    width: 32px;
+    height: 32px;
+  }
+
+  .brand-inline-text {
+    display: inline;
+    font-size: 0.84rem;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+  }
+
+  .top-strip-actions {
+    gap: 6px;
+  }
+
+  .theme-toggle,
+  .refresh-btn,
+  .wallet-pill {
+    min-height: 40px;
+    border-radius: 10px;
+  }
+
+  .theme-toggle {
+    min-width: 40px !important;
+    width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .theme-toggle-label {
+    display: none;
+  }
+
+  .refresh-btn {
+    min-width: 68px !important;
+    padding: 0 10px;
+    font-size: 0.72rem;
+  }
+
+  .refresh-btn-text {
+    white-space: nowrap;
+    font-weight: 700;
+  }
+
+  .wallet-pill {
+    margin-left: 0 !important;
+    flex: 1 1 auto;
+    min-width: 0;
+    justify-content: flex-end;
+    gap: 6px;
+    padding: 0 9px;
+  }
+
+  .wallet-pill-label {
+    display: none;
+  }
+
+  .wallet-pill-value {
+    font-size: 0.78rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .menu-toggle::before,
+  .theme-toggle::before,
+  .refresh-btn::before {
+    content: none !important;
+  }
+}
+
+@media (max-width: 520px) {
+  .top-strip {
+    gap: 5px;
+    padding-inline: 8px;
+  }
+
+  .brand-inline-text {
+    display: none;
+  }
+
+  .brand-inline-logo {
+    width: 30px;
+    height: 30px;
+  }
+
+  .refresh-btn {
+    min-width: 62px !important;
+    padding: 0 8px;
+    font-size: 0.68rem;
+  }
+
+  .wallet-pill {
+    min-width: 86px;
+    padding: 0 7px;
+  }
+
+  .wallet-pill-value {
+    font-size: 0.74rem;
+  }
+}
+
+@media (max-width: 400px) {
+  .theme-toggle {
+    min-width: 38px !important;
+    width: 38px;
+  }
+
+  .refresh-btn {
+    min-width: 58px !important;
+    padding: 0 7px;
+    font-size: 0.64rem;
+  }
+
+  .wallet-pill {
+    min-width: 80px;
+    padding: 0 6px;
+  }
+}

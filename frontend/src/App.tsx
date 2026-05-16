@@ -2945,23 +2945,28 @@ export default function App() {
                 onClick={() => setDrawerOpen((state) => !state)}
               >
                 <img src="/brand/40bingo-logo.svg" alt="40bingo logo" className="brand-inline-logo" />
-                <span>40bingo</span>
+                <span className="brand-inline-text">40bingo</span>
               </button>
-              <button
-                className={`theme-toggle ${isDarkMode ? "on" : "off"}`}
-                type="button"
-                aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
-                onClick={() => setIsDarkMode((current) => !current)}
-              >
-                <span className="theme-toggle-track" aria-hidden="true">
-                  <span className="theme-toggle-thumb" />
-                </span>
-                <span className="theme-toggle-label">{isDarkMode ? "On" : "Off"}</span>
-              </button>
-              <button className="refresh-btn" type="button" aria-label="Refresh dashboard data" onClick={() => void loadData()}>
-                Refresh
-              </button>
-              <div className="wallet-pill">{fmtEtb(wallet.main_balance)}</div>
+              <div className="top-strip-actions">
+                <button
+                  className={`theme-toggle ${isDarkMode ? "on" : "off"}`}
+                  type="button"
+                  aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+                  onClick={() => setIsDarkMode((current) => !current)}
+                >
+                  <span className="theme-toggle-track" aria-hidden="true">
+                    <span className="theme-toggle-thumb" />
+                  </span>
+                  <span className="theme-toggle-label">{isDarkMode ? "Dark" : "Light"}</span>
+                </button>
+                <button className="refresh-btn" type="button" aria-label="Refresh dashboard data" onClick={() => void loadData()}>
+                  <span className="refresh-btn-text">Refresh</span>
+                </button>
+                <div className="wallet-pill">
+                  <span className="wallet-pill-label">Balance</span>
+                  <span className="wallet-pill-value">{fmtEtb(wallet.main_balance)}</span>
+                </div>
+              </div>
             </div>
           </header>
         </>
