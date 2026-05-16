@@ -638,6 +638,7 @@ CASINO_PAYOUT_TABLES: dict[str, list[tuple[float, float]]] = {
 CARTELLA_TOTAL = 200
 CALL_INTERVAL_SECONDS = 5.0
 SELECT_PHASE_SECONDS = 43
+CURRENT_QUEUE_JOIN_CUTOFF_SECONDS = max(0, env_int("CURRENT_QUEUE_JOIN_CUTOFF_SECONDS", 5))
 HOLD_TTL_SECONDS = 60
 HOLD_HEARTBEAT_SECONDS = 8
 DEMO_START_BALANCE = 700.0
@@ -4809,6 +4810,8 @@ def preview_card(payload: PreviewCardRequest, user: UserStore = Depends(get_curr
     room = get_or_create_room(stake)
     room_state = build_room_state(room, user.phone_number)
     queue = room_state.active_queue
+    if room_state.phase == "selecting" and room_state.countdown_seconds <= CURRENT_QUEUE_JOIN_CUTOFF_SECONDS:
+        queue = "next"
     taken_map, held_map, held_updated_at = get_queue_maps(room, queue)
 
     owner = taken_map.get(payload.cartella_no)
@@ -4862,10 +4865,13 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
     elif payload.round_id == next_round_id:
         queue = "next"
 
+    if queue == "current" and room_state.phase == "selecting" and room_state.countdown_seconds <= CURRENT_QUEUE_JOIN_CUTOFF_SECONDS:
+        queue = "next"
+
     # Boundary guard: if countdown just flipped to playing but this cartella is
     # still held by the same user in the current queue, keep the purchase in
     # the current round instead of silently pushing it to next.
-    if queue == "next":
+    if queue == "next" and room_state.phase == "playing":
         current_lock_round = get_queue_round_lock(room, "current", user.phone_number, payload.cartella_no)
         current_owner = room.taken_cartellas.get(payload.cartella_no)
         current_held_owner = room.held_cartellas.get(payload.cartella_no)
