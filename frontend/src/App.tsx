@@ -1994,7 +1994,13 @@ export default function App() {
     setWorking(true);
     setError("");
     try {
-      const res = await previewCard(selectedStake.id, cartellaNo);
+      const preferredRoundId =
+        pickerRoom?.phase === "selecting"
+          ? pickerRoom?.next_round_id
+          : pickerRoom?.active_queue === "next"
+            ? pickerRoom?.next_round_id
+            : pickerRoom?.round_id;
+      const res = await previewCard(selectedStake.id, cartellaNo, preferredRoundId);
       setPickerRoomWithSyncMeta(res.room);
       setRoomWithPendingMarks(res.room);
       setSelectedCartella(cartellaNo);
@@ -2028,7 +2034,9 @@ export default function App() {
     setError("");
     try {
       const preferredRoundId =
-        pickerRoom?.active_queue === "next"
+        pickerRoom?.phase === "selecting"
+          ? pickerRoom?.next_round_id
+          : pickerRoom?.active_queue === "next"
           ? pickerRoom?.next_round_id
           : pickerRoom?.round_id ?? room?.round_id;
       let res;

@@ -342,6 +342,7 @@ class AdminMarkPaidRequest(BaseModel):
 class PreviewCardRequest(BaseModel):
     stake_id: str
     cartella_no: int = Field(ge=1, le=200)
+    round_id: str | None = Field(default=None, min_length=3, max_length=120)
 
 
 class JoinStakeRequest(BaseModel):
@@ -4809,7 +4810,16 @@ def preview_card(payload: PreviewCardRequest, user: UserStore = Depends(get_curr
     stake = find_stake(payload.stake_id)
     room = get_or_create_room(stake)
     room_state = build_room_state(room, user.phone_number)
+    current_round_id = round_id_for_room(room)
+    next_round_id = round_id_for_room(room, room.round_number + 1)
+    if payload.round_id and payload.round_id not in {current_round_id, next_round_id}:
+        raise HTTPException(status_code=409, detail="Round changed. Refresh and choose your cartella again.")
+
     queue = room_state.active_queue
+    if payload.round_id == current_round_id:
+        queue = "current"
+    elif payload.round_id == next_round_id:
+        queue = "next"
     if room_state.phase == "selecting" and room_state.countdown_seconds <= CURRENT_QUEUE_JOIN_CUTOFF_SECONDS:
         queue = "next"
     taken_map, held_map, held_updated_at = get_queue_maps(room, queue)

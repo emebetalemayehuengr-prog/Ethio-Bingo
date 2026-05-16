@@ -271,10 +271,10 @@ export function rejectAdminWithdrawRequest(ticketId: string) {
   });
 }
 
-export function previewCard(stakeId: string, cartellaNo: number) {
+export function previewCard(stakeId: string, cartellaNo: number, roundId?: string) {
   return request<PreviewCardResponse>("/api/game/preview", {
     method: "POST",
-    body: JSON.stringify({ stake_id: stakeId, cartella_no: cartellaNo }),
+    body: JSON.stringify({ stake_id: stakeId, cartella_no: cartellaNo, round_id: roundId ?? null }),
   });
 }
 
