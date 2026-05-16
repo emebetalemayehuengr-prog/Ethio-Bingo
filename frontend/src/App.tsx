@@ -1330,32 +1330,6 @@ export default function App() {
     }
   }
 
-  async function openSpectatorStakeGame(stake: StakeOption) {
-    setSelectedStake(stake);
-    setWorking(true);
-    setError("");
-    try {
-      const res = await fetchStakeRoom(stake.id);
-      setPickerRoomWithSyncMeta(res.room);
-      setRoomWithPendingMarks(res.room);
-      const ownedCards = res.cards ?? (res.card ? [res.card] : []);
-      setCards(ownedCards);
-      setSelectedCardNo((prev) => {
-        if (!ownedCards.length) return null;
-        if (prev && ownedCards.some((item) => item.card_no === prev)) return prev;
-        return ownedCards[0].card_no;
-      });
-      if (!ownedCards.length) {
-        setNotice("Spectating live caller. Buy a cartella to mark numbers and claim bingo.");
-      }
-      setService("game");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to open live game");
-    } finally {
-      setWorking(false);
-    }
-  }
-
   async function recoverCurrentGameView() {
     try {
       const dash = dashboard ?? (await fetchDashboard());
@@ -1367,26 +1341,14 @@ export default function App() {
         }
       }
       const stake = dash.stake_options.find((option) => (option.my_cards_current ?? 0) > 0) ?? null;
-      if (stake) {
-        setDrawerOpen(false);
-        await openOwnedStakeGame(stake);
-        return;
-      }
-
-      const spectatorStake =
-        dash.stake_options.find((option) => option.room_phase === "playing" || option.status === "playing") ??
-        dash.stake_options.find((option) => option.room_phase === "selecting" || option.status === "countdown") ??
-        dash.stake_options.find((option) => option.status !== "none") ??
-        null;
-      if (!spectatorStake) {
+      if (!stake) {
         setService("stakes");
-        setNotice("No active live room right now.");
+        setNotice("Choose stake and buy cartella first.");
         setDrawerOpen(false);
         return;
       }
-
       setDrawerOpen(false);
-      await openSpectatorStakeGame(spectatorStake);
+      await openOwnedStakeGame(stake);
     } catch (err) {
       setService("stakes");
       setDrawerOpen(false);
@@ -1401,7 +1363,7 @@ export default function App() {
       setDrawerOpen(false);
       return;
     }
-    if (next === "game" && !room) {
+    if (next === "game" && (!room || !cards.length)) {
       void recoverCurrentGameView();
       return;
     }
@@ -3125,10 +3087,10 @@ export default function App() {
 
         {service === "game" && (
           <section className="panel game-panel">
-            {!room ? (
+            {!room || !card ? (
               <div className="empty-state">
                 <h3>No active room</h3>
-                <p>No live room available right now.</p>
+                <p>Buy cartella first from Bingo Game service.</p>
               </div>
             ) : (
               <>
@@ -3207,7 +3169,7 @@ export default function App() {
                               className="stat-box"
                               aria-label="Toggle auto mark"
                               onClick={() => void onToggleAutoMark()}
-                              disabled={autoMarkUpdating || room.phase === "finished" || cards.length === 0}
+                              disabled={autoMarkUpdating || room.phase === "finished"}
                             >
                               <small>Auto Mark</small>
                               <strong>
@@ -3300,7 +3262,6 @@ export default function App() {
                       <button className="primary-btn" type="button" onClick={() => void onClaimBingo()} disabled={!bingoClaimable || claimingBingo || room.phase !== "playing"}>
                         {claimingBingo ? "Confirming..." : "Bingo"}
                       </button>
-                      {cards.length === 0 && <span className="panel-subtitle">Spectator mode: buy a cartella to mark numbers and claim bingo.</span>}
                     </div>
                   </div>
                 )}
