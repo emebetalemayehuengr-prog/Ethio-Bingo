@@ -127,6 +127,35 @@ jobs:
               exit 1
             fi
 
+      - name: Pull cPanel git working trees (if present)
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
+          passphrase: ${{ env.SSH_PASSPHRASE }}
+          port: ${{ env.SSH_PORT }}
+          timeout: 3m
+          command_timeout: 2m
+          script: |
+            set -euo pipefail
+            if [ "$(whoami)" != "${{ env.EXPECTED_CPANEL_USER }}" ]; then
+              echo "Wrong cPanel account. Expected '${{ env.EXPECTED_CPANEL_USER }}' but got '$(whoami)'."
+              exit 1
+            fi
+            if ! command -v git >/dev/null 2>&1; then
+              echo "git binary not found on cPanel host; skipping server-side pull."
+              exit 0
+            fi
+            for target in "${{ env.SSH_FRONTEND_PATH }}" "${{ env.SSH_BACKEND_PATH }}"; do
+              if [ -d "$target/.git" ]; then
+                echo "git_pull_target=$target"
+                git -C "$target" pull --ff-only
+              else
+                echo "git_pull_skip_no_repo=$target"
+              fi
+            done
+
       - name: Sanitize backend tree for upload
         shell: bash
         run: |
@@ -249,26 +278,38 @@ jobs:
             test -f "$FE/index.html"
             echo "deploy_revision_ok $WANT"
 
-      - name: Verify frontend bundle is live on public domain
+      - name: Verify frontend bundle on origin host
         shell: bash
         run: |
           set -euo pipefail
           SITE="${SITE_URL%/}"
+          SITE_HOST="$(printf '%s' "$SITE" | sed -E 's#^https?://##; s#/.*$##')"
+          ORIGIN_HOST="${SSH_HOST}"
+          ORIGIN_ADDR="$(getent ahostsv4 "$ORIGIN_HOST" | awk 'NR==1{print $1}' || true)"
+          if [ -z "$ORIGIN_ADDR" ]; then
+            ORIGIN_ADDR="$(getent hosts "$ORIGIN_HOST" | awk 'NR==1{print $1}' || true)"
+          fi
+          if [ -z "$ORIGIN_ADDR" ]; then
+            echo "::error::Unable to resolve origin host address from SSH_HOST='$ORIGIN_HOST'"
+            exit 1
+          fi
           WANT_BUNDLE="${EXPECTED_FRONTEND_JS}"
           WANT_SHA="${GITHUB_SHA}"
-          ATTEMPTS=30
-          SLEEP_SECONDS=8
+          ATTEMPTS=20
+          SLEEP_SECONDS=6
           for i in $(seq 1 "$ATTEMPTS"); do
             LIVE_INDEX="$(curl --fail --show-error --silent --max-time 15 \
               -H 'Cache-Control: no-cache, no-store, max-age=0' \
               -H 'Pragma: no-cache' \
-              "$SITE/index.html?cb=${GITHUB_RUN_ID}-${i}" || true)"
+              --resolve "${SITE_HOST}:443:${ORIGIN_ADDR}" \
+              "https://${SITE_HOST}/index.html?cb=${GITHUB_RUN_ID}-origin-${i}" || true)"
             LIVE_BUNDLE="$(printf '%s' "$LIVE_INDEX" | grep -oE 'assets/index-[^"[:space:]]+\.js' | head -n1 || true)"
             LIVE_REVISION="$(curl --fail --show-error --silent --max-time 15 \
               -H 'Cache-Control: no-cache, no-store, max-age=0' \
               -H 'Pragma: no-cache' \
-              "$SITE/deploy-revision.txt?cb=${GITHUB_RUN_ID}-${i}" | tr -d '\r\n' || true)"
-            echo "attempt $i/$ATTEMPTS: live_bundle='$LIVE_BUNDLE' expected_bundle='$WANT_BUNDLE' live_revision='$LIVE_REVISION' expected_revision='$WANT_SHA'"
+              --resolve "${SITE_HOST}:443:${ORIGIN_ADDR}" \
+              "https://${SITE_HOST}/deploy-revision.txt?cb=${GITHUB_RUN_ID}-origin-${i}" | tr -d '\r\n' || true)"
+            echo "origin attempt $i/$ATTEMPTS: live_bundle='$LIVE_BUNDLE' expected_bundle='$WANT_BUNDLE' live_revision='$LIVE_REVISION' expected_revision='$WANT_SHA' origin_addr='$ORIGIN_ADDR'"
             if [ "$LIVE_BUNDLE" = "$WANT_BUNDLE" ]; then
               echo "live_bundle_ok $LIVE_BUNDLE"
               exit 0
@@ -279,7 +320,7 @@ jobs:
             fi
             sleep "$SLEEP_SECONDS"
           done
-          echo "::error::Live domain is still not serving the expected bundle or deploy revision."
+          echo "::error::Origin host is still not serving the expected bundle or deploy revision."
           exit 1
 
       - name: Restart backend app (Passenger)
@@ -316,3 +357,32 @@ jobs:
             *) HEALTH_URL="$API_BASE/api/health" ;;
           esac
           curl --fail --show-error --silent --retry 5 --retry-delay 5 "$HEALTH_URL"
+
+      - name: Verify frontend bundle is live on public domain (cache propagation monitor)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          SITE="${SITE_URL%/}"
+          WANT_BUNDLE="${EXPECTED_FRONTEND_JS}"
+          WANT_SHA="${GITHUB_SHA}"
+          ATTEMPTS=25
+          SLEEP_SECONDS=8
+          for i in $(seq 1 "$ATTEMPTS"); do
+            LIVE_INDEX="$(curl --fail --show-error --silent --max-time 15 \
+              -H 'Cache-Control: no-cache, no-store, max-age=0' \
+              -H 'Pragma: no-cache' \
+              "$SITE/index.html?cb=${GITHUB_RUN_ID}-public-${i}" || true)"
+            LIVE_BUNDLE="$(printf '%s' "$LIVE_INDEX" | grep -oE 'assets/index-[^"[:space:]]+\.js' | head -n1 || true)"
+            LIVE_REVISION="$(curl --fail --show-error --silent --max-time 15 \
+              -H 'Cache-Control: no-cache, no-store, max-age=0' \
+              -H 'Pragma: no-cache' \
+              "$SITE/deploy-revision.txt?cb=${GITHUB_RUN_ID}-public-${i}" | tr -d '\r\n' || true)"
+            echo "public attempt $i/$ATTEMPTS: live_bundle='$LIVE_BUNDLE' expected_bundle='$WANT_BUNDLE' live_revision='$LIVE_REVISION' expected_revision='$WANT_SHA'"
+            if [ "$LIVE_BUNDLE" = "$WANT_BUNDLE" ] || [ "$LIVE_REVISION" = "$WANT_SHA" ]; then
+              echo "public_domain_propagation_ok"
+              exit 0
+            fi
+            sleep "$SLEEP_SECONDS"
+          done
+          echo "::warning::Public domain still appears cached/stale after deploy; origin is updated."
