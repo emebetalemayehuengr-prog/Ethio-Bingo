@@ -32,6 +32,11 @@ except Exception:  # pragma: no cover - optional dependency for postgres runtime
     dict_row = None
     Jsonb = None
 
+try:
+    import pusher
+except Exception:  # pragma: no cover - optional dependency for realtime push
+    pusher = None
+
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -814,6 +819,10 @@ CASINO_WEBHOOK_SECRET = os.getenv("CASINO_WEBHOOK_SECRET", "").strip()
 CASINO_LAUNCH_MODE = os.getenv("CASINO_LAUNCH_MODE", "redirect").strip().lower()
 CASINO_ALLOWED_RETURN_HOSTS = {host.lower() for host in env_list("CASINO_ALLOWED_RETURN_HOSTS")}
 CASINO_LAUNCH_SESSION_SECONDS = max(120, env_int("CASINO_LAUNCH_SESSION_SECONDS", 900))
+PUSHER_APP_ID = os.getenv("PUSHER_APP_ID", "2156886").strip()
+PUSHER_KEY = os.getenv("PUSHER_KEY", "ZmjxWZcUWx03wDBd7vmSQTBIP-2KVn4yK8oEXG3efsg").strip()
+PUSHER_SECRET = os.getenv("PUSHER_SECRET", "299757a0ae4c8ef8fe18").strip()
+PUSHER_CLUSTER = os.getenv("PUSHER_CLUSTER", "ap2").strip()
 
 USERS: dict[str, UserStore] = {}
 SESSIONS: dict[str, dict[str, str]] = {}
@@ -825,6 +834,19 @@ WITHDRAW_TICKETS: list[WithdrawTicket] = []
 AUDIT_EVENTS: list[AuditEvent] = []
 CASINO_LAUNCH_SESSIONS: dict[str, dict[str, str]] = {}
 USER_REFRESH_AT: dict[str, datetime] = {}
+ROOM_PUSH_SIGNATURES: dict[str, str] = {}
+
+PUSHER_CLIENT = (
+    pusher.Pusher(
+        app_id=PUSHER_APP_ID,
+        key=PUSHER_KEY,
+        secret=PUSHER_SECRET,
+        cluster=PUSHER_CLUSTER,
+        ssl=True,
+    )
+    if pusher and PUSHER_APP_ID and PUSHER_KEY and PUSHER_SECRET and PUSHER_CLUSTER
+    else None
+)
 
 DEPOSIT_SOURCE_DOMAINS: dict[str, set[str]] = {
     "telebirr": {"telebirr.et", "telebirr.com.et", "ethiotelecom.et"},
@@ -3231,6 +3253,7 @@ def get_or_create_room(stake: StakeOption) -> RoomStore:
         room = create_room(stake)
         ROOMS[stake.id] = room
         persist_room(room)
+        emit_room_push_update(room, reason="create", force=True)
     return room
 
 
@@ -3501,6 +3524,56 @@ def compute_call_countdown_seconds(room: RoomStore, reference_time: datetime) ->
     next_call_at = (call_count + 1) * CALL_INTERVAL_SECONDS
     seconds_left = max(0.0, next_call_at - play_elapsed)
     return max(1, int(math.ceil(seconds_left - 1e-9)))
+
+
+def compute_room_phase(room: RoomStore, reference_time: datetime) -> Literal["selecting", "playing", "finished"]:
+    if room.ended_at is not None:
+        return "finished"
+    elapsed_seconds = int((reference_time - room.started_at).total_seconds())
+    if elapsed_seconds < SELECT_PHASE_SECONDS:
+        return "selecting"
+    return "playing"
+
+
+def emit_room_push_update(room: RoomStore, reason: str = "tick", force: bool = False) -> None:
+    if PUSHER_CLIENT is None:
+        return
+    now = utc_now()
+    reference_time = room.ended_at or now
+    phase = compute_room_phase(room, reference_time)
+    called_numbers = compute_called_numbers(room, reference_time)
+    latest_number = called_numbers[-1] if called_numbers else None
+    announcement_seconds = (
+        max(0, int((room.result_until - now).total_seconds()))
+        if room.result_until is not None and now < room.result_until
+        else 0
+    )
+    signature = (
+        f"{room.round_number}|{phase}|{len(called_numbers)}|{latest_number}|"
+        f"{len(room.taken_cartellas)}|{len(room.next_taken_cartellas)}|"
+        f"{len(room.held_cartellas)}|{len(room.next_held_cartellas)}|"
+        f"{len(room.pending_claims)}|{len(room.winners)}|{announcement_seconds}"
+    )
+    room_key = str(room.id)
+    if not force and ROOM_PUSH_SIGNATURES.get(room_key) == signature:
+        return
+    ROOM_PUSH_SIGNATURES[room_key] = signature
+    payload = {
+        "room_id": room.id,
+        "stake_id": room.stake_id,
+        "round_number": room.round_number,
+        "phase": phase,
+        "called_count": len(called_numbers),
+        "latest_number": latest_number,
+        "announcement_seconds": announcement_seconds,
+        "reason": reason,
+        "ts": now.isoformat(),
+    }
+    try:
+        PUSHER_CLIENT.trigger(f"room-{room.id}", "room.updated", payload)
+    except Exception:
+        # Keep gameplay functional even when push transport has temporary issues.
+        return
 
 
 def start_next_round(room: RoomStore, now: datetime) -> None:
@@ -4068,6 +4141,7 @@ async def room_tick_loop() -> None:
             advance_room_if_needed(room)
             if prune_holds(room):
                 persist_room(room)
+            emit_room_push_update(room, reason="tick")
         await asyncio.sleep(1)
 
 
@@ -4865,6 +4939,7 @@ def preview_card(payload: PreviewCardRequest, user: UserStore = Depends(get_curr
         round_number=room.round_number if queue == "current" else (room.round_number + 1),
     )
     persist_room(room)
+    emit_room_push_update(room, reason="preview", force=True)
 
     card = create_bingo_card(payload.cartella_no)
     return {
@@ -5014,6 +5089,7 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
     room.marked_by_user_card[mark_key(user.phone_number, payload.cartella_no)] = []
     if not PG_STORE.enabled():
         persist_room(room)
+    emit_room_push_update(room, reason="join", force=True)
 
     card = create_bingo_card(payload.cartella_no)
     current_cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in get_user_cartellas_from_map(room.taken_cartellas, user.phone_number)]
@@ -5083,6 +5159,7 @@ def mark_number(payload: MarkNumberRequest, user: UserStore = Depends(get_curren
         marks.discard(payload.number)
     room.marked_by_user_card[mark_key(user.phone_number, my_cartella)] = sorted(marks)
     persist_room(room)
+    emit_room_push_update(room, reason="mark", force=True)
 
     return {
         "message": "Mark updated",
@@ -5100,6 +5177,7 @@ def set_auto_mark_preference(payload: AutoMarkPreferenceRequest, user: UserStore
 
     room.user_auto_mark_enabled[user.phone_number] = payload.enabled
     persist_room(room)
+    emit_room_push_update(room, reason="auto_mark", force=True)
     return {
         "message": "Auto-mark enabled" if payload.enabled else "Auto-mark disabled",
         "room": build_room_state(room, user.phone_number).model_dump(),
@@ -5155,6 +5233,7 @@ def claim_bingo(payload: ClaimBingoRequest, user: UserStore = Depends(get_curren
 
     finalize_claim_window_if_needed(room, now)
     persist_room(room)
+    emit_room_push_update(room, reason="claim", force=True)
     next_state = build_room_state(room, user.phone_number)
 
     if next_state.phase == "finished":

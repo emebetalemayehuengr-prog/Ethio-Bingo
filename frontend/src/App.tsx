@@ -68,6 +68,21 @@ type WalletFieldErrorMap = Partial<
   >
 >;
 
+type PusherEventHandler = (payload: unknown) => void;
+type PusherChannelLike = { bind: (eventName: string, handler: PusherEventHandler) => void; unbind: (eventName: string, handler: PusherEventHandler) => void };
+type PusherClientLike = {
+  subscribe: (channelName: string) => PusherChannelLike;
+  unsubscribe: (channelName: string) => void;
+  disconnect: () => void;
+};
+type PusherConstructor = new (key: string, options: { cluster: string; forceTLS: boolean }) => PusherClientLike;
+
+declare global {
+  interface Window {
+    Pusher?: PusherConstructor;
+  }
+}
+
 const loadCartellaModalContent = () => import("./components/modals/CartellaModalContent");
 const loadDepositModalContent = () => import("./components/modals/DepositModalContent");
 const loadBetHistoryModalContent = () => import("./components/modals/BetHistoryModalContent");
@@ -104,6 +119,32 @@ const LIVE_COUNTDOWN_TICK_MS = 250;
 const FINISHED_RESULTS_MIN_HOLD_MS = 3000;
 const FINISHED_RESULTS_MAX_HOLD_MS = 12000;
 const FINISHED_RESULTS_DEFAULT_HOLD_MS = 5000;
+const PUSHER_KEY = ((import.meta.env.VITE_PUSHER_KEY as string | undefined)?.trim() || "ZmjxWZcUWx03wDBd7vmSQTBIP-2KVn4yK8oEXG3efsg");
+const PUSHER_CLUSTER = ((import.meta.env.VITE_PUSHER_CLUSTER as string | undefined)?.trim() || "ap2");
+const PUSHER_JS_URL = "https://js.pusher.com/8.4.0/pusher.min.js";
+const REALTIME_SYNC_THROTTLE_MS = 400;
+
+let pusherScriptReadyPromise: Promise<void> | null = null;
+function ensurePusherScriptLoaded() {
+  if (typeof window === "undefined") return Promise.resolve();
+  if (window.Pusher) return Promise.resolve();
+  if (pusherScriptReadyPromise) return pusherScriptReadyPromise;
+  pusherScriptReadyPromise = new Promise<void>((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${PUSHER_JS_URL}"]`);
+    if (existing) {
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener("error", () => reject(new Error("Failed to load Pusher script")), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = PUSHER_JS_URL;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Failed to load Pusher script"));
+    document.head.appendChild(script);
+  });
+  return pusherScriptReadyPromise;
+}
 
 function readInitialDarkModePreference() {
   if (typeof window === "undefined") return true;
@@ -1007,12 +1048,15 @@ export default function App() {
   const latestRoomRef = useRef<RoomState | null>(null);
   const latestCardsRef = useRef<BingoCard[]>([]);
   const latestServiceRef = useRef<ServiceView>("home");
+  const pusherClientRef = useRef<PusherClientLike | null>(null);
+  const realtimeLastSyncAtRef = useRef(0);
   const lastRoomTransitionLogRef = useRef<string>("");
   const lastPickerTransitionLogRef = useRef<string>("");
   const lastFinishedRoomRef = useRef<string | null>(null);
   const lastFinishedRedirectRef = useRef<string | null>(null);
   const sharedStakeOpeningRef = useRef(false);
   const [ready, setReady] = useState(false);
+  const [pusherReady, setPusherReady] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => readInitialDarkModePreference());
   const [isPageVisible, setIsPageVisible] = useState(() => (typeof document === "undefined" ? true : document.visibilityState !== "hidden"));
   const [loading, setLoading] = useState(false);
@@ -1231,6 +1275,102 @@ export default function App() {
   useEffect(() => {
     latestServiceRef.current = service;
   }, [service]);
+
+  useEffect(() => {
+    if (!profile || !PUSHER_KEY) return;
+    let cancelled = false;
+    void ensurePusherScriptLoaded()
+      .then(() => {
+        if (cancelled || pusherClientRef.current || !window.Pusher) return;
+        pusherClientRef.current = new window.Pusher(PUSHER_KEY, {
+          cluster: PUSHER_CLUSTER,
+          forceTLS: true,
+        });
+        setPusherReady(true);
+      })
+      .catch(() => {
+        // Keep polling fallback when realtime transport is unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.phone_number]);
+
+  useEffect(() => {
+    if (!pusherReady || service !== "game" || !room?.id) return;
+    const client = pusherClientRef.current;
+    if (!client) return;
+    const channelName = `room-${room.id}`;
+    const channel = client.subscribe(channelName);
+    let inFlight = false;
+    const onRoomUpdated: PusherEventHandler = () => {
+      if (inFlight) return;
+      const now = Date.now();
+      if (now - realtimeLastSyncAtRef.current < REALTIME_SYNC_THROTTLE_MS) return;
+      realtimeLastSyncAtRef.current = now;
+      inFlight = true;
+      void syncRoom(room.id)
+        .then((synced) => {
+          const syncedCards = synced.cards ?? (synced.card ? [synced.card] : []);
+          startTransition(() => {
+            setRoomWithPendingMarks(synced.room);
+            setCards((previousCards) => resolveSyncedCards(synced.room, syncedCards, previousCards));
+          });
+        })
+        .catch(() => {
+          // keep polling fallback
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    channel.bind("room.updated", onRoomUpdated);
+    return () => {
+      channel.unbind("room.updated", onRoomUpdated);
+      client.unsubscribe(channelName);
+    };
+  }, [pusherReady, service, room?.id]);
+
+  useEffect(() => {
+    if (!pusherReady || !cartellaOpen || !selectedStake?.id) return;
+    const client = pusherClientRef.current;
+    if (!client) return;
+    const channelRoomId = pickerRoom?.id ?? `room-${selectedStake.id}`;
+    const channelName = `room-${channelRoomId}`;
+    const channel = client.subscribe(channelName);
+    let inFlight = false;
+    const onRoomUpdated: PusherEventHandler = () => {
+      if (inFlight) return;
+      const now = Date.now();
+      if (now - realtimeLastSyncAtRef.current < REALTIME_SYNC_THROTTLE_MS) return;
+      realtimeLastSyncAtRef.current = now;
+      inFlight = true;
+      void fetchStakeRoom(selectedStake.id)
+        .then((res) => {
+          startTransition(() => {
+            setPickerRoomWithSyncMeta(res.room);
+          });
+        })
+        .catch(() => {
+          // keep polling fallback
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    channel.bind("room.updated", onRoomUpdated);
+    return () => {
+      channel.unbind("room.updated", onRoomUpdated);
+      client.unsubscribe(channelName);
+    };
+  }, [pusherReady, cartellaOpen, selectedStake?.id, pickerRoom?.id]);
+
+  useEffect(() => {
+    return () => {
+      pusherClientRef.current?.disconnect();
+      pusherClientRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     const mode = isDarkMode ? "dark" : "light";
