@@ -255,20 +255,31 @@ jobs:
           set -euo pipefail
           SITE="${SITE_URL%/}"
           WANT_BUNDLE="${EXPECTED_FRONTEND_JS}"
-          for i in 1 2 3 4 5 6 7 8 9 10; do
+          WANT_SHA="${GITHUB_SHA}"
+          ATTEMPTS=30
+          SLEEP_SECONDS=8
+          for i in $(seq 1 "$ATTEMPTS"); do
             LIVE_INDEX="$(curl --fail --show-error --silent --max-time 15 \
               -H 'Cache-Control: no-cache, no-store, max-age=0' \
               -H 'Pragma: no-cache' \
               "$SITE/index.html?cb=${GITHUB_RUN_ID}-${i}" || true)"
             LIVE_BUNDLE="$(printf '%s' "$LIVE_INDEX" | grep -oE 'assets/index-[^"[:space:]]+\.js' | head -n1 || true)"
-            echo "attempt $i: live_bundle='$LIVE_BUNDLE' expected_bundle='$WANT_BUNDLE'"
+            LIVE_REVISION="$(curl --fail --show-error --silent --max-time 15 \
+              -H 'Cache-Control: no-cache, no-store, max-age=0' \
+              -H 'Pragma: no-cache' \
+              "$SITE/deploy-revision.txt?cb=${GITHUB_RUN_ID}-${i}" | tr -d '\r\n' || true)"
+            echo "attempt $i/$ATTEMPTS: live_bundle='$LIVE_BUNDLE' expected_bundle='$WANT_BUNDLE' live_revision='$LIVE_REVISION' expected_revision='$WANT_SHA'"
             if [ "$LIVE_BUNDLE" = "$WANT_BUNDLE" ]; then
               echo "live_bundle_ok $LIVE_BUNDLE"
               exit 0
             fi
-            sleep 6
+            if [ "$LIVE_REVISION" = "$WANT_SHA" ]; then
+              echo "live_revision_ok $LIVE_REVISION"
+              exit 0
+            fi
+            sleep "$SLEEP_SECONDS"
           done
-          echo "::error::Live domain is still not serving the expected frontend bundle."
+          echo "::error::Live domain is still not serving the expected bundle or deploy revision."
           exit 1
 
       - name: Restart backend app (Passenger)
