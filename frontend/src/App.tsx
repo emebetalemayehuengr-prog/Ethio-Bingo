@@ -100,6 +100,9 @@ const SESSION_QR_IMAGE_SIZE = 280;
 const ROOM_EMPTY_POLL_GRACE_MS = 8000;
 const ROOM_EMPTY_POLL_GRACE_COUNT = 3;
 const LIVE_COUNTDOWN_TICK_MS = 250;
+const FINISHED_RESULTS_MIN_HOLD_MS = 3000;
+const FINISHED_RESULTS_MAX_HOLD_MS = 12000;
+const FINISHED_RESULTS_DEFAULT_HOLD_MS = 5000;
 
 function readInitialDarkModePreference() {
   if (typeof window === "undefined") return true;
@@ -508,21 +511,59 @@ const applyPendingMarksToRoom = (state: RoomState | null, pendingMarks: PendingM
 
 const hasMarkedNumbers = (markMap: Record<string, number[]>) => Object.values(markMap).some((values) => values.length > 0);
 
+const mergeUniqueSortedNumbers = (...numberLists: Array<number[] | undefined>) =>
+  Array.from(
+    new Set(
+      numberLists.flatMap((numberList) =>
+        Array.isArray(numberList) ? numberList.filter((value): value is number => Number.isFinite(value)) : [],
+      ),
+    ),
+  ).sort((left, right) => left - right);
+
+const stabilizeNumberList = (incomingList: number[] | undefined, previousList: number[] | undefined) => {
+  const incoming = incomingList ?? [];
+  const previous = previousList ?? [];
+  if (!previous.length || incoming.length >= previous.length) return incoming;
+  return mergeUniqueSortedNumbers(previous, incoming);
+};
+
+const maxOptionalNumber = (incomingValue: number | undefined, previousValue: number | undefined) => {
+  if (incomingValue == null) return previousValue;
+  if (previousValue == null) return incomingValue;
+  return Math.max(incomingValue, previousValue);
+};
+
 const stabilizeRoomMarks = (previous: RoomState | null, incoming: RoomState | null) => {
   if (!incoming || !previous) return incoming;
-  if (incoming.id !== previous.id || incoming.phase !== "playing") return incoming;
+  if (incoming.id !== previous.id) return incoming;
 
-  const incomingMap = incoming.my_marked_numbers_by_card ?? {};
+  let stabilized = incoming;
+  if (incoming.round_id === previous.round_id && incoming.phase === previous.phase) {
+    stabilized = {
+      ...stabilized,
+      paid_cartellas: stabilizeNumberList(incoming.paid_cartellas, previous.paid_cartellas),
+      simulated_paid_cartellas: stabilizeNumberList(incoming.simulated_paid_cartellas, previous.simulated_paid_cartellas),
+      my_cartellas: stabilizeNumberList(incoming.my_cartellas, previous.my_cartellas),
+      next_my_cartellas: stabilizeNumberList(incoming.next_my_cartellas, previous.next_my_cartellas),
+      my_held_cartella: incoming.my_held_cartella ?? previous.my_held_cartella,
+      display_paid_count: maxOptionalNumber(incoming.display_paid_count, previous.display_paid_count),
+      current_paid_count: maxOptionalNumber(incoming.current_paid_count, previous.current_paid_count),
+    };
+  }
+
+  if (stabilized.phase !== "playing") return stabilized;
+
+  const incomingMap = stabilized.my_marked_numbers_by_card ?? {};
   const previousMap = previous.my_marked_numbers_by_card ?? {};
-  if (hasMarkedNumbers(incomingMap) || !hasMarkedNumbers(previousMap)) return incoming;
+  if (hasMarkedNumbers(incomingMap) || !hasMarkedNumbers(previousMap)) return stabilized;
 
   const fallbackMarked =
-    incoming.my_cartella != null
-      ? previousMap[String(incoming.my_cartella)] ?? incoming.my_marked_numbers
-      : incoming.my_marked_numbers;
+    stabilized.my_cartella != null
+      ? previousMap[String(stabilized.my_cartella)] ?? stabilized.my_marked_numbers
+      : stabilized.my_marked_numbers;
 
   return {
-    ...incoming,
+    ...stabilized,
     my_marked_numbers_by_card: previousMap,
     my_marked_numbers: fallbackMarked,
   };
@@ -530,6 +571,8 @@ const stabilizeRoomMarks = (previous: RoomState | null, incoming: RoomState | nu
 
 const resolveSyncedCards = (nextRoom: RoomState, nextCards: BingoCard[], previousCards: BingoCard[]) => {
   if (nextCards.length > 0) return nextCards;
+  if (nextRoom.phase === "finished" && previousCards.length > 0) return previousCards;
+  if ((nextRoom.announcement_seconds ?? 0) > 0 && previousCards.length > 0) return previousCards;
   return nextRoom.my_cartellas.length > 0 ? previousCards : [];
 };
 
@@ -538,24 +581,15 @@ const stabilizePickerRoomState = (previous: RoomState | null, incoming: RoomStat
   if (incoming.id !== previous.id) return incoming;
   if (incoming.round_id !== previous.round_id || incoming.phase !== previous.phase) return incoming;
 
-  const previousSimulated = previous.simulated_paid_cartellas ?? [];
-  const incomingSimulated = incoming.simulated_paid_cartellas ?? [];
-  const stabilizedPaid =
-    incoming.paid_cartellas.length >= previous.paid_cartellas.length ? incoming.paid_cartellas : previous.paid_cartellas;
-  const stabilizedSimulated = incomingSimulated.length >= previousSimulated.length ? incomingSimulated : previousSimulated;
-  const stabilizedMyCurrent = incoming.my_cartellas.length >= previous.my_cartellas.length ? incoming.my_cartellas : previous.my_cartellas;
-  const stabilizedMyNext =
-    incoming.next_my_cartellas.length >= previous.next_my_cartellas.length ? incoming.next_my_cartellas : previous.next_my_cartellas;
-
   return {
     ...incoming,
-    paid_cartellas: stabilizedPaid,
-    simulated_paid_cartellas: stabilizedSimulated,
-    my_cartellas: stabilizedMyCurrent,
-    next_my_cartellas: stabilizedMyNext,
+    paid_cartellas: stabilizeNumberList(incoming.paid_cartellas, previous.paid_cartellas),
+    simulated_paid_cartellas: stabilizeNumberList(incoming.simulated_paid_cartellas, previous.simulated_paid_cartellas),
+    my_cartellas: stabilizeNumberList(incoming.my_cartellas, previous.my_cartellas),
+    next_my_cartellas: stabilizeNumberList(incoming.next_my_cartellas, previous.next_my_cartellas),
     my_held_cartella: incoming.my_held_cartella ?? previous.my_held_cartella,
-    display_paid_count: Math.max(incoming.display_paid_count ?? 0, previous.display_paid_count ?? 0),
-    current_paid_count: Math.max(incoming.current_paid_count ?? 0, previous.current_paid_count ?? 0),
+    display_paid_count: maxOptionalNumber(incoming.display_paid_count, previous.display_paid_count),
+    current_paid_count: maxOptionalNumber(incoming.current_paid_count, previous.current_paid_count),
   };
 };
 
@@ -965,6 +999,7 @@ export default function App() {
   const emptyGameSyncPollCountRef = useRef(0);
   const latestRoomRef = useRef<RoomState | null>(null);
   const latestCardsRef = useRef<BingoCard[]>([]);
+  const latestServiceRef = useRef<ServiceView>("home");
   const lastRoomTransitionLogRef = useRef<string>("");
   const lastPickerTransitionLogRef = useRef<string>("");
   const lastFinishedRoomRef = useRef<string | null>(null);
@@ -1154,6 +1189,10 @@ export default function App() {
   useEffect(() => {
     latestCardsRef.current = cards;
   }, [cards]);
+
+  useEffect(() => {
+    latestServiceRef.current = service;
+  }, [service]);
 
   useEffect(() => {
     const mode = isDarkMode ? "dark" : "light";
@@ -1713,8 +1752,7 @@ export default function App() {
           const previousCards = latestCardsRef.current;
           const resolvedCards = resolveSyncedCards(synced.room, syncedCards, previousCards);
           const hasCurrentOwnership = (synced.room.my_cartellas?.length ?? 0) > 0;
-          const hasSyncedCards = syncedCards.length > 0;
-          const emptySnapshot = !hasCurrentOwnership && !hasSyncedCards;
+          const emptySnapshot = !hasCurrentOwnership && resolvedCards.length === 0;
           if (emptySnapshot) {
             emptyGameSyncPollCountRef.current += 1;
             const stable = lastStableGameSnapshotRef.current;
@@ -1873,8 +1911,25 @@ export default function App() {
     lastFinishedRedirectRef.current = finishedRoundKey;
     setSessionPanelExpanded(true);
     setNowPlayingExpanded(true);
-    setNotice("Round finished. Results are shown below.");
-  }, [service, room?.phase, room?.id, room?.round_id]);
+    const serverHoldMs =
+      typeof room?.announcement_seconds === "number" && room.announcement_seconds > 0
+        ? room.announcement_seconds * 1000
+        : FINISHED_RESULTS_DEFAULT_HOLD_MS;
+    const redirectDelayMs = Math.min(FINISHED_RESULTS_MAX_HOLD_MS, Math.max(FINISHED_RESULTS_MIN_HOLD_MS, serverHoldMs));
+    const redirectDelaySeconds = Math.ceil(redirectDelayMs / 1000);
+    setNotice(`Round finished. Winners shown for ${redirectDelaySeconds}s, then returning to Rooms.`);
+
+    const timer = window.setTimeout(() => {
+      const activeRoom = latestRoomRef.current;
+      if (latestServiceRef.current !== "game") return;
+      if (!activeRoom) return;
+      if (activeRoom.id !== room?.id) return;
+      setService("stakes");
+      setNotice("Round complete. You can now join the next game.");
+    }, redirectDelayMs);
+
+    return () => window.clearTimeout(timer);
+  }, [service, room?.phase, room?.id, room?.round_id, room?.announcement_seconds]);
 
   useEffect(() => {
     if (!cardRechargeLabel) return;
