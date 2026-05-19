@@ -19,7 +19,7 @@ export type AuthResponse = {
 };
 
 export type TransactionRecord = {
-  type: "Deposit" | "Withdraw" | "Transfer" | "Bet" | "Win";
+  type: "Deposit" | "Withdraw" | "Transfer" | "Bet" | "Win" | "Refund";
   amount: number;
   status: "Completed" | "Pending" | "Failed";
   created_at: string;

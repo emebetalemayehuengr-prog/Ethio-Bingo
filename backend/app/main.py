@@ -202,7 +202,7 @@ class WalletState(BaseModel):
 
 
 class TransactionRecord(BaseModel):
-    type: Literal["Deposit", "Withdraw", "Transfer", "Bet", "Win"]
+    type: Literal["Deposit", "Withdraw", "Transfer", "Bet", "Win", "Refund"]
     amount: float
     status: Literal["Completed", "Pending", "Failed"]
     created_at: str
@@ -2609,7 +2609,7 @@ def request_external_casino_launch_url(
 
 def record_transaction(
     user: UserStore,
-    tx_type: Literal["Deposit", "Withdraw", "Transfer", "Bet", "Win"],
+    tx_type: Literal["Deposit", "Withdraw", "Transfer", "Bet", "Win", "Refund"],
     amount: float,
     status_value: Literal["Completed", "Pending", "Failed"],
 ) -> None:
@@ -2726,6 +2726,37 @@ def record_bet_history_for_round(
         if len(user.bet_history) > 200:
             user.bet_history = user.bet_history[:200]
         changed_phones.add(owner_phone)
+    return changed_phones
+
+
+def refund_unplayed_cards_for_round(room: RoomStore) -> set[str]:
+    refund_by_phone: dict[str, float] = {}
+    for cartella_no, owner_phone in room.taken_cartellas.items():
+        if is_simulated_phone(owner_phone):
+            continue
+        if owner_phone not in USERS:
+            continue
+        marks = get_user_marked_numbers(room, owner_phone, cartella_no)
+        if marks:
+            continue
+        refund_by_phone[owner_phone] = round(refund_by_phone.get(owner_phone, 0.0) + float(room.card_price), 2)
+
+    changed_phones: set[str] = set()
+    for phone_number, refund_amount in refund_by_phone.items():
+        if refund_amount <= 0:
+            continue
+        if PG_STORE.enabled():
+            PG_STORE.adjust_wallet_and_record_transaction(phone_number, refund_amount, "Refund", "Completed")
+            refreshed_user = refresh_user_from_primary_store(phone_number)
+            if refreshed_user is not None:
+                USERS[phone_number] = refreshed_user
+        else:
+            user = USERS.get(phone_number)
+            if not user:
+                continue
+            user.wallet.main_balance = round(user.wallet.main_balance + refund_amount, 2)
+            record_transaction(user, "Refund", refund_amount, "Completed")
+        changed_phones.add(phone_number)
     return changed_phones
 
 
@@ -3611,6 +3642,7 @@ def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
             game_winning=distributable,
         )
     )
+    changed_user_phones.update(refund_unplayed_cards_for_round(room))
 
     room.winners = winners
     room.ended_at = now
@@ -3638,27 +3670,9 @@ def end_room_if_calls_complete(room: RoomStore, now: datetime) -> None:
     total_round_seconds = SELECT_PHASE_SECONDS + (len(room.called_sequence) * CALL_INTERVAL_SECONDS)
     if elapsed_seconds < total_round_seconds:
         return
-    called_numbers = compute_called_numbers(room, now)
-    total_sales = round(float(len(room.taken_cartellas) * room.card_price), 2)
-    house_commission = round(total_sales * HOUSE_COMMISSION_RATE, 2)
-    distributable = round(total_sales - house_commission, 2)
-    changed_user_phones = record_bet_history_for_round(
-        room=room,
-        now=now,
-        called_numbers=called_numbers,
-        winners=[],
-        game_winning=distributable,
-    )
-    room.ended_at = now
-    room.winner_phone = None
-    room.winner_cartella = None
-    room.winner_payout = 0.0
-    room.house_commission = house_commission
-    room.winners = []
-    room.result_until = now + timedelta(seconds=RESULT_ANNOUNCE_SECONDS)
-    if changed_user_phones:
-        persist_users(changed_user_phones)
-    persist_room(room)
+    # Intentionally keep the room open after the final call until a winner is claimed.
+    # Claim flow itself will open a short split window and then finalize the round.
+    return
 
 
 def get_queue_maps(

@@ -922,6 +922,7 @@ export default function App() {
   const lastRoomTransitionLogRef = useRef<string>("");
   const lastPickerTransitionLogRef = useRef<string>("");
   const lastFinishedRoomRef = useRef<string | null>(null);
+  const lastFinishedRedirectRef = useRef<string | null>(null);
   const sharedStakeOpeningRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => readInitialDarkModePreference());
@@ -1721,6 +1722,13 @@ export default function App() {
   }, [service, room?.id]);
 
   useEffect(() => {
+    if (service !== "game") return;
+    if (room?.phase === "playing" && !nowPlayingExpanded) {
+      setNowPlayingExpanded(true);
+    }
+  }, [service, room?.phase, nowPlayingExpanded]);
+
+  useEffect(() => {
     if (!cartellaOpen || !selectedStake || !isPageVisible) return;
     let inFlight = false;
     const pollStakeRoom = () => {
@@ -1805,6 +1813,23 @@ export default function App() {
         : "Round finished. Next card selection opens shortly.",
     );
   }, [service, room?.phase, room?.id, pickerRoom?.phase, pickerRoom?.id, cartellaOpen]);
+
+  useEffect(() => {
+    const finishedRoundKey =
+      service === "game" && room?.phase === "finished" && room?.id
+        ? `${room.id}:${room.round_id}`
+        : null;
+    if (!finishedRoundKey) {
+      lastFinishedRedirectRef.current = null;
+      return;
+    }
+    if (lastFinishedRedirectRef.current === finishedRoundKey) return;
+    lastFinishedRedirectRef.current = finishedRoundKey;
+    setSessionPanelExpanded(true);
+    setNowPlayingExpanded(true);
+    setService("stakes");
+    setNotice("Round finished. Returned to rooms selection.");
+  }, [service, room?.phase, room?.id, room?.round_id]);
 
   useEffect(() => {
     if (!cardRechargeLabel) return;
@@ -2752,6 +2777,8 @@ export default function App() {
   const showResultOverlay = room?.phase === "finished" && winnerEntries.length > 0;
   const sessionPanelId = room ? `game-session-panel-${room.id}` : "game-session-panel";
   const nowPlayingPanelId = room ? `now-playing-panel-${room.id}` : "now-playing-panel";
+  const callerLockedOpen = service === "game" && room?.phase === "playing";
+  const effectiveNowPlayingExpanded = callerLockedOpen ? true : nowPlayingExpanded;
   const nowPlayingCardLabel = selectedCardNo ? `Card ${selectedCardNo}` : `${cards.length} ${cards.length === 1 ? "Card" : "Cards"}`;
   const pickerCountdownValue =
     pickerRoom?.phase === "selecting"
@@ -3195,14 +3222,23 @@ export default function App() {
                     <button
                       className="now-playing-toggle"
                       type="button"
-                      aria-expanded={nowPlayingExpanded}
+                      aria-expanded={effectiveNowPlayingExpanded}
                       aria-controls={nowPlayingPanelId}
-                      aria-label={nowPlayingExpanded ? "Collapse now playing" : "Expand now playing"}
-                      onClick={() => setNowPlayingExpanded((state) => !state)}
+                      aria-label={
+                        callerLockedOpen
+                          ? "Now playing is locked open during live calling"
+                          : effectiveNowPlayingExpanded
+                            ? "Collapse now playing"
+                            : "Expand now playing"
+                      }
+                      onClick={() => {
+                        if (callerLockedOpen) return;
+                        setNowPlayingExpanded((state) => !state);
+                      }}
                       style={{ top: `${nowPlayingToggleTop}px` }}
                     >
                       <span className="now-playing-toggle-copy">
-                        <small>{nowPlayingExpanded ? "Hide panel" : "Show panel"}</small>
+                        <small>{callerLockedOpen ? "Live caller locked" : effectiveNowPlayingExpanded ? "Hide panel" : "Show panel"}</small>
                         <strong>Now Playing</strong>
                       </span>
                       <span className="now-playing-toggle-status">{nowPlayingCardLabel}</span>
@@ -3212,8 +3248,8 @@ export default function App() {
                         </svg>
                       </span>
                     </button>
-                    <div className={`caller-layout ${nowPlayingExpanded ? "now-playing-open" : "now-playing-collapsed"}`}>
-                      {nowPlayingExpanded && (
+                    <div className={`caller-layout ${effectiveNowPlayingExpanded ? "now-playing-open" : "now-playing-collapsed"}`}>
+                      {effectiveNowPlayingExpanded && (
                         <aside id={nowPlayingPanelId} className="caller-side-card now-playing-panel">
                           <div className={`caller-ball-shell ${latestBallClass}`}>
                             <div className={`caller-ball ${latestBallClass}`}>
