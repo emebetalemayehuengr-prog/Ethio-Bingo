@@ -835,6 +835,7 @@ AUDIT_EVENTS: list[AuditEvent] = []
 CASINO_LAUNCH_SESSIONS: dict[str, dict[str, str]] = {}
 USER_REFRESH_AT: dict[str, datetime] = {}
 ROOM_PUSH_SIGNATURES: dict[str, str] = {}
+ROOMS_REFRESHED_AT: datetime | None = None
 
 PUSHER_CLIENT = (
     pusher.Pusher(
@@ -862,6 +863,8 @@ PRIMARY_DB_ENV_KEYS = ("FORTY_BINGO_DB_PATH", "ETHIO_BINGO_DB_PATH")
 FALLBACK_DB_ENV_KEYS = ("FORTY_BINGO_FALLBACK_DB_PATH", "ETHIO_BINGO_FALLBACK_DB_PATH")
 PERSISTENT_SQLITE_ROOTS = env_list("PERSISTENT_SQLITE_ROOTS", "/var/data,/home")
 USER_REFRESH_TTL_SECONDS = max(1, env_int("USER_REFRESH_TTL_SECONDS", 5))
+ROOM_REFRESH_TTL_SECONDS = max(0, env_int("ROOM_REFRESH_TTL_SECONDS", 0))
+ROOM_TICK_ADVISORY_LOCK_KEY = env_int("ROOM_TICK_ADVISORY_LOCK_KEY", 404001)
 
 
 def get_env_first(keys: tuple[str, ...], default: str = "") -> str:
@@ -3247,7 +3250,41 @@ def get_simulated_owner_phone(room: RoomStore, queue: Literal["current", "next"]
     return user.phone_number, created
 
 
+def refresh_rooms_from_primary_store(force: bool = False) -> None:
+    global ROOMS_REFRESHED_AT
+    if not PG_STORE.enabled():
+        return
+    now = utc_now()
+    if (
+        not force
+        and ROOMS_REFRESHED_AT is not None
+        and (now - ROOMS_REFRESHED_AT).total_seconds() < ROOM_REFRESH_TTL_SECONDS
+    ):
+        return
+    try:
+        persisted_rooms = PG_STORE.load_rooms()
+    except Exception:
+        return
+    if not isinstance(persisted_rooms, dict):
+        ROOMS_REFRESHED_AT = now
+        return
+
+    refreshed: dict[str, RoomStore] = {}
+    for stake_id, raw_room in persisted_rooms.items():
+        try:
+            refreshed[str(stake_id)] = RoomStore.model_validate(raw_room)
+        except Exception:
+            continue
+
+    if refreshed:
+        ROOMS.clear()
+        ROOMS.update(refreshed)
+
+    ROOMS_REFRESHED_AT = now
+
+
 def get_or_create_room(stake: StakeOption) -> RoomStore:
+    refresh_rooms_from_primary_store()
     room = ROOMS.get(stake.id)
     if room is None:
         room = create_room(stake)
@@ -3448,7 +3485,17 @@ def has_bingo_for_marks(cartella_no: int, called_numbers: list[int], marked_numb
 
 
 def get_room_by_id(room_id: str) -> RoomStore:
+    refresh_rooms_from_primary_store()
     room = next((candidate for candidate in ROOMS.values() if candidate.id == room_id), None)
+    if room is None:
+        if room_id.startswith("room-"):
+            stake_id = room_id[len("room-") :]
+            if stake_id:
+                refresh_rooms_from_primary_store(force=True)
+                room = ROOMS.get(stake_id)
+        else:
+            refresh_rooms_from_primary_store(force=True)
+            room = next((candidate for candidate in ROOMS.values() if candidate.id == room_id), None)
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
     return room
@@ -4137,11 +4184,42 @@ if not PG_STORE.enabled():
 
 async def room_tick_loop() -> None:
     while True:
-        for room in list(ROOMS.values()):
-            advance_room_if_needed(room)
-            if prune_holds(room):
-                persist_room(room)
-            emit_room_push_update(room, reason="tick")
+        advisory_lock_conn = None
+        should_tick = True
+        if PG_STORE.enabled() and psycopg is not None and DATABASE_URL:
+            try:
+                advisory_lock_conn = psycopg.connect(DATABASE_URL, prepare_threshold=None)
+                with advisory_lock_conn.cursor() as cur:
+                    row = cur.execute("SELECT pg_try_advisory_lock(%s)", (ROOM_TICK_ADVISORY_LOCK_KEY,)).fetchone()
+                should_tick = bool(row[0]) if row else False
+            except Exception:
+                should_tick = True
+                if advisory_lock_conn is not None:
+                    try:
+                        advisory_lock_conn.close()
+                    except Exception:
+                        pass
+                    advisory_lock_conn = None
+        try:
+            if should_tick:
+                refresh_rooms_from_primary_store(force=True)
+                for room in list(ROOMS.values()):
+                    advance_room_if_needed(room)
+                    if prune_holds(room):
+                        persist_room(room)
+                    emit_room_push_update(room, reason="tick")
+        finally:
+            if advisory_lock_conn is not None:
+                try:
+                    with advisory_lock_conn.cursor() as cur:
+                        cur.execute("SELECT pg_advisory_unlock(%s)", (ROOM_TICK_ADVISORY_LOCK_KEY,))
+                    advisory_lock_conn.commit()
+                except Exception:
+                    pass
+                try:
+                    advisory_lock_conn.close()
+                except Exception:
+                    pass
         await asyncio.sleep(1)
 
 
@@ -5143,7 +5221,12 @@ def mark_number(payload: MarkNumberRequest, user: UserStore = Depends(get_curren
     if my_cartella is None:
         raise HTTPException(status_code=400, detail="Join a cartella before marking numbers")
     if my_cartella not in room_state.my_cartellas:
-        raise HTTPException(status_code=400, detail="You do not own this card")
+        refresh_rooms_from_primary_store(force=True)
+        room = get_room_by_id(payload.room_id)
+        room_state = build_room_state(room, user.phone_number)
+        my_cartella = payload.cartella_no or room_state.my_cartella
+        if my_cartella is None or my_cartella not in room_state.my_cartellas:
+            raise HTTPException(status_code=400, detail="You do not own this card")
 
     if payload.number not in room_state.called_numbers:
         raise HTTPException(status_code=400, detail="This number has not been called yet")
@@ -5208,7 +5291,12 @@ def claim_bingo(payload: ClaimBingoRequest, user: UserStore = Depends(get_curren
     if my_cartella is None:
         raise HTTPException(status_code=400, detail="Join a cartella before claiming bingo")
     if my_cartella not in room_state.my_cartellas:
-        raise HTTPException(status_code=400, detail="You do not own this card")
+        refresh_rooms_from_primary_store(force=True)
+        room = get_room_by_id(payload.room_id)
+        room_state = build_room_state(room, user.phone_number)
+        my_cartella = payload.cartella_no or room_state.my_cartella
+        if my_cartella is None or my_cartella not in room_state.my_cartellas:
+            raise HTTPException(status_code=400, detail="You do not own this card")
 
     if room.claim_window_reference_time is not None:
         called_numbers_for_claim = compute_called_numbers(room, room.claim_window_reference_time)

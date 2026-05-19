@@ -247,6 +247,107 @@ class PostgresStateStore:
                 row = cur.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
                 return int(row["cnt"]) == 0 if row else True
 
+    def _load_rooms_state(self, cur) -> dict[str, Any]:
+        rooms_state: dict[str, Any] = {}
+        rooms = cur.execute("SELECT * FROM rooms ORDER BY stake_id ASC").fetchall()
+        for room in rooms:
+            stake_id = str(room["stake_id"])
+            cards = cur.execute(
+                "SELECT queue, cartella_no, phone_number, held_updated_at FROM room_cards WHERE stake_id = %s",
+                (stake_id,),
+            ).fetchall()
+            marks = cur.execute(
+                "SELECT phone_number, cartella_no, marks FROM room_marks WHERE stake_id = %s",
+                (stake_id,),
+            ).fetchall()
+            claims = cur.execute(
+                "SELECT phone_number, cartella_no, claimed_at FROM room_claims WHERE stake_id = %s ORDER BY id ASC",
+                (stake_id,),
+            ).fetchall()
+            winners = cur.execute(
+                "SELECT phone_number, user_name, cartella_no, payout, card FROM room_winners WHERE stake_id = %s ORDER BY position ASC",
+                (stake_id,),
+            ).fetchall()
+
+            taken_cartellas: dict[int, str] = {}
+            held_cartellas: dict[int, str] = {}
+            held_updated_at: dict[int, str] = {}
+            next_taken_cartellas: dict[int, str] = {}
+            next_held_cartellas: dict[int, str] = {}
+            next_held_updated_at: dict[int, str] = {}
+
+            for card in cards:
+                queue = str(card["queue"])
+                cno = int(card["cartella_no"])
+                owner = str(card["phone_number"]) if card["phone_number"] is not None else ""
+                hold_at = str(card["held_updated_at"]) if card["held_updated_at"] is not None else None
+                if queue == "current_paid" and owner:
+                    taken_cartellas[cno] = owner
+                elif queue == "current_held" and owner:
+                    held_cartellas[cno] = owner
+                    if hold_at:
+                        held_updated_at[cno] = hold_at
+                elif queue == "next_paid" and owner:
+                    next_taken_cartellas[cno] = owner
+                elif queue == "next_held" and owner:
+                    next_held_cartellas[cno] = owner
+                    if hold_at:
+                        next_held_updated_at[cno] = hold_at
+
+            rooms_state[stake_id] = {
+                "id": str(room["room_id"]),
+                "stake_id": stake_id,
+                "stake": int(room["stake"]),
+                "card_price": int(room["card_price"]),
+                "players_seed": int(room["players_seed"]),
+                "started_at": str(room["started_at"]),
+                "called_sequence": [int(x) for x in (room["called_sequence"] or [])],
+                "taken_cartellas": taken_cartellas,
+                "held_cartellas": held_cartellas,
+                "held_updated_at": held_updated_at,
+                "next_taken_cartellas": next_taken_cartellas,
+                "next_held_cartellas": next_held_cartellas,
+                "next_held_updated_at": next_held_updated_at,
+                "marked_by_user_card": {
+                    f"{row['phone_number']}:{int(row['cartella_no'])}": [int(v) for v in (row["marks"] or [])]
+                    for row in marks
+                },
+                "ended_at": str(room["ended_at"]) if room["ended_at"] is not None else None,
+                "winner_phone": str(room["winner_phone"]) if room["winner_phone"] is not None else None,
+                "winner_cartella": int(room["winner_cartella"]) if room["winner_cartella"] is not None else None,
+                "winner_payout": float(room["winner_payout"]) if room["winner_payout"] is not None else None,
+                "house_commission": float(room["house_commission"]) if room["house_commission"] is not None else None,
+                "pending_claims": [
+                    {
+                        "phone_number": str(claim["phone_number"]),
+                        "cartella_no": int(claim["cartella_no"]),
+                        "claimed_at": str(claim["claimed_at"]),
+                    }
+                    for claim in claims
+                ],
+                "claim_window_ends_at": str(room["claim_window_ends_at"]) if room["claim_window_ends_at"] is not None else None,
+                "claim_window_reference_time": str(room["claim_window_reference_time"]) if room["claim_window_reference_time"] is not None else None,
+                "winners": [
+                    {
+                        "phone_number": str(winner["phone_number"]),
+                        "user_name": str(winner["user_name"]),
+                        "cartella_no": int(winner["cartella_no"]),
+                        "payout": float(winner["payout"]),
+                        "card": winner["card"],
+                    }
+                    for winner in winners
+                ],
+                "result_until": str(room["result_until"]) if room["result_until"] is not None else None,
+            }
+        return rooms_state
+
+    def load_rooms(self) -> dict[str, Any] | None:
+        if not self.enabled():
+            return None
+        with psycopg.connect(self.dsn, row_factory=dict_row, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                return self._load_rooms_state(cur)
+
     def load_all(self) -> dict[str, Any]:
         if not self.enabled():
             return {
@@ -412,96 +513,7 @@ class PostgresStateStore:
                     for row in cur.execute("SELECT * FROM audit_events ORDER BY created_at DESC").fetchall()
                 ]
 
-                rooms = cur.execute("SELECT * FROM rooms ORDER BY stake_id ASC").fetchall()
-                for room in rooms:
-                    stake_id = str(room["stake_id"])
-                    cards = cur.execute(
-                        "SELECT queue, cartella_no, phone_number, held_updated_at FROM room_cards WHERE stake_id = %s",
-                        (stake_id,),
-                    ).fetchall()
-                    marks = cur.execute(
-                        "SELECT phone_number, cartella_no, marks FROM room_marks WHERE stake_id = %s",
-                        (stake_id,),
-                    ).fetchall()
-                    claims = cur.execute(
-                        "SELECT phone_number, cartella_no, claimed_at FROM room_claims WHERE stake_id = %s ORDER BY id ASC",
-                        (stake_id,),
-                    ).fetchall()
-                    winners = cur.execute(
-                        "SELECT phone_number, user_name, cartella_no, payout, card FROM room_winners WHERE stake_id = %s ORDER BY position ASC",
-                        (stake_id,),
-                    ).fetchall()
-
-                    taken_cartellas: dict[int, str] = {}
-                    held_cartellas: dict[int, str] = {}
-                    held_updated_at: dict[int, str] = {}
-                    next_taken_cartellas: dict[int, str] = {}
-                    next_held_cartellas: dict[int, str] = {}
-                    next_held_updated_at: dict[int, str] = {}
-
-                    for card in cards:
-                        queue = str(card["queue"])
-                        cno = int(card["cartella_no"])
-                        owner = str(card["phone_number"]) if card["phone_number"] is not None else ""
-                        hold_at = str(card["held_updated_at"]) if card["held_updated_at"] is not None else None
-                        if queue == "current_paid" and owner:
-                            taken_cartellas[cno] = owner
-                        elif queue == "current_held" and owner:
-                            held_cartellas[cno] = owner
-                            if hold_at:
-                                held_updated_at[cno] = hold_at
-                        elif queue == "next_paid" and owner:
-                            next_taken_cartellas[cno] = owner
-                        elif queue == "next_held" and owner:
-                            next_held_cartellas[cno] = owner
-                            if hold_at:
-                                next_held_updated_at[cno] = hold_at
-
-                    state["rooms"][stake_id] = {
-                        "id": str(room["room_id"]),
-                        "stake_id": stake_id,
-                        "stake": int(room["stake"]),
-                        "card_price": int(room["card_price"]),
-                        "players_seed": int(room["players_seed"]),
-                        "started_at": str(room["started_at"]),
-                        "called_sequence": [int(x) for x in (room["called_sequence"] or [])],
-                        "taken_cartellas": taken_cartellas,
-                        "held_cartellas": held_cartellas,
-                        "held_updated_at": held_updated_at,
-                        "next_taken_cartellas": next_taken_cartellas,
-                        "next_held_cartellas": next_held_cartellas,
-                        "next_held_updated_at": next_held_updated_at,
-                        "marked_by_user_card": {
-                            f"{row['phone_number']}:{int(row['cartella_no'])}": [int(v) for v in (row["marks"] or [])]
-                            for row in marks
-                        },
-                        "ended_at": str(room["ended_at"]) if room["ended_at"] is not None else None,
-                        "winner_phone": str(room["winner_phone"]) if room["winner_phone"] is not None else None,
-                        "winner_cartella": int(room["winner_cartella"]) if room["winner_cartella"] is not None else None,
-                        "winner_payout": float(room["winner_payout"]) if room["winner_payout"] is not None else None,
-                        "house_commission": float(room["house_commission"]) if room["house_commission"] is not None else None,
-                        "pending_claims": [
-                            {
-                                "phone_number": str(claim["phone_number"]),
-                                "cartella_no": int(claim["cartella_no"]),
-                                "claimed_at": str(claim["claimed_at"]),
-                            }
-                            for claim in claims
-                        ],
-                        "claim_window_ends_at": str(room["claim_window_ends_at"]) if room["claim_window_ends_at"] is not None else None,
-                        "claim_window_reference_time": str(room["claim_window_reference_time"]) if room["claim_window_reference_time"] is not None else None,
-                        "winners": [
-                            {
-                                "phone_number": str(winner["phone_number"]),
-                                "user_name": str(winner["user_name"]),
-                                "cartella_no": int(winner["cartella_no"]),
-                                "payout": float(winner["payout"]),
-                                "card": winner["card"],
-                            }
-                            for winner in winners
-                        ],
-                        "result_until": str(room["result_until"]) if room["result_until"] is not None else None,
-                    }
+                state["rooms"] = self._load_rooms_state(cur)
 
         return state
 

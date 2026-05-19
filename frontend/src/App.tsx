@@ -116,13 +116,15 @@ const SESSION_QR_IMAGE_SIZE = 280;
 const ROOM_EMPTY_POLL_GRACE_MS = 8000;
 const ROOM_EMPTY_POLL_GRACE_COUNT = 3;
 const LIVE_COUNTDOWN_TICK_MS = 250;
-const FINISHED_RESULTS_MIN_HOLD_MS = 3000;
-const FINISHED_RESULTS_MAX_HOLD_MS = 12000;
-const FINISHED_RESULTS_DEFAULT_HOLD_MS = 5000;
+const FINISHED_RESULTS_MIN_HOLD_MS = 10000;
+const FINISHED_RESULTS_MAX_HOLD_MS = 30000;
+const FINISHED_RESULTS_DEFAULT_HOLD_MS = 15000;
 const PUSHER_KEY = ((import.meta.env.VITE_PUSHER_KEY as string | undefined)?.trim() || "ZmjxWZcUWx03wDBd7vmSQTBIP-2KVn4yK8oEXG3efsg");
 const PUSHER_CLUSTER = ((import.meta.env.VITE_PUSHER_CLUSTER as string | undefined)?.trim() || "ap2");
 const PUSHER_JS_URL = "https://js.pusher.com/8.4.0/pusher.min.js";
 const REALTIME_SYNC_THROTTLE_MS = 400;
+const REALTIME_PUSH_STALE_MS = 6000;
+const REALTIME_FALLBACK_POLL_MS = 2500;
 
 let pusherScriptReadyPromise: Promise<void> | null = null;
 function ensurePusherScriptLoaded() {
@@ -584,6 +586,19 @@ const getPickerQueueKey = (state: RoomState | null) => {
 const stabilizeRoomMarks = (previous: RoomState | null, incoming: RoomState | null) => {
   if (!incoming || !previous) return incoming;
   if (incoming.id !== previous.id) return incoming;
+  if (incoming.round_id === previous.round_id) {
+    const phaseRank: Record<RoomState["phase"], number> = { selecting: 0, playing: 1, finished: 2 };
+    if (phaseRank[incoming.phase] < phaseRank[previous.phase]) {
+      return previous;
+    }
+    if (
+      incoming.phase === "playing" &&
+      previous.phase === "playing" &&
+      incoming.called_numbers.length + 1 < previous.called_numbers.length
+    ) {
+      return previous;
+    }
+  }
 
   let stabilized = incoming;
   if (incoming.round_id === previous.round_id && incoming.phase === previous.phase) {
@@ -617,8 +632,18 @@ const stabilizeRoomMarks = (previous: RoomState | null, incoming: RoomState | nu
   };
 };
 
-const resolveSyncedCards = (nextRoom: RoomState, nextCards: BingoCard[], previousCards: BingoCard[]) => {
+const resolveSyncedCards = (nextRoom: RoomState, nextCards: BingoCard[], previousCards: BingoCard[], previousRoom: RoomState | null) => {
   if (nextCards.length > 0) return nextCards;
+  if (
+    previousCards.length > 0 &&
+    previousRoom &&
+    previousRoom.id === nextRoom.id &&
+    previousRoom.round_id === nextRoom.round_id &&
+    previousRoom.phase === "playing" &&
+    nextRoom.phase === "playing"
+  ) {
+    return previousCards;
+  }
   if (nextRoom.phase === "finished" && previousCards.length > 0) return previousCards;
   if ((nextRoom.announcement_seconds ?? 0) > 0 && previousCards.length > 0) return previousCards;
   return nextRoom.my_cartellas.length > 0 ? previousCards : [];
@@ -1049,6 +1074,7 @@ export default function App() {
   const latestCardsRef = useRef<BingoCard[]>([]);
   const latestServiceRef = useRef<ServiceView>("home");
   const pusherClientRef = useRef<PusherClientLike | null>(null);
+  const realtimeLastEventAtRef = useRef(0);
   const realtimeLastSyncAtRef = useRef(0);
   const lastRoomTransitionLogRef = useRef<string>("");
   const lastPickerTransitionLogRef = useRef<string>("");
@@ -1306,16 +1332,36 @@ export default function App() {
     const onRoomUpdated: PusherEventHandler = () => {
       if (inFlight) return;
       const now = Date.now();
-      if (now - realtimeLastSyncAtRef.current < REALTIME_SYNC_THROTTLE_MS) return;
-      realtimeLastSyncAtRef.current = now;
+      if (now - realtimeLastEventAtRef.current < REALTIME_SYNC_THROTTLE_MS) return;
+      realtimeLastEventAtRef.current = now;
       inFlight = true;
       void syncRoom(room.id)
         .then((synced) => {
           const syncedCards = synced.cards ?? (synced.card ? [synced.card] : []);
+          const previousCards = latestCardsRef.current;
+          const previousRoom = latestRoomRef.current;
+          const resolvedCards = resolveSyncedCards(synced.room, syncedCards, previousCards, previousRoom);
+          const hasCurrentOwnership = (synced.room.my_cartellas?.length ?? 0) > 0;
+          const emptySnapshot = !hasCurrentOwnership && resolvedCards.length === 0;
+          if (emptySnapshot) {
+            const stable = lastStableGameSnapshotRef.current;
+            const preserveStablePlayingSnapshot =
+              !!stable &&
+              stable.room.id === synced.room.id &&
+              stable.room.round_id === synced.room.round_id &&
+              (stable.room.phase === "playing" || stable.room.phase === "finished");
+            if (preserveStablePlayingSnapshot) {
+              return;
+            }
+          } else {
+            emptyGameSyncPollCountRef.current = 0;
+            lastStableGameSnapshotRef.current = { room: synced.room, cards: resolvedCards, at: Date.now() };
+          }
           startTransition(() => {
             setRoomWithPendingMarks(synced.room);
-            setCards((previousCards) => resolveSyncedCards(synced.room, syncedCards, previousCards));
+            setCards(resolvedCards);
           });
+          realtimeLastSyncAtRef.current = Date.now();
         })
         .catch(() => {
           // keep polling fallback
@@ -1342,14 +1388,15 @@ export default function App() {
     const onRoomUpdated: PusherEventHandler = () => {
       if (inFlight) return;
       const now = Date.now();
-      if (now - realtimeLastSyncAtRef.current < REALTIME_SYNC_THROTTLE_MS) return;
-      realtimeLastSyncAtRef.current = now;
+      if (now - realtimeLastEventAtRef.current < REALTIME_SYNC_THROTTLE_MS) return;
+      realtimeLastEventAtRef.current = now;
       inFlight = true;
       void fetchStakeRoom(selectedStake.id)
         .then((res) => {
           startTransition(() => {
             setPickerRoomWithSyncMeta(res.room);
           });
+          realtimeLastSyncAtRef.current = Date.now();
         })
         .catch(() => {
           // keep polling fallback
@@ -1923,13 +1970,20 @@ export default function App() {
     let inFlight = false;
     const pollRoom = () => {
       if (inFlight) return;
+      if (pusherReady) {
+        const msSinceRealtimeSync = Date.now() - realtimeLastSyncAtRef.current;
+        if (msSinceRealtimeSync < REALTIME_PUSH_STALE_MS) {
+          return;
+        }
+      }
       inFlight = true;
       void (async () => {
         try {
           const synced = await syncRoom(room.id);
           const syncedCards = synced.cards ?? (synced.card ? [synced.card] : []);
           const previousCards = latestCardsRef.current;
-          const resolvedCards = resolveSyncedCards(synced.room, syncedCards, previousCards);
+          const previousRoom = latestRoomRef.current;
+          const resolvedCards = resolveSyncedCards(synced.room, syncedCards, previousCards, previousRoom);
           const hasCurrentOwnership = (synced.room.my_cartellas?.length ?? 0) > 0;
           const emptySnapshot = !hasCurrentOwnership && resolvedCards.length === 0;
           if (emptySnapshot) {
@@ -1960,6 +2014,7 @@ export default function App() {
             setRoomWithPendingMarks(synced.room);
             setCards(resolvedCards);
           });
+          realtimeLastSyncAtRef.current = Date.now();
         } catch {
           // keep polling
         } finally {
@@ -1970,9 +2025,9 @@ export default function App() {
     pollRoom();
     const timer = window.setInterval(() => {
       pollRoom();
-    }, 1500);
+    }, REALTIME_FALLBACK_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [room?.id, service, isPageVisible]);
+  }, [room?.id, service, isPageVisible, pusherReady]);
 
   useEffect(() => {
     if (!cards.length) {
@@ -2312,11 +2367,9 @@ export default function App() {
     setError("");
     try {
       const preferredRoundId =
-        pickerRoom?.phase === "selecting"
+        pickerRoom?.active_queue === "next"
           ? pickerRoom?.next_round_id
-          : pickerRoom?.active_queue === "next"
-            ? pickerRoom?.next_round_id
-            : pickerRoom?.round_id;
+          : pickerRoom?.round_id;
       const res = await previewCard(selectedStake.id, cartellaNo, preferredRoundId);
       setPickerRoomWithSyncMeta(res.room);
       setRoomWithPendingMarks(res.room);
@@ -2351,9 +2404,7 @@ export default function App() {
     setError("");
     try {
       const preferredRoundId =
-        pickerRoom?.phase === "selecting"
-          ? pickerRoom?.next_round_id
-          : pickerRoom?.active_queue === "next"
+        pickerRoom?.active_queue === "next"
           ? pickerRoom?.next_round_id
           : pickerRoom?.round_id ?? room?.round_id;
       let res;
@@ -2914,6 +2965,16 @@ export default function App() {
     if (!roomId) return;
     const targetCardNo = cardNoParam ?? selectedCardNo;
     if (!targetCardNo) return;
+    if (!room.my_cartellas.includes(targetCardNo)) {
+      const fallbackOwned = room.my_cartellas[0];
+      if (fallbackOwned) {
+        setSelectedCardNo(fallbackOwned);
+        setNotice("Your active card changed in live sync. Switched to your owned card.");
+      } else {
+        setNotice("No owned card is available in this live round.");
+      }
+      return;
+    }
     if (room.phase !== "playing") return;
     if (!calledSet.has(value)) return;
     const requestKey = buildMarkRequestKey(targetCardNo, value);
@@ -2939,15 +3000,28 @@ export default function App() {
       const { [requestKey]: _ignored, ...remainingPending } = pendingMarksRef.current;
       setPendingMarkState(remainingPending);
       setRoom((prev) => applyMarkMutationToRoom(prev, targetCardNo, value, !nextMarked));
+      const errorMessage = err instanceof Error ? err.message : "Unable to update mark";
       try {
         const synced = await syncRoom(roomId);
         const syncedCards = synced.cards ?? (synced.card ? [synced.card] : []);
+        const previousCards = latestCardsRef.current;
+        const previousRoom = latestRoomRef.current;
+        const resolvedCards = resolveSyncedCards(synced.room, syncedCards, previousCards, previousRoom);
         setRoomWithPendingMarks(synced.room);
-        setCards((prev) => resolveSyncedCards(synced.room, syncedCards, prev));
+        setCards(resolvedCards);
+        if ((synced.room.my_cartellas?.length ?? 0) > 0 && !synced.room.my_cartellas.includes(targetCardNo)) {
+          setSelectedCardNo(synced.room.my_cartellas[0]);
+        }
+        realtimeLastSyncAtRef.current = Date.now();
       } catch {
         // keep optimistic rollback when sync fails
       }
-      setError(err instanceof Error ? err.message : "Unable to update mark");
+      if (/do not own this card/i.test(errorMessage)) {
+        setError("");
+        setNotice("Live room re-synced. Your active card ownership was updated.");
+      } else {
+        setError(errorMessage);
+      }
     }
   };
 
