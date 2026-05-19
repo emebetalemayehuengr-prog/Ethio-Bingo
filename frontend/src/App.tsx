@@ -1721,10 +1721,9 @@ export default function App() {
         setCartellaOpen(false);
       } else if (drawerOpen) {
         setDrawerOpen(false);
-      } else if (service === "game" && room?.phase && room.phase !== "finished") {
-        // Keep users in the live caller before a round is fully finished to avoid accidental exits from noisy popstate events.
-      } else if (service === "game" && canResumeLiveGame && room?.phase === "finished") {
-        setService("stakes");
+      } else if (service === "game") {
+        // Never switch service from popstate while caller is open.
+        // Game -> Rooms transition must only happen through explicit app flow (finished round redirect).
       } else if (service !== "home") {
         setService("home");
       }
