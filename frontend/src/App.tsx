@@ -533,6 +533,32 @@ const resolveSyncedCards = (nextRoom: RoomState, nextCards: BingoCard[], previou
   return nextRoom.my_cartellas.length > 0 ? previousCards : [];
 };
 
+const stabilizePickerRoomState = (previous: RoomState | null, incoming: RoomState | null) => {
+  if (!incoming || !previous) return incoming;
+  if (incoming.id !== previous.id) return incoming;
+  if (incoming.round_id !== previous.round_id || incoming.phase !== previous.phase) return incoming;
+
+  const previousSimulated = previous.simulated_paid_cartellas ?? [];
+  const incomingSimulated = incoming.simulated_paid_cartellas ?? [];
+  const stabilizedPaid =
+    incoming.paid_cartellas.length >= previous.paid_cartellas.length ? incoming.paid_cartellas : previous.paid_cartellas;
+  const stabilizedSimulated = incomingSimulated.length >= previousSimulated.length ? incomingSimulated : previousSimulated;
+  const stabilizedMyCurrent = incoming.my_cartellas.length >= previous.my_cartellas.length ? incoming.my_cartellas : previous.my_cartellas;
+  const stabilizedMyNext =
+    incoming.next_my_cartellas.length >= previous.next_my_cartellas.length ? incoming.next_my_cartellas : previous.next_my_cartellas;
+
+  return {
+    ...incoming,
+    paid_cartellas: stabilizedPaid,
+    simulated_paid_cartellas: stabilizedSimulated,
+    my_cartellas: stabilizedMyCurrent,
+    next_my_cartellas: stabilizedMyNext,
+    my_held_cartella: incoming.my_held_cartella ?? previous.my_held_cartella,
+    display_paid_count: Math.max(incoming.display_paid_count ?? 0, previous.display_paid_count ?? 0),
+    current_paid_count: Math.max(incoming.current_paid_count ?? 0, previous.current_paid_count ?? 0),
+  };
+};
+
 function hasBingo(card: BingoCard, calledNumbers: number[], marked: number[]) {
   const markedSet = new Set(marked);
   const allowed = new Set(calledNumbers);
@@ -1118,7 +1144,7 @@ export default function App() {
       pickerRoomSyncReceivedAtRef.current = Date.now();
       logRoomTransition("picker", nextRoom);
     }
-    setPickerRoom(nextRoom);
+    setPickerRoom((previousRoom) => stabilizePickerRoomState(previousRoom, nextRoom));
   };
 
   useEffect(() => {
@@ -1847,8 +1873,7 @@ export default function App() {
     lastFinishedRedirectRef.current = finishedRoundKey;
     setSessionPanelExpanded(true);
     setNowPlayingExpanded(true);
-    setService("stakes");
-    setNotice("Round finished. Returned to rooms selection.");
+    setNotice("Round finished. Results are shown below.");
   }, [service, room?.phase, room?.id, room?.round_id]);
 
   useEffect(() => {
