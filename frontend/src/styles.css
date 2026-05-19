@@ -6451,3 +6451,89 @@ body {
     padding: 0 6px;
   }
 }
+
+/* Bilingual instruction blocks and theme toggle polish */
+.amharic-guide-card,
+.wallet-language-note {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(150, 188, 220, 0.34);
+  background: linear-gradient(160deg, rgba(20, 42, 66, 0.86), rgba(13, 28, 45, 0.9));
+  color: rgba(236, 246, 255, 0.96);
+}
+
+.amharic-guide-card h3,
+.wallet-language-note h4 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  color: #ffffff;
+}
+
+.amharic-guide-card ol,
+.wallet-language-note ol {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.amharic-guide-card li,
+.wallet-language-note li {
+  margin: 0 0 5px;
+  line-height: 1.4;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(13, 31, 48, 0.92);
+  color: #eef8ff;
+  border-color: rgba(167, 199, 228, 0.4);
+}
+
+.theme-toggle-track {
+  flex: 0 0 auto;
+  border-color: rgba(182, 210, 235, 0.4);
+  background: rgba(5, 16, 29, 0.95);
+}
+
+.theme-toggle-thumb {
+  margin: 0;
+}
+
+.theme-toggle-label {
+  color: inherit;
+  line-height: 1;
+}
+
+.theme-toggle.off .theme-toggle-track {
+  background: rgba(191, 212, 231, 0.2);
+}
+
+.theme-toggle.on .theme-toggle-track {
+  background: rgba(24, 120, 195, 0.35);
+}
+
+:root[data-theme="light"] .amharic-guide-card,
+:root[data-theme="light"] .wallet-language-note {
+  border-color: rgba(76, 114, 148, 0.25);
+  background: linear-gradient(165deg, #f8fcff, #ebf3fa);
+  color: #173f63;
+}
+
+:root[data-theme="light"] .amharic-guide-card h3,
+:root[data-theme="light"] .wallet-language-note h4 {
+  color: #0e3457;
+}
+
+:root[data-theme="light"] .theme-toggle {
+  background: #f6fbff;
+  color: #133d61;
+  border-color: rgba(91, 132, 168, 0.34);
+}
+
+:root[data-theme="light"] .theme-toggle-track {
+  border-color: rgba(91, 132, 168, 0.32);
+  background: rgba(164, 193, 219, 0.44);
+}

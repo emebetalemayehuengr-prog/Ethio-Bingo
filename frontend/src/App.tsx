@@ -116,7 +116,7 @@ function readInitialDarkModePreference() {
 const services: Array<{ view: ServiceView; label: string }> = [
   { view: "home", label: "Home" },
   { view: "stakes", label: "Rooms" },
-  { view: "game", label: "Live Game" },
+  { view: "game", label: "Live" },
   ...(CASINO_ENABLED ? [{ view: "casino" as ServiceView, label: "Casino Games" }] : []),
   { view: "wallet", label: "Wallet" },
   { view: "history", label: "History" },
@@ -126,6 +126,26 @@ const services: Array<{ view: ServiceView; label: string }> = [
 
 const mobileNavViews: ServiceView[] = ["home", "stakes", "game", "wallet", "history"];
 const drawerMenuViews: ServiceView[] = ["how", "contact"];
+
+const HOW_TO_PLAY_AMHARIC_STEPS = [
+  "ወደ Rooms ገጽ በመግባት የሚፈልጉትን ዋጋ ይምረጡ እና ካርቴላ ይግዙ።",
+  "ቆጠራው ከተጠናቀቀ በኋላ ጨዋታው ይጀምራል፤ የሚጠሩ ቁጥሮችን በቀጥታ ይከታተሉ።",
+  "በገዙት ካርቴላ ላይ የተጠሩ ቁጥሮችን ይምልኩ።",
+  "አሸናፊ ቅጥ ሲሞላ ውጤቱ በሲስተሙ ይረጋገጣል እና ክፍያ ይገባል።",
+  "እገዛ ካስፈለገ በContact ወይም በWallet ያሉ የድጋፍ መረጃዎችን ይጠቀሙ።",
+];
+
+const DEPOSIT_AMHARIC_STEPS = [
+  "ከሚታዩት የተረጋገጡ የክፍያ ቁጥሮች አንዱን ብቻ ይጠቀሙ።",
+  "ያስገቡትን መጠን እና የግብይት ቁጥር በትክክል ያስገቡ።",
+  "የክፍያ SMS ወይም ደረሰኝ ጽሑፍ እንዳለ በቀጥታ ያቅርቡ።",
+];
+
+const WITHDRAW_AMHARIC_STEPS = [
+  "ባንክ, የመለያ ቁጥር እና የባለመለያ ስም በትክክል ያስገቡ።",
+  "የሚወጣውን መጠን በትክክል ይሙሉ እና Request Withdraw ይጫኑ።",
+  "ጥያቄው ከተላከ በኋላ በአስተዳዳሪ ማረጋገጥ ይጠናቀቃል።",
+];
 
 function renderMobileNavIcon(view: ServiceView) {
   switch (view) {
@@ -3017,7 +3037,7 @@ export default function App() {
               <span>Return to your current card without reopening every screen.</span>
             </div>
             <button className="primary-btn" type="button" onClick={() => openService("game")}>
-              Resume Live Game
+              Resume Live
             </button>
           </div>
         )}
@@ -3050,11 +3070,11 @@ export default function App() {
               <article className="home-feature-card">
                 <div className="home-feature-top">
                   <span className="home-feature-icon">03</span>
-                  <h3>Live Game</h3>
+                  <h3>Live</h3>
                 </div>
                 <p>Follow called numbers in real time and mark your purchased cards during active play.</p>
                 <button className="primary-btn" type="button" onClick={() => openService("game")}>
-                  Open Live Game
+                  Open Live
                 </button>
               </article>
 
@@ -3586,11 +3606,27 @@ export default function App() {
                 <button className="primary-btn" type="button" onClick={() => setDepositGuideOpen(true)}>
                   Open Deposit Instructions
                 </button>
+                <div className="wallet-language-note" aria-label="Deposit instructions in Amharic">
+                  <h4>የዴፖዚት መመሪያ (አማርኛ)</h4>
+                  <ol>
+                    {DEPOSIT_AMHARIC_STEPS.map((step) => (
+                      <li key={step}>{step}</li>
+                    ))}
+                  </ol>
+                </div>
               </div>
             )}
 
             {walletTab === "withdraw" && (
               <form className="wallet-form wallet-subpanel" onSubmit={submitWithdrawForm}>
+                <div className="wallet-language-note" aria-label="Withdraw instructions in Amharic">
+                  <h4>የዊዝድራው መመሪያ (አማርኛ)</h4>
+                  <ol>
+                    {WITHDRAW_AMHARIC_STEPS.map((step) => (
+                      <li key={step}>{step}</li>
+                    ))}
+                  </ol>
+                </div>
                 <label>
                   Bank
                   <select value={withdrawBank} onChange={(event) => setWithdrawBank(event.target.value)}>
@@ -4058,6 +4094,14 @@ export default function App() {
         {service === "how" && (
           <section className="panel faq-panel">
             <h2>How To Play</h2>
+            <div className="amharic-guide-card">
+              <h3>የጨዋታ መመሪያ (አማርኛ)</h3>
+              <ol>
+                {HOW_TO_PLAY_AMHARIC_STEPS.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+            </div>
             {(dashboard?.faq ?? []).map((item) => (
               <details key={item.id}>
                 <summary>{item.question}</summary>

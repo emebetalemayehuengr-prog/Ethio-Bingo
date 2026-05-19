@@ -29,6 +29,12 @@ type Props = {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 };
 
+const DEPOSIT_MODAL_AMHARIC_STEPS = [
+  "ከታች ከተዘረዘሩት የተረጋገጡ መለያዎች ወደ አንዱ ብቻ ገንዘብ ያስገቡ።",
+  "የክፍያ ደረሰኝ/SMS ጽሑፍ እንዳለ በትክክል ያቅርቡ።",
+  "የግብይት ቁጥሩ በመልዕክቱ ውስጥ ካለ እባክዎ በትክክል ያስገቡ።",
+];
+
 export default function DepositModalContent({
   selectedMethod,
   selectedMethodDraftAccounts,
@@ -85,6 +91,14 @@ export default function DepositModalContent({
               <li key={step}>{step}</li>
             ))}
           </ol>
+          <div className="wallet-language-note" aria-label="Deposit modal instructions in Amharic">
+            <h4>የዴፖዚት መመሪያ (አማርኛ)</h4>
+            <ol>
+              {DEPOSIT_MODAL_AMHARIC_STEPS.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+          </div>
           <div className="accounts">
             {isAdmin
               ? selectedMethodDraftAccounts.map((account, idx) => (
