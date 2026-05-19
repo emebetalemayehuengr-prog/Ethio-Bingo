@@ -20,6 +20,7 @@ type Props = {
   heldCartellas: number[];
   processingCartella: number | null;
   selectedCartella: number | null;
+  selectedCartellaOwned: boolean;
   preview: BingoCard | null;
   insufficientCardBalance: boolean;
   cardBuyAmount: number;
@@ -79,6 +80,7 @@ export default function CartellaModalContent({
   heldCartellas,
   processingCartella,
   selectedCartella,
+  selectedCartellaOwned,
   preview,
   insufficientCardBalance,
   cardBuyAmount,
@@ -109,6 +111,7 @@ export default function CartellaModalContent({
       const mineOwned = myCurrentSet.has(num) || myNextSet.has(num);
       const processing = processingCartella === num || held;
       const selected = selectedCartella === num;
+      const soldLocked = (paid || simulated) && !mineOwned;
       return {
         number: num,
         paid,
@@ -117,7 +120,7 @@ export default function CartellaModalContent({
         selected,
         heldByOther,
         mineHeld,
-        disabled: (paid && !mineOwned) || heldByOther || working,
+        disabled: soldLocked || mineOwned || heldByOther || working,
       };
     });
   }, [
@@ -271,10 +274,15 @@ export default function CartellaModalContent({
             <button className="secondary-btn" type="button" onClick={onClose}>
               Back to Rooms
             </button>
-            <button className="secondary-btn" type="button" onClick={onPreview} disabled={!selectedCartella || working}>
+            <button className="secondary-btn" type="button" onClick={onPreview} disabled={!selectedCartella || selectedCartellaOwned || working}>
               {working ? "Loading..." : "Preview Card"}
             </button>
-            <button className={`primary-btn ${insufficientCardBalance ? "insufficient-buy-btn" : ""}`} type="button" onClick={onConfirm} disabled={!selectedCartella || working || insufficientCardBalance}>
+            <button
+              className={`primary-btn ${insufficientCardBalance ? "insufficient-buy-btn" : ""}`}
+              type="button"
+              onClick={onConfirm}
+              disabled={!selectedCartella || selectedCartellaOwned || working || insufficientCardBalance}
+            >
               {buyLabel}
             </button>
           </div>

@@ -43,6 +43,22 @@ const TOKEN_KEY = "40bingo_token";
 const LEGACY_TOKEN_KEY = "ethio_bingo_token";
 const REQUEST_TIMEOUT_MS = 12000;
 
+export class ApiRequestError extends Error {
+  status: number;
+  detail: unknown;
+
+  constructor(message: string, status: number, detail?: unknown) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+export function isApiRequestError(error: unknown): error is ApiRequestError {
+  return error instanceof ApiRequestError;
+}
+
 const tokenFromStorage =
   window.localStorage.getItem(TOKEN_KEY) ?? window.localStorage.getItem(LEGACY_TOKEN_KEY) ?? "";
 if (tokenFromStorage && !window.localStorage.getItem(TOKEN_KEY)) {
@@ -125,7 +141,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
         detail = path ? `${path}: ${first.msg}` : first.msg;
       }
     }
-    throw new Error(detail);
+    throw new ApiRequestError(detail, response.status, errorBody?.detail ?? null);
   }
 
   return response.json() as Promise<T>;

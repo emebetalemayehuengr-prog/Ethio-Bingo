@@ -19,6 +19,7 @@ import {
   markPaidAdminWithdrawRequest,
   launchCasinoGame,
   logout as logoutRequest,
+  isApiRequestError,
   previewCard,
   rejectAdminWithdrawRequest,
   setAuthToken,
@@ -531,6 +532,12 @@ const maxOptionalNumber = (incomingValue: number | undefined, previousValue: num
   if (incomingValue == null) return previousValue;
   if (previousValue == null) return incomingValue;
   return Math.max(incomingValue, previousValue);
+};
+
+const getPickerQueueKey = (state: RoomState | null) => {
+  if (!state) return "";
+  const queueRoundId = state.active_queue === "next" ? state.next_round_id : state.round_id;
+  return `${state.id}:${state.active_queue}:${queueRoundId}:${state.phase}`;
 };
 
 const stabilizeRoomMarks = (previous: RoomState | null, incoming: RoomState | null) => {
@@ -1070,11 +1077,14 @@ export default function App() {
   const [sessionPanelExpanded, setSessionPanelExpanded] = useState(true);
   const [nowPlayingExpanded, setNowPlayingExpanded] = useState(true);
   const [nowPlayingToggleTop, setNowPlayingToggleTop] = useState(88);
+  const pickerQueueLockKeyRef = useRef<string>("");
 
   const [selectedStake, setSelectedStake] = useState<StakeOption | null>(null);
   const [cartellaOpen, setCartellaOpen] = useState(false);
   const [cartellaStep, setCartellaStep] = useState<CartellaStep>("pick");
   const [pickerRoom, setPickerRoom] = useState<RoomState | null>(null);
+  const [lockedPickerPaidCartellas, setLockedPickerPaidCartellas] = useState<number[]>([]);
+  const [lockedPickerSimulatedCartellas, setLockedPickerSimulatedCartellas] = useState<number[]>([]);
   const [selectedCartella, setSelectedCartella] = useState<number | null>(null);
   const [processingCartella, setProcessingCartella] = useState<number | null>(null);
   const [preview, setPreview] = useState<BingoCard | null>(null);
@@ -1181,6 +1191,34 @@ export default function App() {
     }
     setPickerRoom((previousRoom) => stabilizePickerRoomState(previousRoom, nextRoom));
   };
+
+  useEffect(() => {
+    const queueKey = getPickerQueueKey(pickerRoom);
+    if (!pickerRoom || !queueKey) {
+      pickerQueueLockKeyRef.current = "";
+      setLockedPickerPaidCartellas([]);
+      setLockedPickerSimulatedCartellas([]);
+      return;
+    }
+    const incomingPaid = pickerRoom.paid_cartellas ?? [];
+    const incomingSimulated = pickerRoom.simulated_paid_cartellas ?? [];
+    if (pickerQueueLockKeyRef.current !== queueKey) {
+      pickerQueueLockKeyRef.current = queueKey;
+      setLockedPickerPaidCartellas(mergeUniqueSortedNumbers(incomingPaid));
+      setLockedPickerSimulatedCartellas(mergeUniqueSortedNumbers(incomingSimulated));
+      return;
+    }
+    setLockedPickerPaidCartellas((previous) => stabilizeNumberList(incomingPaid, previous));
+    setLockedPickerSimulatedCartellas((previous) => stabilizeNumberList(incomingSimulated, previous));
+  }, [
+    pickerRoom?.id,
+    pickerRoom?.phase,
+    pickerRoom?.active_queue,
+    pickerRoom?.round_id,
+    pickerRoom?.next_round_id,
+    pickerRoom?.paid_cartellas,
+    pickerRoom?.simulated_paid_cartellas,
+  ]);
 
   useEffect(() => {
     latestRoomRef.current = room;
@@ -1683,7 +1721,9 @@ export default function App() {
         setCartellaOpen(false);
       } else if (drawerOpen) {
         setDrawerOpen(false);
-      } else if (service === "game" && canResumeLiveGame) {
+      } else if (service === "game" && room?.phase && room.phase !== "finished") {
+        // Keep users in the live caller before a round is fully finished to avoid accidental exits from noisy popstate events.
+      } else if (service === "game" && canResumeLiveGame && room?.phase === "finished") {
         setService("stakes");
       } else if (service !== "home") {
         setService("home");
@@ -1700,7 +1740,7 @@ export default function App() {
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [profile?.phone_number, showBrandModal, shareQrOpen, selectedBet, depositGuideOpen, cartellaOpen, drawerOpen, service, canResumeLiveGame]);
+  }, [profile?.phone_number, showBrandModal, shareQrOpen, selectedBet, depositGuideOpen, cartellaOpen, drawerOpen, service, canResumeLiveGame, room?.phase]);
 
   useEffect(() => {
     if (!profile || !isPageVisible) return;
@@ -1756,6 +1796,14 @@ export default function App() {
           if (emptySnapshot) {
             emptyGameSyncPollCountRef.current += 1;
             const stable = lastStableGameSnapshotRef.current;
+            const preserveStablePlayingSnapshot =
+              !!stable &&
+              stable.room.id === synced.room.id &&
+              stable.room.round_id === synced.room.round_id &&
+              (stable.room.phase === "playing" || stable.room.phase === "finished");
+            if (preserveStablePlayingSnapshot) {
+              return;
+            }
             const withinGraceWindow =
               !!stable &&
               stable.room.id === synced.room.id &&
@@ -1900,7 +1948,7 @@ export default function App() {
 
   useEffect(() => {
     const finishedRoundKey =
-      service === "game" && room?.phase === "finished" && room?.id
+      service === "game" && room?.phase === "finished" && (room?.winners?.length ?? 0) > 0 && room?.id
         ? `${room.id}:${room.round_id}`
         : null;
     if (!finishedRoundKey) {
@@ -1924,12 +1972,15 @@ export default function App() {
       if (latestServiceRef.current !== "game") return;
       if (!activeRoom) return;
       if (activeRoom.id !== room?.id) return;
+      if (activeRoom.round_id !== room?.round_id) return;
+      if (activeRoom.phase !== "finished") return;
+      if ((activeRoom.winners?.length ?? 0) === 0) return;
       setService("stakes");
       setNotice("Round complete. You can now join the next game.");
     }, redirectDelayMs);
 
     return () => window.clearTimeout(timer);
-  }, [service, room?.phase, room?.id, room?.round_id, room?.announcement_seconds]);
+  }, [service, room?.phase, room?.id, room?.round_id, room?.announcement_seconds, room?.winners]);
 
   useEffect(() => {
     if (!cardRechargeLabel) return;
@@ -1986,12 +2037,14 @@ export default function App() {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Login failed";
       const normalizedMessage = message.toLowerCase();
-      if (
+      const duplicateSignupAttempt =
         authMode === "signup" &&
-        (normalizedMessage.includes("already registered") ||
-          normalizedMessage.includes("already exists") ||
-          normalizedMessage.includes("already in use"))
-      ) {
+        (isApiRequestError(err)
+          ? err.status === 409
+          : normalizedMessage.includes("already registered") ||
+            normalizedMessage.includes("already exists") ||
+            normalizedMessage.includes("already in use"));
+      if (duplicateSignupAttempt) {
         setAuthMode("login");
         setAuthNotice("This phone number already exists. Please log in.");
         setAuthError("");
@@ -2887,6 +2940,7 @@ export default function App() {
         ? pickerLiveCallCountdown
         : pickerRoom?.announcement_seconds ?? 0;
   const pickerPaidCount = pickerRoom?.display_paid_count ?? pickerRoom?.paid_cartellas.length ?? 0;
+  const lockedPickerPaidCount = Math.max(pickerPaidCount, lockedPickerPaidCartellas.length);
   const pickerPhase = pickerRoom?.phase ?? "selecting";
   const pickerLiveDetail =
     pickerRoom?.active_queue === "next"
@@ -4249,12 +4303,13 @@ export default function App() {
                 pickerPhase={pickerPhase}
                 pickerCountdownValue={pickerCountdownValue}
                 pickerLiveDetail={pickerLiveDetail}
-                pickerPaidCount={pickerPaidCount}
-                paidCartellas={pickerRoom?.paid_cartellas ?? []}
-                simulatedPaidCartellas={pickerRoom?.simulated_paid_cartellas ?? []}
+                pickerPaidCount={lockedPickerPaidCount}
+                paidCartellas={lockedPickerPaidCartellas}
+                simulatedPaidCartellas={lockedPickerSimulatedCartellas}
                 heldCartellas={pickerRoom?.held_cartellas ?? []}
                 processingCartella={processingCartella}
                 selectedCartella={selectedCartella}
+                selectedCartellaOwned={selectedCartellaOwned}
                 preview={preview}
                 insufficientCardBalance={insufficientCardBalance}
                 cardBuyAmount={cardBuyAmount}
