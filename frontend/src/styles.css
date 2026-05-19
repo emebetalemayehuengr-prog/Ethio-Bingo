@@ -6595,6 +6595,39 @@ html[data-theme="light"] body {
   color: #355d82;
 }
 
+:root[data-theme="light"] .stake-head-row {
+  background: linear-gradient(145deg, #e8f1fb, #dce9f8);
+  border: 1px solid rgba(78, 117, 153, 0.24);
+  color: #1b466f;
+}
+
+:root[data-theme="light"] .stake-row .stake-col {
+  color: #163f63;
+}
+
+:root[data-theme="light"] .stake-col.win {
+  color: #0f4f85;
+}
+
+:root[data-theme="light"] .stake-col.status.none {
+  color: #67809a;
+}
+
+:root[data-theme="light"] .stake-row.bonus .stake-col {
+  color: #103917;
+}
+
+:root[data-theme="light"] .modal-head button {
+  background: linear-gradient(165deg, #f4f9ff, #e6f0fb);
+  color: #1b466f;
+  border: 1px solid rgba(84, 124, 159, 0.34);
+}
+
+:root[data-theme="light"] .modal-head button:hover {
+  background: #ffffff;
+  color: #113c63;
+}
+
 :root[data-theme="light"] .quick-action-bar {
   border-color: rgba(86, 126, 161, 0.24);
   background:

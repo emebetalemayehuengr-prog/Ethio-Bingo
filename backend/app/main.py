@@ -536,17 +536,20 @@ FAQ_ITEMS = [
     {
         "id": "faq-1",
         "question": "How does playing work?",
-        "answer": "Choose a stake, pick one cartella number from 1 to 200, confirm card, and wait for live calls.",
+        "answer": "Choose a stake, pick one cartella number from 1 to 200, confirm card, and wait for live calls. "
+        "ዋጋ (stake) ይምረጡ፣ ከ1 እስከ 200 አንድ ካርቴላ ቁጥር ይምረጡ፣ ካርድን ያረጋግጡ እና የቀጥታ ጥሪዎችን ይጠብቁ።",
     },
     {
         "id": "faq-2",
         "question": "How do I deposit?",
-        "answer": "Open Deposit, choose Telebirr or CBE Birr, transfer to the listed account, then submit the transaction number.",
+        "answer": "Open Deposit, choose Telebirr or CBE Birr, transfer to the listed account, then submit the transaction number. "
+        "Deposit ይክፈቱ፣ Telebirr ወይም CBE Birr ይምረጡ፣ ወደ ተዘረዘረው መለያ ያስተላልፉ እና የግብይት ቁጥር ያስገቡ።",
     },
     {
         "id": "faq-3",
         "question": "How do I withdraw?",
-        "answer": "Use Withdraw, add your bank details, request amount, verify OTP, then submit your withdrawal.",
+        "answer": "Use Withdraw, add your bank details, request amount, verify OTP, then submit your withdrawal. "
+        "Withdraw ይጠቀሙ፣ የባንክ መረጃዎን ያስገቡ፣ መጠን ይጠይቁ፣ OTP ያረጋግጡ እና ጥያቄውን ያስገቡ።",
     },
 ]
 
