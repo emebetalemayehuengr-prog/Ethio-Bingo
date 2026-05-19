@@ -83,16 +83,9 @@ export default function DepositModalContent({
               }}
             />
           ) : null}
-          <p className="panel-subtitle">
-            Send your payment to one of the verified account numbers below, then paste the receipt message exactly as it appears so approval can happen faster.
-          </p>
-          <ol>
-            {selectedMethod.instruction_steps.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
+          <p className="panel-subtitle">ክፍያዎን ከታች የተረጋገጡ መለያዎች ወደ አንዱ በመላክ የደረሰኝ መረጃዎን በትክክል ያስገቡ።</p>
           <div className="wallet-language-note" aria-label="Deposit modal instructions in Amharic">
-            <h4>የዴፖዚት መመሪያ (አማርኛ)</h4>
+            <h4>የዴፖዚት መመሪያ</h4>
             <ol>
               {DEPOSIT_MODAL_AMHARIC_STEPS.map((step) => (
                 <li key={step}>{step}</li>

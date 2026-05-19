@@ -6537,3 +6537,90 @@ body {
   border-color: rgba(91, 132, 168, 0.32);
   background: rgba(164, 193, 219, 0.44);
 }
+
+/* Daytime UI polish: text contrast + background alignment */
+html[data-theme="light"] body {
+  color: #112e4b;
+  background:
+    radial-gradient(circle at 10% -20%, rgba(99, 151, 209, 0.2), transparent 38%),
+    radial-gradient(circle at 92% 115%, rgba(248, 191, 86, 0.17), transparent 38%),
+    linear-gradient(175deg, #f9fcff, #edf4fb 55%, #e4eef8 100%);
+}
+
+:root[data-theme="light"] .top-strip {
+  align-items: center;
+}
+
+:root[data-theme="light"] .top-strip-actions {
+  align-items: stretch;
+}
+
+:root[data-theme="light"] .top-strip-actions > .theme-toggle,
+:root[data-theme="light"] .top-strip-actions > .refresh-btn,
+:root[data-theme="light"] .top-strip-actions > .wallet-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+}
+
+:root[data-theme="light"] .wallet-pill {
+  background: linear-gradient(165deg, #ffffff, #f2f8ff);
+  color: #163f63;
+}
+
+:root[data-theme="light"] .panel,
+:root[data-theme="light"] .wallet-subpanel,
+:root[data-theme="light"] .method-card,
+:root[data-theme="light"] .account-box,
+:root[data-theme="light"] .history-scroll {
+  background: linear-gradient(170deg, #ffffff, #f4f9ff);
+}
+
+:root[data-theme="light"] .panel h2,
+:root[data-theme="light"] .panel h3,
+:root[data-theme="light"] .panel h4,
+:root[data-theme="light"] .wallet-panel h3,
+:root[data-theme="light"] .faq-panel summary,
+:root[data-theme="light"] .wallet-form label,
+:root[data-theme="light"] .history-panel th,
+:root[data-theme="light"] .stake-head-row {
+  color: #1b466f;
+}
+
+:root[data-theme="light"] .panel-subtitle,
+:root[data-theme="light"] .quick-action-copy span,
+:root[data-theme="light"] .wallet-language-note li,
+:root[data-theme="light"] .amharic-guide-card li {
+  color: #355d82;
+}
+
+:root[data-theme="light"] .quick-action-bar {
+  border-color: rgba(86, 126, 161, 0.24);
+  background:
+    radial-gradient(circle at top right, rgba(86, 142, 196, 0.16), transparent 42%),
+    linear-gradient(150deg, rgba(253, 255, 255, 0.98), rgba(238, 246, 255, 0.96));
+  box-shadow: 0 14px 28px rgba(26, 56, 89, 0.12);
+}
+
+:root[data-theme="light"] .quick-action-copy strong {
+  color: #15486f;
+}
+
+@media (max-width: 760px) {
+  :root[data-theme="light"] .mobile-bottom-nav {
+    border-color: rgba(87, 126, 161, 0.28);
+    background: rgba(248, 252, 255, 0.97);
+    box-shadow: 0 16px 30px rgba(22, 50, 81, 0.16);
+  }
+
+  :root[data-theme="light"] .mobile-bottom-nav-item {
+    color: #3a6288;
+  }
+
+  :root[data-theme="light"] .mobile-bottom-nav-item.active {
+    border-color: rgba(43, 107, 164, 0.28);
+    background: rgba(43, 107, 164, 0.12);
+    color: #16486f;
+  }
+}

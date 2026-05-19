@@ -143,7 +143,7 @@ const DEPOSIT_AMHARIC_STEPS = [
 
 const WITHDRAW_AMHARIC_STEPS = [
   "ባንክ, የመለያ ቁጥር እና የባለመለያ ስም በትክክል ያስገቡ።",
-  "የሚወጣውን መጠን በትክክል ይሙሉ እና Request Withdraw ይጫኑ።",
+  "የሚወጣውን መጠን በትክክል ይሙሉ እና የማውጣት ጥያቄ አዝራር ይጫኑ።",
   "ጥያቄው ከተላከ በኋላ በአስተዳዳሪ ማረጋገጥ ይጠናቀቃል።",
 ];
 
@@ -3607,7 +3607,7 @@ export default function App() {
                   Open Deposit Instructions
                 </button>
                 <div className="wallet-language-note" aria-label="Deposit instructions in Amharic">
-                  <h4>የዴፖዚት መመሪያ (አማርኛ)</h4>
+                  <h4>የዴፖዚት መመሪያ</h4>
                   <ol>
                     {DEPOSIT_AMHARIC_STEPS.map((step) => (
                       <li key={step}>{step}</li>
@@ -3620,7 +3620,7 @@ export default function App() {
             {walletTab === "withdraw" && (
               <form className="wallet-form wallet-subpanel" onSubmit={submitWithdrawForm}>
                 <div className="wallet-language-note" aria-label="Withdraw instructions in Amharic">
-                  <h4>የዊዝድራው መመሪያ (አማርኛ)</h4>
+                  <h4>የዊዝድራው መመሪያ</h4>
                   <ol>
                     {WITHDRAW_AMHARIC_STEPS.map((step) => (
                       <li key={step}>{step}</li>
