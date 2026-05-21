@@ -1198,7 +1198,10 @@ export default function App() {
   const overlayOpen = drawerOpen || cartellaOpen || depositGuideOpen || selectedBet !== null || showBrandModal || shareQrOpen;
   const hasPendingMarks = Object.keys(pendingMarks).length > 0;
   const canResumeLiveGame =
-    Boolean(room?.id) || (dashboard?.stake_options ?? []).some((stakeOption) => (stakeOption.my_cards_current ?? 0) > 0);
+    Boolean(room?.id) ||
+    (dashboard?.stake_options ?? []).some(
+      (stakeOption) => (stakeOption.my_cards_current ?? 0) > 0 || (stakeOption.my_cards_next ?? 0) > 0,
+    );
   const activeStake = useMemo(() => {
     if (!room) return selectedStake;
     if (selectedStake && (selectedStake.stake === room.stake || selectedStake.stake === room.card_price)) {
@@ -1624,6 +1627,7 @@ export default function App() {
       if (!ownedCards.length) {
         if ((res.room.next_my_cartellas?.length ?? 0) > 0) {
           setNotice("You have cartella booked for the next game. Wait for this round to finish.");
+          setService("game");
         } else {
           setNotice("No active bought cartella for this live game.");
         }
@@ -1651,7 +1655,10 @@ export default function App() {
           setMethodCode((prev) => (dash.deposit_methods.some((method) => method.code === prev) ? prev : dash.deposit_methods[0].code));
         }
       }
-      const stake = dash.stake_options.find((option) => (option.my_cards_current ?? 0) > 0) ?? null;
+      const stake =
+        dash.stake_options.find(
+          (option) => (option.my_cards_current ?? 0) > 0 || (option.my_cards_next ?? 0) > 0,
+        ) ?? null;
       if (!stake) {
         setService("stakes");
         setNotice("Choose stake and buy cartella first.");
@@ -1674,7 +1681,7 @@ export default function App() {
       setDrawerOpen(false);
       return;
     }
-    if (next === "game" && (!room || !cards.length)) {
+    if (next === "game" && !room) {
       void recoverCurrentGameView();
       return;
     }
@@ -2153,28 +2160,8 @@ export default function App() {
     lastFinishedRedirectRef.current = finishedRoundKey;
     setSessionPanelExpanded(true);
     setNowPlayingExpanded(true);
-    const serverHoldMs =
-      typeof room?.announcement_seconds === "number" && room.announcement_seconds > 0
-        ? room.announcement_seconds * 1000
-        : FINISHED_RESULTS_DEFAULT_HOLD_MS;
-    const redirectDelayMs = Math.min(FINISHED_RESULTS_MAX_HOLD_MS, Math.max(FINISHED_RESULTS_MIN_HOLD_MS, serverHoldMs));
-    const redirectDelaySeconds = Math.ceil(redirectDelayMs / 1000);
-    setNotice(`Round finished. Winners shown for ${redirectDelaySeconds}s, then returning to Rooms.`);
-
-    const timer = window.setTimeout(() => {
-      const activeRoom = latestRoomRef.current;
-      if (latestServiceRef.current !== "game") return;
-      if (!activeRoom) return;
-      if (activeRoom.id !== room?.id) return;
-      if (activeRoom.round_id !== room?.round_id) return;
-      if (activeRoom.phase !== "finished") return;
-      if ((activeRoom.winners?.length ?? 0) === 0) return;
-      setService("stakes");
-      setNotice("Round complete. You can now join the next game.");
-    }, redirectDelayMs);
-
-    return () => window.clearTimeout(timer);
-  }, [service, room?.phase, room?.id, room?.round_id, room?.announcement_seconds, room?.winners]);
+    setNotice("Round finished. Winners are shown below. Use Play again when you're ready.");
+  }, [service, room?.phase, room?.id, room?.round_id, room?.winners]);
 
   useEffect(() => {
     if (!cardRechargeLabel) return;
@@ -3143,7 +3130,10 @@ export default function App() {
   const showResultOverlay = room?.phase === "finished" && winnerEntries.length > 0;
   const sessionPanelId = room ? `game-session-panel-${room.id}` : "game-session-panel";
   const nowPlayingPanelId = room ? `now-playing-panel-${room.id}` : "now-playing-panel";
-  const callerLockedOpen = service === "game" && room?.phase === "playing";
+  const callerLockedOpen =
+    service === "game" &&
+    !!room &&
+    (room.phase === "playing" || (room.phase === "selecting" && (room.called_numbers?.length ?? 0) > 0));
   const effectiveNowPlayingExpanded = callerLockedOpen ? true : nowPlayingExpanded;
   const nowPlayingCardLabel = selectedCardNo ? `Card ${selectedCardNo}` : `${cards.length} ${cards.length === 1 ? "Card" : "Cards"}`;
   const pickerCountdownValue =
@@ -3486,7 +3476,7 @@ export default function App() {
 
         {service === "game" && (
           <section className="panel game-panel">
-            {!room || !card ? (
+            {!room ? (
               <div className="empty-state">
                 <h3>No active room</h3>
                 <p>Buy cartella first from Bingo Game service.</p>

@@ -3383,6 +3383,17 @@ def drop_queue_round_lock(
     room.queue_round_locks.pop(queue_lock_key(queue, phone_number, cartella_no), None)
 
 
+def user_has_current_queue_claim(room: RoomStore, phone_number: str, cartella_no: int) -> bool:
+    current_lock_round = get_queue_round_lock(room, "current", phone_number, cartella_no)
+    current_owner = room.taken_cartellas.get(cartella_no)
+    current_held_owner = room.held_cartellas.get(cartella_no)
+    return (
+        current_lock_round == room.round_number
+        or current_owner == phone_number
+        or current_held_owner == phone_number
+    )
+
+
 def get_user_cartellas_from_map(cartella_map: dict[int, str], phone_number: str) -> list[int]:
     return sorted([cartella_no for cartella_no, owner in cartella_map.items() if owner == phone_number])
 
@@ -3905,6 +3916,10 @@ def inject_simulated_claims(room: RoomStore, now: datetime) -> bool:
     if not ENABLE_SIMULATED_ACTIVITY:
         return False
     if room.ended_at is not None:
+        return False
+    # Never let bots auto-finish a live round when real players are present.
+    # This avoids abrupt caller/round collapse before humans can play/claim.
+    if any(not is_simulated_phone(owner_phone) for owner_phone in room.taken_cartellas.values()):
         return False
     if (now - room.started_at).total_seconds() < SELECT_PHASE_SECONDS:
         return False
@@ -4989,8 +5004,17 @@ def preview_card(payload: PreviewCardRequest, user: UserStore = Depends(get_curr
         queue = "current"
     elif payload.round_id == next_round_id:
         queue = "next"
-    if room_state.phase == "selecting" and room_state.countdown_seconds <= CURRENT_QUEUE_JOIN_CUTOFF_SECONDS:
+
+    current_claim = user_has_current_queue_claim(room, user.phone_number, payload.cartella_no)
+    if (
+        queue == "current"
+        and room_state.phase == "selecting"
+        and room_state.countdown_seconds <= CURRENT_QUEUE_JOIN_CUTOFF_SECONDS
+        and not current_claim
+    ):
         queue = "next"
+    if queue == "next" and current_claim:
+        queue = "current"
     taken_map, held_map, held_updated_at = get_queue_maps(room, queue)
 
     owner = taken_map.get(payload.cartella_no)
@@ -5045,22 +5069,19 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
     elif payload.round_id == next_round_id:
         queue = "next"
 
-    if queue == "current" and room_state.phase == "selecting" and room_state.countdown_seconds <= CURRENT_QUEUE_JOIN_CUTOFF_SECONDS:
+    current_claim = user_has_current_queue_claim(room, user.phone_number, payload.cartella_no)
+    if (
+        queue == "current"
+        and room_state.phase == "selecting"
+        and room_state.countdown_seconds <= CURRENT_QUEUE_JOIN_CUTOFF_SECONDS
+        and not current_claim
+    ):
         queue = "next"
 
-    # Boundary guard: if countdown just flipped to playing but this cartella is
-    # still held by the same user in the current queue, keep the purchase in
-    # the current round instead of silently pushing it to next.
-    if queue == "next" and room_state.phase == "playing":
-        current_lock_round = get_queue_round_lock(room, "current", user.phone_number, payload.cartella_no)
-        current_owner = room.taken_cartellas.get(payload.cartella_no)
-        current_held_owner = room.held_cartellas.get(payload.cartella_no)
-        if (
-            current_lock_round == room.round_number
-            or current_owner == user.phone_number
-            or current_held_owner == user.phone_number
-        ):
-            queue = "current"
+    # Preserve a user's active current-round claim (hold/lock/ownership) across
+    # cutoff/phase boundaries so they are not silently pushed to next queue.
+    if queue == "next" and current_claim:
+        queue = "current"
 
     taken_map, held_map, held_updated_at = get_queue_maps(room, queue)
 
