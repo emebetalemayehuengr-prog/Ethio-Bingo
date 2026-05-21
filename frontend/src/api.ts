@@ -271,12 +271,9 @@ export function fetchAdminDepositedRecords() {
   return request<{ items: DepositedRecord[] }>("/api/admin/deposited-records");
 }
 
-export function updateAdminDepositedRecord(
-  recordId: string,
-  payload: { amount: number; method?: "telebirr" | "cbebirr"; transaction_number?: string; note?: string | null },
-) {
-  return request<{ message: string; item: DepositedRecord }>(`/api/admin/deposited-records/${recordId}`, {
-    method: "PUT",
+export function clearAdminDepositedRecords(payload: { confirm: boolean; day?: string | null }) {
+  return request<{ message: string; deleted: number }>("/api/admin/deposited-records/clear", {
+    method: "POST",
     body: JSON.stringify(payload),
   });
 }

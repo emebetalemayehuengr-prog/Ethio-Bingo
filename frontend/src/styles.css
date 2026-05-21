@@ -443,6 +443,46 @@ textarea {
   flex-wrap: wrap;
 }
 
+.admin-deposited-toolbar {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 180px;
+}
+
+.admin-deposited-toolbar input[type="date"] {
+  min-height: 40px;
+}
+
+.admin-deposited-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 0.93rem;
+}
+
+.admin-deposited-scroll {
+  max-height: 460px;
+  overflow: auto;
+}
+
+.danger-btn {
+  border-color: rgba(234, 108, 108, 0.45);
+  color: #ffe7e7;
+  background: rgba(130, 31, 31, 0.3);
+}
+
+.danger-btn:hover:not(:disabled) {
+  background: rgba(164, 39, 39, 0.45);
+}
+
+@media (max-width: 760px) {
+  .admin-deposited-toolbar {
+    grid-template-columns: 1fr;
+  }
+}
+
 .withdraw-account-row {
   display: inline-flex;
   align-items: center;
@@ -6105,7 +6145,7 @@ body {
 .toast-rail {
   position: sticky;
   top: calc(env(safe-area-inset-top, 0px) + 82px);
-  z-index: 18;
+  z-index: 64;
   display: grid;
   gap: 10px;
   justify-items: end;
@@ -6617,6 +6657,16 @@ html[data-theme="light"] body {
 :root[data-theme="light"] .account-box,
 :root[data-theme="light"] .history-scroll {
   background: linear-gradient(170deg, #ffffff, #f4f9ff);
+}
+
+:root[data-theme="light"] .danger-btn {
+  border-color: rgba(191, 74, 74, 0.36);
+  color: #8f1f1f;
+  background: rgba(255, 236, 236, 0.96);
+}
+
+:root[data-theme="light"] .danger-btn:hover:not(:disabled) {
+  background: rgba(255, 223, 223, 0.96);
 }
 
 :root[data-theme="light"] .panel h2,

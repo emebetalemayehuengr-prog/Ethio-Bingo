@@ -1434,22 +1434,28 @@ class PostgresStateStore:
                 )
             conn.commit()
 
-    def load_audit_events(self, limit: int = 1000, event_type: str | None = None) -> list[dict[str, Any]]:
+    def load_audit_events(
+        self,
+        limit: int = 1000,
+        event_type: str | None = None,
+        created_date: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not self.enabled():
             return []
         safe_limit = max(1, min(5000, int(limit)))
+        where_clauses: list[str] = []
+        params: list[Any] = []
+        if event_type:
+            where_clauses.append("event_type = %s")
+            params.append(event_type)
+        if created_date:
+            where_clauses.append("created_at LIKE %s")
+            params.append(f"{created_date}%")
+        where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         with psycopg.connect(self.dsn, row_factory=dict_row, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
-                if event_type:
-                    rows = cur.execute(
-                        "SELECT * FROM audit_events WHERE event_type = %s ORDER BY created_at DESC LIMIT %s",
-                        (event_type, safe_limit),
-                    ).fetchall()
-                else:
-                    rows = cur.execute(
-                        "SELECT * FROM audit_events ORDER BY created_at DESC LIMIT %s",
-                        (safe_limit,),
-                    ).fetchall()
+                query = f"SELECT * FROM audit_events{where_sql} ORDER BY created_at DESC LIMIT %s"
+                rows = cur.execute(query, tuple(params + [safe_limit])).fetchall()
         return [
             {
                 "id": str(row["id"]),
@@ -1471,6 +1477,25 @@ class PostgresStateStore:
             }
             for row in rows
         ]
+
+    def clear_audit_events(self, *, event_type: str | None = None, created_date: str | None = None) -> int:
+        if not self.enabled():
+            raise RuntimeError("Postgres store is not enabled")
+        where_clauses: list[str] = []
+        params: list[Any] = []
+        if event_type:
+            where_clauses.append("event_type = %s")
+            params.append(event_type)
+        if created_date:
+            where_clauses.append("created_at LIKE %s")
+            params.append(f"{created_date}%")
+        where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"DELETE FROM audit_events{where_sql}", tuple(params))
+                deleted = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+            conn.commit()
+        return int(deleted)
 
     def update_deposited_record(
         self,

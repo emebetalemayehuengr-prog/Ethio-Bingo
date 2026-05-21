@@ -347,11 +347,9 @@ class AdminMarkPaidRequest(BaseModel):
     admin_note: str | None = Field(default=None, max_length=300)
 
 
-class AdminUpdateDepositedRecordRequest(BaseModel):
-    amount: float = Field(gt=0, le=200000)
-    method: Literal["telebirr", "cbebirr"] | None = None
-    transaction_number: str | None = Field(default=None, min_length=3, max_length=120)
-    note: str | None = Field(default=None, max_length=300)
+class AdminClearDepositedRecordsRequest(BaseModel):
+    confirm: bool = False
+    day: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
 class PreviewCardRequest(BaseModel):
@@ -1786,10 +1784,24 @@ def serialize_admin_audit_events(limit: int = 1000) -> list[dict]:
         return [event.model_dump() for event in AUDIT_EVENTS[: max(1, limit)]]
 
 
-def serialize_deposited_records(limit: int = 5000) -> list[dict]:
+def normalize_admin_day_filter(day: str | None) -> str | None:
+    if day is None:
+        return None
+    candidate = day.strip()
+    if not candidate:
+        return None
+    try:
+        parsed = datetime.strptime(candidate, "%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid day filter. Use YYYY-MM-DD.") from exc
+    return parsed.strftime("%Y-%m-%d")
+
+
+def serialize_deposited_records(limit: int = 5000, day: str | None = None) -> list[dict]:
+    normalized_day = normalize_admin_day_filter(day)
     if PG_STORE.enabled():
         try:
-            return PG_STORE.load_audit_events(limit=limit, event_type="deposit_confirmed")
+            return PG_STORE.load_audit_events(limit=limit, event_type="deposit_confirmed", created_date=normalized_day)
         except Exception:
             pass
     remaining = max(1, limit)
@@ -1797,6 +1809,8 @@ def serialize_deposited_records(limit: int = 5000) -> list[dict]:
     with AUDIT_EVENTS_LOCK:
         for event in AUDIT_EVENTS:
             if event.event_type != "deposit_confirmed":
+                continue
+            if normalized_day and not str(event.created_at).startswith(normalized_day):
                 continue
             rows.append(event.model_dump())
             remaining -= 1
@@ -3077,9 +3091,9 @@ def reserve_deposit_receipt(tx_number: str, phone_number: str, links: list[str])
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Receipt verification unavailable. Please try again.") from exc
         if reservation_error == "duplicate_tx_same_account":
-            raise HTTPException(status_code=409, detail="Invalid receipt: already used by this account.")
+            raise HTTPException(status_code=409, detail="Invalid receipt: receipt is already used by this account.")
         if reservation_error == "duplicate_tx_other_account":
-            raise HTTPException(status_code=409, detail="Invalid receipt: already used by another account.")
+            raise HTTPException(status_code=409, detail="Invalid receipt: receipt is already used by another account.")
         if reservation_error == "duplicate_link_same_account":
             raise HTTPException(status_code=409, detail="Invalid receipt: receipt link already used by this account.")
         if reservation_error == "duplicate_link_other_account":
@@ -3093,8 +3107,8 @@ def reserve_deposit_receipt(tx_number: str, phone_number: str, links: list[str])
     existing_owner = USED_DEPOSIT_TX.get(tx_number)
     if existing_owner:
         if existing_owner == phone_number:
-            raise HTTPException(status_code=409, detail="Invalid receipt: already used by this account.")
-        raise HTTPException(status_code=409, detail="Invalid receipt: already used by another account.")
+            raise HTTPException(status_code=409, detail="Invalid receipt: receipt is already used by this account.")
+        raise HTTPException(status_code=409, detail="Invalid receipt: receipt is already used by another account.")
 
     for key in normalized_links:
         owner = USED_RECEIPT_LINKS.get(key)
@@ -4574,58 +4588,55 @@ def admin_audit_events(user: UserStore = Depends(get_current_user)) -> dict:
 
 
 @app.get("/api/admin/deposited-records")
-def admin_deposited_records(user: UserStore = Depends(get_current_user)) -> dict:
+def admin_deposited_records(day: str | None = None, user: UserStore = Depends(get_current_user)) -> dict:
     require_admin_user(user)
-    return {"items": serialize_deposited_records(limit=5000)}
+    return {"items": serialize_deposited_records(limit=5000, day=day)}
 
 
 @app.put("/api/admin/deposited-records/{event_id}")
-def update_admin_deposited_record(
-    event_id: str,
-    payload: AdminUpdateDepositedRecordRequest,
+def update_admin_deposited_record(event_id: str, user: UserStore = Depends(get_current_user)) -> dict:
+    require_admin_user(user)
+    _ = event_id
+    raise HTTPException(status_code=405, detail="Deposited records are read-only and cannot be edited.")
+
+@app.post("/api/admin/deposited-records/clear")
+def clear_admin_deposited_records(
+    payload: AdminClearDepositedRecordsRequest,
     user: UserStore = Depends(get_current_user),
 ) -> dict:
     require_admin_user(user)
-
-    normalized_tx_number = normalize_transaction_number(payload.transaction_number or "")
-    if normalized_tx_number:
-        ensure_valid_transaction_number(normalized_tx_number)
-
-    note_value = payload.note.strip() if payload.note else None
-    now_iso = utc_now().replace(microsecond=0).isoformat()
-
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="Confirmation is required to clear deposited records.")
+    target_day = normalize_admin_day_filter(payload.day)
     if PG_STORE.enabled():
-        item_payload = PG_STORE.update_deposited_record(
-            event_id,
-            amount=payload.amount,
-            method=payload.method,
-            transaction_number=normalized_tx_number or None,
-            note=note_value,
-            actor_phone=user.phone_number,
-            updated_at=now_iso,
-        )
-        if item_payload is None:
-            raise HTTPException(status_code=404, detail="Deposited record not found")
-        return {"message": "Deposited record updated.", "item": item_payload}
+        try:
+            deleted_count = PG_STORE.clear_audit_events(event_type="deposit_confirmed", created_date=target_day)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Unable to clear deposited records: {exc}") from exc
+        if target_day:
+            return {"message": f"Cleared {deleted_count} deposited records for {target_day}.", "deleted": deleted_count}
+        return {"message": f"Cleared {deleted_count} deposited records.", "deleted": deleted_count}
 
     with AUDIT_EVENTS_LOCK:
-        event = next((item for item in AUDIT_EVENTS if item.id == event_id and item.event_type == "deposit_confirmed"), None)
-        if event is None:
-            raise HTTPException(status_code=404, detail="Deposited record not found")
+        kept: list[AuditEvent] = []
+        deleted_count = 0
+        for event in AUDIT_EVENTS:
+            if event.event_type != "deposit_confirmed":
+                kept.append(event)
+                continue
+            if target_day and not str(event.created_at).startswith(target_day):
+                kept.append(event)
+                continue
+            deleted_count += 1
+        AUDIT_EVENTS[:] = kept
+        try:
+            persist_audit_events()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Unable to clear deposited records: {exc}") from exc
 
-        event.amount = round(float(payload.amount), 2)
-        if payload.method is not None:
-            event.method = payload.method
-        if normalized_tx_number:
-            event.transaction_number = normalized_tx_number
-        event.note = note_value
-        event.actor_phone = user.phone_number
-        event.updated_at = now_iso
-        event.updated_by = user.phone_number
-        persist_audit_events()
-        item_payload = event.model_dump()
-
-    return {"message": "Deposited record updated.", "item": item_payload}
+    if target_day:
+        return {"message": f"Cleared {deleted_count} deposited records for {target_day}.", "deleted": deleted_count}
+    return {"message": f"Cleared {deleted_count} deposited records.", "deleted": deleted_count}
 
 
 @app.post("/api/admin/withdraw-requests/{ticket_id}/approve")

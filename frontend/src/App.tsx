@@ -2,6 +2,7 @@ import { FormEvent, KeyboardEvent as ReactKeyboardEvent, Suspense, lazy, startTr
 import { unstable_batchedUpdates } from "react-dom";
 import {
   approveAdminWithdrawRequest,
+  clearAdminDepositedRecords,
   claimBingo,
   clearAuthToken,
   fetchAdminDepositedRecords,
@@ -30,7 +31,6 @@ import {
   submitWithdraw,
   syncRoom,
   updateAdminDepositMethod,
-  updateAdminDepositedRecord,
 } from "./api";
 import type {
   AuthResponse,
@@ -610,12 +610,6 @@ const deriveStakeUiFromRoom = (stake: StakeOption, room: RoomState): StakeOption
 };
 
 type WithdrawFlowStatus = "Pending" | "Processing" | "Paid" | "Rejected";
-type DepositedRecordDraft = {
-  amount: string;
-  method: "telebirr" | "cbebirr";
-  transaction_number: string;
-  note: string;
-};
 
 const normalizeWithdrawFlowStatus = (status: WithdrawTicket["status"]): WithdrawFlowStatus => {
   if (status === "Approved") return "Paid";
@@ -661,16 +655,6 @@ const upsertWithdrawTicketForward = (tickets: WithdrawTicket[], incoming: Withdr
   next[index] = nextTicket;
   return next;
 };
-
-const toDepositedDraftMethod = (value: string | null | undefined): "telebirr" | "cbebirr" =>
-  value === "cbebirr" ? "cbebirr" : "telebirr";
-
-const buildDepositedDraft = (item: DepositedRecord): DepositedRecordDraft => ({
-  amount: item.amount.toFixed(2),
-  method: toDepositedDraftMethod(item.method),
-  transaction_number: item.transaction_number ?? "",
-  note: item.note ?? "",
-});
 
 const stabilizeRoomMarks = (previous: RoomState | null, incoming: RoomState | null) => {
   if (!incoming || !previous) return incoming;
@@ -1175,7 +1159,6 @@ export default function App() {
   const lastFinishedRoomRef = useRef<string | null>(null);
   const lastFinishedRedirectRef = useRef<string | null>(null);
   const lastSeenRoundKeyRef = useRef<string>("");
-  const adminDepositedDirtyByIdRef = useRef<Record<string, boolean>>({});
   const sharedStakeOpeningRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [pusherReady, setPusherReady] = useState(false);
@@ -1241,10 +1224,9 @@ export default function App() {
   const [adminWithdrawRequests, setAdminWithdrawRequests] = useState<WithdrawTicket[]>([]);
   const [adminPayoutRefs, setAdminPayoutRefs] = useState<Record<string, string>>({});
   const [adminDepositedRecords, setAdminDepositedRecords] = useState<DepositedRecord[]>([]);
-  const [adminDepositedDraftById, setAdminDepositedDraftById] = useState<Record<string, DepositedRecordDraft>>({});
-  const [adminDepositedDirtyById, setAdminDepositedDirtyById] = useState<Record<string, boolean>>({});
-  const [adminDepositedSavingById, setAdminDepositedSavingById] = useState<Record<string, boolean>>({});
   const [adminDepositedSearch, setAdminDepositedSearch] = useState("");
+  const [adminDepositedDayFilter, setAdminDepositedDayFilter] = useState("");
+  const [adminClearDepositedBusy, setAdminClearDepositedBusy] = useState(false);
   const [copiedPhone, setCopiedPhone] = useState("");
   const [copiedAccountNumber, setCopiedAccountNumber] = useState("");
   const [showBrandModal, setShowBrandModal] = useState(false);
@@ -1414,10 +1396,6 @@ export default function App() {
   useEffect(() => {
     latestServiceRef.current = service;
   }, [service]);
-
-  useEffect(() => {
-    adminDepositedDirtyByIdRef.current = adminDepositedDirtyById;
-  }, [adminDepositedDirtyById]);
 
   useEffect(() => {
     if (!profile || !PUSHER_KEY) return;
@@ -1624,10 +1602,9 @@ export default function App() {
       setAdminWithdrawRequests([]);
       setAdminPayoutRefs({});
       setAdminDepositedRecords([]);
-      setAdminDepositedDraftById({});
-      setAdminDepositedDirtyById({});
-      setAdminDepositedSavingById({});
       setAdminDepositedSearch("");
+      setAdminDepositedDayFilter("");
+      setAdminClearDepositedBusy(false);
       setNotice("Session expired. Please sign in again.");
     };
     window.addEventListener("auth:expired", onAuthExpired);
@@ -1915,25 +1892,6 @@ export default function App() {
     if (!profile?.is_admin) return;
     const data = await fetchAdminDepositedRecords();
     setAdminDepositedRecords(data.items);
-    const liveIds = new Set(data.items.map((item) => item.id));
-    setAdminDepositedDraftById((prev) => {
-      const next: Record<string, DepositedRecordDraft> = {};
-      for (const [id, draft] of Object.entries(prev)) {
-        if (liveIds.has(id)) next[id] = draft;
-      }
-      for (const item of data.items) {
-        if (adminDepositedDirtyByIdRef.current[item.id]) continue;
-        next[item.id] = buildDepositedDraft(item);
-      }
-      return next;
-    });
-    setAdminDepositedDirtyById((prev) => {
-      const next: Record<string, boolean> = {};
-      for (const [id, dirty] of Object.entries(prev)) {
-        if (liveIds.has(id) && dirty) next[id] = true;
-      }
-      return next;
-    });
   };
 
   const loadData = async () => {
@@ -2838,59 +2796,29 @@ export default function App() {
     }
   };
 
-  const setAdminDepositedDraftField = <K extends keyof DepositedRecordDraft>(recordId: string, key: K, value: DepositedRecordDraft[K]) => {
-    setAdminDepositedDraftById((prev) => {
-      const baseline: DepositedRecordDraft = prev[recordId] ?? {
-        amount: "",
-        method: "telebirr",
-        transaction_number: "",
-        note: "",
-      };
-      return {
-        ...prev,
-        [recordId]: {
-          ...baseline,
-          [key]: value,
-        },
-      };
-    });
-    setAdminDepositedDirtyById((prev) => ({ ...prev, [recordId]: true }));
+  const clearAdminDepositedFilters = () => {
+    setAdminDepositedSearch("");
+    setAdminDepositedDayFilter("");
   };
 
-  const onSaveAdminDepositedRecord = async (item: DepositedRecord) => {
-    const draft = adminDepositedDraftById[item.id] ?? buildDepositedDraft(item);
-    const amount = Number(draft.amount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setError("Enter a valid deposited amount before saving.");
-      return;
-    }
-
-    const normalizedTxNumber = normalizeTransactionNumberInput(draft.transaction_number);
-    if (normalizedTxNumber.length < 3) {
-      setError("Transaction number must be at least 3 characters.");
-      return;
-    }
-
-    setAdminDepositedSavingById((prev) => ({ ...prev, [item.id]: true }));
+  const onClearAdminDepositedRecords = async () => {
+    const targetDay = adminDepositedDayFilter.trim();
+    const scopeLabel = targetDay ? `for ${targetDay}` : "for all days";
+    const confirmed = window.confirm(`Clear deposited records ${scopeLabel}? This cannot be undone.`);
+    if (!confirmed) return;
+    setAdminClearDepositedBusy(true);
     setError("");
     try {
-      const res = await updateAdminDepositedRecord(item.id, {
-        amount,
-        method: draft.method,
-        transaction_number: normalizedTxNumber,
-        note: draft.note.trim() || null,
+      const res = await clearAdminDepositedRecords({
+        confirm: true,
+        day: targetDay || null,
       });
       setNotice(res.message);
-      setAdminDepositedRecords((prev) => prev.map((row) => (row.id === item.id ? res.item : row)));
-      setAdminDepositedDraftById((prev) => ({
-        ...prev,
-        [item.id]: buildDepositedDraft(res.item),
-      }));
-      setAdminDepositedDirtyById((prev) => ({ ...prev, [item.id]: false }));
+      await refreshAdminDepositedRecords();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to update deposited record");
+      setError(err instanceof Error ? err.message : "Unable to clear deposited records");
     } finally {
-      setAdminDepositedSavingById((prev) => ({ ...prev, [item.id]: false }));
+      setAdminClearDepositedBusy(false);
     }
   };
 
@@ -3574,10 +3502,14 @@ export default function App() {
   const profileInitials = (profile.user_name.trim().slice(0, 2) || "40").toUpperCase();
   const selectedMethodDraftAccounts = selectedMethod ? adminDraftAccounts[selectedMethod.code] ?? [] : [];
   const selectedMethodAdminSaving = selectedMethod ? adminAccountsSavingByMethod[selectedMethod.code] ?? false : false;
-  const filteredAdminDepositedRecords = (() => {
+  const filteredAdminDepositedRecords = useMemo(() => {
     const query = adminDepositedSearch.trim().toLowerCase();
-    if (!query) return adminDepositedRecords;
+    const dayFilter = adminDepositedDayFilter.trim();
     return adminDepositedRecords.filter((item) => {
+      if (dayFilter && !item.created_at.startsWith(dayFilter)) {
+        return false;
+      }
+      if (!query) return true;
       const methodLabel = item.method ?? "";
       const transactionNumber = item.transaction_number ?? "";
       const note = item.note ?? "";
@@ -3588,7 +3520,11 @@ export default function App() {
         note.toLowerCase().includes(query)
       );
     });
-  })();
+  }, [adminDepositedRecords, adminDepositedSearch, adminDepositedDayFilter]);
+  const filteredAdminDepositedTotal = useMemo(
+    () => filteredAdminDepositedRecords.reduce((sum, item) => sum + (Number.isFinite(item.amount) ? item.amount : 0), 0),
+    [filteredAdminDepositedRecords],
+  );
   const updateAdminDraftRows = (
     code: "telebirr" | "cbebirr",
     updater: (rows: Array<{ phone_number: string; owner_name: string }>) => Array<{ phone_number: string; owner_name: string }>,
@@ -4578,92 +4514,71 @@ export default function App() {
                 })}
                 <article className="admin-method-box">
                   <h3>Deposited Records (All Users)</h3>
-                  <input
-                    value={adminDepositedSearch}
-                    onChange={(event) => setAdminDepositedSearch(event.target.value)}
-                    placeholder="Trace by phone, method, tx number, or note"
-                  />
-                  <div className="history-scroll">
+                  <div className="admin-deposited-toolbar">
+                    <input
+                      value={adminDepositedSearch}
+                      onChange={(event) => setAdminDepositedSearch(event.target.value)}
+                      placeholder="Trace by phone, method, tx number, or note"
+                    />
+                    <input
+                      type="date"
+                      value={adminDepositedDayFilter}
+                      onChange={(event) => setAdminDepositedDayFilter(event.target.value)}
+                      aria-label="Filter by day"
+                    />
+                  </div>
+                  <div className="admin-actions">
+                    <button className="secondary-btn" type="button" onClick={clearAdminDepositedFilters}>
+                      Clear Filters
+                    </button>
+                    <button
+                      className="secondary-btn danger-btn"
+                      type="button"
+                      disabled={adminClearDepositedBusy || adminDepositedRecords.length === 0}
+                      onClick={() => void onClearAdminDepositedRecords()}
+                    >
+                      {adminClearDepositedBusy ? "Clearing..." : adminDepositedDayFilter ? "Clear Day" : "Clear All"}
+                    </button>
+                  </div>
+                  <div className="admin-deposited-summary">
+                    <strong>Total (Filtered): {fmtEtb(filteredAdminDepositedTotal)}</strong>
+                    <span>
+                      {filteredAdminDepositedRecords.length} of {adminDepositedRecords.length} records
+                    </span>
+                  </div>
+                  <div className="history-scroll admin-deposited-scroll">
                     <table>
                       <thead>
                         <tr>
+                          <th>Time</th>
                           <th>User</th>
                           <th>Method</th>
                           <th>Transaction No</th>
                           <th>Amount</th>
-                          <th>Note</th>
                           <th>Status</th>
-                          <th>Edited</th>
-                          <th>Action</th>
+                          <th>Note</th>
                         </tr>
                       </thead>
                       <tbody>
                         {filteredAdminDepositedRecords.length === 0 ? (
                           <tr>
-                            <td colSpan={8}>
-                              <div className="table-empty">No deposited records found.</div>
+                            <td colSpan={7}>
+                              <div className="table-empty">No deposited records found for the current filter.</div>
                             </td>
                           </tr>
                         ) : (
                           filteredAdminDepositedRecords.map((item) => {
-                            const draft = adminDepositedDraftById[item.id] ?? buildDepositedDraft(item);
-                            const saving = Boolean(adminDepositedSavingById[item.id]);
                             return (
                               <tr key={item.id}>
                                 <td>
                                   <small>{fmtDate(item.created_at)}</small>
-                                  <br />
-                                  <small>{item.phone_number}</small>
                                 </td>
-                                <td>
-                                  <select
-                                    value={draft.method}
-                                    disabled={saving}
-                                    onChange={(event) =>
-                                      setAdminDepositedDraftField(item.id, "method", event.target.value === "cbebirr" ? "cbebirr" : "telebirr")
-                                    }
-                                  >
-                                    <option value="telebirr">Telebirr</option>
-                                    <option value="cbebirr">CBE Birr</option>
-                                  </select>
-                                </td>
-                                <td>
-                                  <input
-                                    value={draft.transaction_number}
-                                    disabled={saving}
-                                    placeholder="Transaction no"
-                                    onChange={(event) => setAdminDepositedDraftField(item.id, "transaction_number", event.target.value)}
-                                  />
-                                </td>
-                                <td>
-                                  <input
-                                    type="number"
-                                    min={0.01}
-                                    step={0.01}
-                                    value={draft.amount}
-                                    disabled={saving}
-                                    onChange={(event) => setAdminDepositedDraftField(item.id, "amount", event.target.value)}
-                                  />
-                                </td>
-                                <td>
-                                  <input
-                                    value={draft.note}
-                                    disabled={saving}
-                                    placeholder="Optional admin note"
-                                    onChange={(event) => setAdminDepositedDraftField(item.id, "note", event.target.value)}
-                                  />
-                                </td>
+                                <td>{item.phone_number}</td>
+                                <td>{item.method ?? "-"}</td>
+                                <td>{item.transaction_number ?? "-"}</td>
+                                <td>{fmtEtb(item.amount)}</td>
                                 <td>{item.status}</td>
-                                <td>
-                                  <small>{item.updated_at ? fmtDate(item.updated_at) : "-"}</small>
-                                  <br />
-                                  <small>{item.updated_by ?? "-"}</small>
-                                </td>
-                                <td>
-                                  <button className="primary-btn" type="button" disabled={saving} onClick={() => void onSaveAdminDepositedRecord(item)}>
-                                    {saving ? "Saving..." : "Save"}
-                                  </button>
-                                </td>
+                                <td>{item.note ?? "-"}</td>
                               </tr>
                             );
                           })
