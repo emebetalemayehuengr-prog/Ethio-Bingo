@@ -443,6 +443,48 @@ textarea {
   flex-wrap: wrap;
 }
 
+.withdraw-account-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-copy-icon-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid rgba(138, 178, 217, 0.55);
+  background: rgba(13, 38, 63, 0.86);
+  color: #d9edff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 140ms ease, filter 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.account-copy-icon-btn:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.account-copy-icon-btn.copied {
+  border-color: rgba(48, 204, 136, 0.66);
+  background: rgba(17, 89, 56, 0.9);
+  color: #d8ffef;
+}
+
+.account-copy-icon-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .wallet-panel h3,
 .faq-section h2,
 .stake-section h2 {

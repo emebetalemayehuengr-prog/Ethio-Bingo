@@ -179,7 +179,7 @@ const HOW_TO_PLAY_AMHARIC_STEPS = [
   "ወደ Rooms ገጽ በመግባት የሚፈልጉትን ዋጋ ይምረጡ እና ካርቴላ ይግዙ።",
   "ቆጠራው ከተጠናቀቀ በኋላ ጨዋታው ይጀምራል፤ የሚጠሩ ቁጥሮችን በቀጥታ ይከታተሉ።",
   "በገዙት ካርቴላ ላይ የተጠሩ ቁጥሮችን ይምልኩ።",
-  "አሸናፊ ቅጥ ሲሞላ ውጤቱ በሲስተሙ ይረጋገጣል እና ክፍያ ይገባል።",
+  "አሸናፊው ሲታወቅ ውጤቱ በሲስተሙ ይረጋገጣል ከዚያም ክፍያው ወደ Balance ይገባል።",
   "እገዛ ካስፈለገ በContact ወይም በWallet ያሉ የድጋፍ መረጃዎችን ይጠቀሙ።",
 ];
 
@@ -1207,6 +1207,7 @@ export default function App() {
   const [adminWithdrawRequests, setAdminWithdrawRequests] = useState<WithdrawTicket[]>([]);
   const [adminPayoutRefs, setAdminPayoutRefs] = useState<Record<string, string>>({});
   const [copiedPhone, setCopiedPhone] = useState("");
+  const [copiedAccountNumber, setCopiedAccountNumber] = useState("");
   const [showBrandModal, setShowBrandModal] = useState(false);
   const [shareQrOpen, setShareQrOpen] = useState(false);
   const [shareQrImageError, setShareQrImageError] = useState(false);
@@ -3131,6 +3132,37 @@ export default function App() {
     }
   };
 
+  const onCopyAccountNumber = async (accountNumber: string) => {
+    const value = accountNumber.trim();
+    if (!value) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else if (!fallbackCopyText(value)) {
+        throw new Error("Clipboard unavailable");
+      }
+      setCopiedAccountNumber(value);
+      setNotice(`Copied account number ${value}`);
+      window.setTimeout(() => {
+        setCopiedAccountNumber((prev) => (prev === value ? "" : prev));
+      }, 1500);
+    } catch {
+      try {
+        if (fallbackCopyText(value)) {
+          setCopiedAccountNumber(value);
+          setNotice(`Copied account number ${value}`);
+          window.setTimeout(() => {
+            setCopiedAccountNumber((prev) => (prev === value ? "" : prev));
+          }, 1500);
+          return;
+        }
+      } catch {
+        // fall through
+      }
+      setError("Clipboard copy failed.");
+    }
+  };
+
   const onClaimBingo = async () => {
     if (!room?.id) return;
     if (!bingoClaimable) {
@@ -4365,7 +4397,27 @@ export default function App() {
                                   <br />
                                   <small>{item.account_holder}</small>
                                   <br />
-                                  <small>{item.account_number}</small>
+                                  <small className="withdraw-account-row">
+                                    <span>{item.account_number}</span>
+                                    <button
+                                      className={`account-copy-icon-btn ${copiedAccountNumber === item.account_number ? "copied" : ""}`}
+                                      type="button"
+                                      aria-label="Copy account number"
+                                      title={copiedAccountNumber === item.account_number ? "Copied" : "Copy account number"}
+                                      onClick={() => void onCopyAccountNumber(item.account_number)}
+                                    >
+                                      {copiedAccountNumber === item.account_number ? (
+                                        <svg viewBox="0 0 20 20" focusable="false" aria-hidden="true">
+                                          <path d="M4 10.5 8.3 15 16 6.8" />
+                                        </svg>
+                                      ) : (
+                                        <svg viewBox="0 0 20 20" focusable="false" aria-hidden="true">
+                                          <path d="M7 3.5h8.5A1.5 1.5 0 0 1 17 5v10a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 15V5A1.5 1.5 0 0 1 7 3.5z" />
+                                          <path d="M4 13.5A1.5 1.5 0 0 1 2.5 12V4A1.5 1.5 0 0 1 4 2.5h8.5" />
+                                        </svg>
+                                      )}
+                                    </button>
+                                  </small>
                                 </td>
                                 <td>{normalizedStatus}</td>
                                 <td>
