@@ -723,19 +723,24 @@ const stabilizeRoomMarks = (previous: RoomState | null, incoming: RoomState | nu
 
 const resolveSyncedCards = (nextRoom: RoomState, nextCards: BingoCard[], previousCards: BingoCard[], previousRoom: RoomState | null) => {
   if (nextCards.length > 0) return nextCards;
+  const sameRoom = Boolean(previousRoom && previousRoom.id === nextRoom.id);
+  const sameRound = Boolean(sameRoom && previousRoom && previousRoom.round_id === nextRoom.round_id);
   if (
     previousCards.length > 0 &&
     previousRoom &&
-    previousRoom.id === nextRoom.id &&
-    previousRoom.round_id === nextRoom.round_id &&
+    sameRound &&
     previousRoom.phase === "playing" &&
     nextRoom.phase === "playing"
   ) {
     return previousCards;
   }
-  if (nextRoom.phase === "finished" && previousCards.length > 0) return previousCards;
-  if ((nextRoom.announcement_seconds ?? 0) > 0 && previousCards.length > 0) return previousCards;
-  return nextRoom.my_cartellas.length > 0 ? previousCards : [];
+  if (sameRound && nextRoom.phase === "finished" && previousCards.length > 0) return previousCards;
+  if (sameRound && (nextRoom.announcement_seconds ?? 0) > 0 && previousCards.length > 0) return previousCards;
+  if (nextRoom.my_cartellas.length > 0 && previousCards.length > 0) {
+    const filtered = previousCards.filter((card) => nextRoom.my_cartellas.includes(card.card_no));
+    if (filtered.length > 0) return filtered;
+  }
+  return [];
 };
 
 const stabilizePickerRoomState = (previous: RoomState | null, incoming: RoomState | null) => {
@@ -1169,6 +1174,7 @@ export default function App() {
   const lastPickerTransitionLogRef = useRef<string>("");
   const lastFinishedRoomRef = useRef<string | null>(null);
   const lastFinishedRedirectRef = useRef<string | null>(null);
+  const lastSeenRoundKeyRef = useRef<string>("");
   const adminDepositedDirtyByIdRef = useRef<Record<string, boolean>>({});
   const sharedStakeOpeningRef = useRef(false);
   const [ready, setReady] = useState(false);
@@ -1741,8 +1747,7 @@ export default function App() {
       const expectedLiveOrOwned =
         (stake.my_cards_current ?? 0) > 0 ||
         stake.open_available ||
-        stake.room_phase === "playing" ||
-        stake.room_phase === "selecting";
+        stake.room_phase === "playing";
 
       // Guard against stale snapshots during phase boundaries. Retry a few times
       // before deciding to render a finished view with no current ownership.
@@ -2219,7 +2224,7 @@ export default function App() {
 
   useEffect(() => {
     if (service === "game") {
-      setSessionPanelExpanded(typeof window === "undefined" ? true : window.innerWidth >= 1180);
+      setSessionPanelExpanded(true);
       setNowPlayingExpanded(true);
     }
   }, [service, room?.id]);
@@ -2230,6 +2235,20 @@ export default function App() {
       setNowPlayingExpanded(true);
     }
   }, [service, room?.phase, nowPlayingExpanded]);
+
+  useEffect(() => {
+    const nextRoundKey = room?.id && room?.round_id ? `${room.id}:${room.round_id}` : "";
+    if (!nextRoundKey) {
+      lastSeenRoundKeyRef.current = "";
+      return;
+    }
+    if (lastSeenRoundKeyRef.current && lastSeenRoundKeyRef.current !== nextRoundKey) {
+      setPendingMarkState({});
+      setAutoClaimRequested(false);
+      lastStableGameSnapshotRef.current = null;
+    }
+    lastSeenRoundKeyRef.current = nextRoundKey;
+  }, [room?.id, room?.round_id]);
 
   useEffect(() => {
     if (!cartellaOpen || !selectedStake || !isPageVisible) return;
@@ -3228,10 +3247,33 @@ export default function App() {
     if (typeof value !== "number") return;
     const roomId = room?.id;
     if (!roomId) return;
-    const targetCardNo = cardNoParam ?? selectedCardNo;
+    let workingRoom = room;
+    let targetCardNo = cardNoParam ?? selectedCardNo;
     if (!targetCardNo) return;
-    if (!room.my_cartellas.includes(targetCardNo)) {
-      const fallbackOwned = room.my_cartellas[0];
+
+    const ensureLatestOwnership = async () => {
+      const synced = await syncRoom(roomId);
+      const syncedCards = synced.cards ?? (synced.card ? [synced.card] : []);
+      const previousCards = latestCardsRef.current;
+      const previousRoom = latestRoomRef.current;
+      const resolvedCards = resolveSyncedCards(synced.room, syncedCards, previousCards, previousRoom);
+      setRoomWithPendingMarks(synced.room);
+      setCards(resolvedCards);
+      realtimeLastSyncAtRef.current = Date.now();
+      return synced.room;
+    };
+
+    if (!workingRoom.my_cartellas.includes(targetCardNo) || workingRoom.phase !== "playing" || !workingRoom.called_numbers.includes(value)) {
+      try {
+        workingRoom = await ensureLatestOwnership();
+      } catch {
+        // fall through with local snapshot
+      }
+      targetCardNo = cardNoParam ?? selectedCardNo ?? targetCardNo;
+    }
+
+    if (!workingRoom.my_cartellas.includes(targetCardNo)) {
+      const fallbackOwned = workingRoom.my_cartellas[0];
       if (fallbackOwned) {
         setSelectedCardNo(fallbackOwned);
         setNotice("Your active card changed in live sync. Switched to your owned card.");
@@ -3240,15 +3282,15 @@ export default function App() {
       }
       return;
     }
-    if (room.phase !== "playing") return;
-    if (!calledSet.has(value)) return;
+    if (workingRoom.phase !== "playing") return;
+    if (!workingRoom.called_numbers.includes(value)) return;
     const requestKey = buildMarkRequestKey(targetCardNo, value);
     if (pendingMarksRef.current[requestKey] !== undefined) return;
 
-    const currentMarks = targetCardNo === selectedCardNo ? markedNumbers : marksForCard(room, targetCardNo);
+    const currentMarks = targetCardNo === selectedCardNo ? markedNumbers : marksForCard(workingRoom, targetCardNo);
     const isAlreadyMarked = currentMarks.includes(value);
     if (isAlreadyMarked) {
-      if (room.auto_mark_called_numbers) {
+      if (workingRoom.auto_mark_called_numbers) {
         setNotice("Called numbers are auto-marked for this room.");
       }
       return;
@@ -3787,8 +3829,7 @@ export default function App() {
                       : stake.room_phase === "finished"
                         ? fmtClock(liveCountdown)
                       : "None";
-                const hasCurrentCards = (stake.my_cards_current ?? 0) > 0;
-                const canOpen = hasCurrentCards && stake.room_phase !== "finished";
+                const canOpen = Boolean(stake.open_available) || (isPlaying && (stake.my_cards_current ?? 0) > 0);
                 return (
                   <div key={stake.id} className={`stake-row ${stake.bonus ? "bonus" : ""}`}>
                     <span className="stake-col">

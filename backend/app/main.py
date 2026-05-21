@@ -1777,11 +1777,21 @@ def serialize_deposit_methods() -> list[dict]:
 
 
 def serialize_admin_audit_events(limit: int = 1000) -> list[dict]:
+    if PG_STORE.enabled():
+        try:
+            return PG_STORE.load_audit_events(limit=limit)
+        except Exception:
+            pass
     with AUDIT_EVENTS_LOCK:
         return [event.model_dump() for event in AUDIT_EVENTS[: max(1, limit)]]
 
 
 def serialize_deposited_records(limit: int = 5000) -> list[dict]:
+    if PG_STORE.enabled():
+        try:
+            return PG_STORE.load_audit_events(limit=limit, event_type="deposit_confirmed")
+        except Exception:
+            pass
     remaining = max(1, limit)
     rows: list[dict] = []
     with AUDIT_EVENTS_LOCK:
@@ -2720,28 +2730,34 @@ def append_audit_event(
     actor_phone: str | None = None,
     note: str | None = None,
 ) -> None:
+    event_payload = AuditEvent(
+        id=secrets.token_hex(10),
+        event_type=event_type,
+        created_at=utc_now().replace(microsecond=0).isoformat(),
+        phone_number=phone_number,
+        amount=round(float(amount), 2),
+        status=status,
+        method=method,
+        transaction_number=transaction_number,
+        withdraw_ticket_id=withdraw_ticket_id,
+        bank=bank,
+        account_number=account_number,
+        account_holder=account_holder,
+        actor_phone=actor_phone,
+        note=note,
+    )
+    if PG_STORE.enabled():
+        try:
+            PG_STORE.insert_audit_event(event_payload.model_dump(mode="json"))
+        except Exception as exc:
+            print(f"Failed to persist audit event {event_type}: {exc}")
+
     with AUDIT_EVENTS_LOCK:
-        AUDIT_EVENTS.insert(
-            0,
-            AuditEvent(
-                id=secrets.token_hex(10),
-                event_type=event_type,
-                created_at=utc_now().replace(microsecond=0).isoformat(),
-                phone_number=phone_number,
-                amount=round(float(amount), 2),
-                status=status,
-                method=method,
-                transaction_number=transaction_number,
-                withdraw_ticket_id=withdraw_ticket_id,
-                bank=bank,
-                account_number=account_number,
-                account_holder=account_holder,
-                actor_phone=actor_phone,
-                note=note,
-            ),
-        )
+        AUDIT_EVENTS.insert(0, event_payload)
         if len(AUDIT_EVENTS) > 5000:
             del AUDIT_EVENTS[5000:]
+        if PG_STORE.enabled():
+            return
         try:
             persist_audit_events()
         except Exception as exc:
@@ -3054,23 +3070,42 @@ def validate_receipt_recipient(method: DepositMethod, message: str | None, sourc
 
 
 def reserve_deposit_receipt(tx_number: str, phone_number: str, links: list[str]) -> None:
+    normalized_links = [link.strip().lower() for link in links if link and link.strip()]
+    if PG_STORE.enabled():
+        try:
+            reservation_error = PG_STORE.reserve_receipt(tx_number, phone_number, normalized_links)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Receipt verification unavailable. Please try again.") from exc
+        if reservation_error == "duplicate_tx_same_account":
+            raise HTTPException(status_code=409, detail="Invalid receipt: already used by this account.")
+        if reservation_error == "duplicate_tx_other_account":
+            raise HTTPException(status_code=409, detail="Invalid receipt: already used by another account.")
+        if reservation_error == "duplicate_link_same_account":
+            raise HTTPException(status_code=409, detail="Invalid receipt: receipt link already used by this account.")
+        if reservation_error == "duplicate_link_other_account":
+            raise HTTPException(status_code=409, detail="Invalid receipt: receipt link already used by another account.")
+        if reservation_error is None:
+            USED_DEPOSIT_TX[tx_number] = phone_number
+            for link in normalized_links:
+                USED_RECEIPT_LINKS[link] = phone_number
+            return
+
     existing_owner = USED_DEPOSIT_TX.get(tx_number)
     if existing_owner:
         if existing_owner == phone_number:
-            raise HTTPException(status_code=409, detail="This receipt is already used by this account.")
-        raise HTTPException(status_code=409, detail="This receipt is already used by another account.")
+            raise HTTPException(status_code=409, detail="Invalid receipt: already used by this account.")
+        raise HTTPException(status_code=409, detail="Invalid receipt: already used by another account.")
 
-    for link in links:
-        key = link.strip().lower()
+    for key in normalized_links:
         owner = USED_RECEIPT_LINKS.get(key)
         if owner:
             if owner == phone_number:
-                raise HTTPException(status_code=409, detail="This receipt link is already used by this account.")
-            raise HTTPException(status_code=409, detail="This receipt link is already used by another account.")
+                raise HTTPException(status_code=409, detail="Invalid receipt: receipt link already used by this account.")
+            raise HTTPException(status_code=409, detail="Invalid receipt: receipt link already used by another account.")
 
     USED_DEPOSIT_TX[tx_number] = phone_number
-    for link in links:
-        USED_RECEIPT_LINKS[link.strip().lower()] = phone_number
+    for key in normalized_links:
+        USED_RECEIPT_LINKS[key] = phone_number
     persist_receipt_cache()
 
 
@@ -3333,6 +3368,9 @@ def refresh_rooms_from_primary_store(force: bool = False) -> None:
 def get_or_create_room(stake: StakeOption) -> RoomStore:
     refresh_rooms_from_primary_store()
     room = ROOMS.get(stake.id)
+    if room is None and PG_STORE.enabled():
+        refresh_rooms_from_primary_store(force=True)
+        room = ROOMS.get(stake.id)
     if room is None:
         room = create_room(stake)
         ROOMS[stake.id] = room
@@ -4556,6 +4594,20 @@ def update_admin_deposited_record(
     note_value = payload.note.strip() if payload.note else None
     now_iso = utc_now().replace(microsecond=0).isoformat()
 
+    if PG_STORE.enabled():
+        item_payload = PG_STORE.update_deposited_record(
+            event_id,
+            amount=payload.amount,
+            method=payload.method,
+            transaction_number=normalized_tx_number or None,
+            note=note_value,
+            actor_phone=user.phone_number,
+            updated_at=now_iso,
+        )
+        if item_payload is None:
+            raise HTTPException(status_code=404, detail="Deposited record not found")
+        return {"message": "Deposited record updated.", "item": item_payload}
+
     with AUDIT_EVENTS_LOCK:
         event = next((item for item in AUDIT_EVENTS if item.id == event_id and item.event_type == "deposit_confirmed"), None)
         if event is None:
@@ -4794,7 +4846,7 @@ def submit_deposit(payload: DepositRequest, user: UserStore = Depends(get_curren
         note="Deposit confirmed and wallet credited.",
     )
     return {
-        "message": f"Deposit request accepted via {payload.method}.",
+        "message": "Deposit made successfully.",
         "wallet": user.wallet.model_dump(),
     }
 

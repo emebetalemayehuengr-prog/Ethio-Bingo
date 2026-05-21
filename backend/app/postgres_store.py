@@ -224,7 +224,9 @@ class PostgresStateStore:
                         account_number TEXT NULL,
                         account_holder TEXT NULL,
                         actor_phone TEXT NULL,
-                        note TEXT NULL
+                        note TEXT NULL,
+                        updated_at TEXT NULL,
+                        updated_by TEXT NULL
                     );
                 """
                 for stmt in _split_sql_statements(schema_sql):
@@ -237,6 +239,8 @@ class PostgresStateStore:
                 cur.execute("ALTER TABLE withdraw_requests ADD COLUMN IF NOT EXISTS admin_note TEXT NULL")
                 cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at TEXT NULL")
                 cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS expires_at TEXT NULL")
+                cur.execute("ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS updated_at TEXT NULL")
+                cur.execute("ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS updated_by TEXT NULL")
             conn.commit()
 
     def is_empty(self) -> bool:
@@ -509,6 +513,8 @@ class PostgresStateStore:
                         "account_holder": str(row["account_holder"]) if row["account_holder"] is not None else None,
                         "actor_phone": str(row["actor_phone"]) if row["actor_phone"] is not None else None,
                         "note": str(row["note"]) if row["note"] is not None else None,
+                        "updated_at": str(row.get("updated_at")) if row.get("updated_at") is not None else None,
+                        "updated_by": str(row.get("updated_by")) if row.get("updated_by") is not None else None,
                     }
                     for row in cur.execute("SELECT * FROM audit_events ORDER BY created_at DESC").fetchall()
                 ]
@@ -1125,6 +1131,13 @@ class PostgresStateStore:
             key -= 2**64
         return key
 
+    def _advisory_key_for_text(self, namespace: str, value: str) -> int:
+        digest = hashlib.sha256(f"{namespace}:{value}".encode("utf-8")).digest()[:8]
+        key = int.from_bytes(digest, "big", signed=False)
+        if key >= 2**63:
+            key -= 2**64
+        return key
+
     def persist_rooms(self, rooms: dict[str, Any]) -> None:
         with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
@@ -1216,6 +1229,58 @@ class PostgresStateStore:
                         (link_key, phone),
                     )
             conn.commit()
+
+    def reserve_receipt(self, tx_number: str, phone_number: str, links: list[str]) -> str | None:
+        if not self.enabled():
+            raise RuntimeError("Postgres store is not enabled")
+
+        tx = str(tx_number).strip()
+        phone = str(phone_number).strip()
+        normalized_links = sorted({str(link).strip().lower() for link in links if str(link).strip()})
+        if not tx:
+            raise ValueError("invalid_tx")
+        if not phone:
+            raise ValueError("invalid_phone")
+
+        with psycopg.connect(self.dsn, row_factory=dict_row, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                lock_keys = [self._advisory_key_for_text("receipt-tx", tx)]
+                lock_keys.extend(self._advisory_key_for_text("receipt-link", link) for link in normalized_links)
+                for key in sorted(set(lock_keys)):
+                    cur.execute("SELECT pg_advisory_xact_lock(%s)", (key,))
+
+                existing_tx = cur.execute(
+                    "SELECT phone_number FROM receipt_reservations WHERE tx_number = %s",
+                    (tx,),
+                ).fetchone()
+                if existing_tx:
+                    owner = str(existing_tx["phone_number"])
+                    if owner == phone:
+                        return "duplicate_tx_same_account"
+                    return "duplicate_tx_other_account"
+
+                for link in normalized_links:
+                    existing_link = cur.execute(
+                        "SELECT phone_number FROM receipt_links WHERE link_key = %s",
+                        (link,),
+                    ).fetchone()
+                    if existing_link:
+                        owner = str(existing_link["phone_number"])
+                        if owner == phone:
+                            return "duplicate_link_same_account"
+                        return "duplicate_link_other_account"
+
+                cur.execute(
+                    "INSERT INTO receipt_reservations(tx_number, phone_number) VALUES (%s, %s)",
+                    (tx, phone),
+                )
+                for link in normalized_links:
+                    cur.execute(
+                        "INSERT INTO receipt_links(link_key, phone_number) VALUES (%s, %s)",
+                        (link, phone),
+                    )
+            conn.commit()
+        return None
 
     def persist_withdraw_tickets(self, tickets: list[dict[str, Any]]) -> None:
         with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
@@ -1318,6 +1383,157 @@ class PostgresStateStore:
                         ),
                     )
             conn.commit()
+
+    def insert_audit_event(self, event: dict[str, Any]) -> None:
+        if not self.enabled():
+            raise RuntimeError("Postgres store is not enabled")
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO audit_events(
+                        id, event_type, created_at, phone_number, amount, status, method, transaction_number,
+                        withdraw_ticket_id, bank, account_number, account_holder, actor_phone, note, updated_at, updated_by
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(id) DO UPDATE SET
+                        event_type = EXCLUDED.event_type,
+                        created_at = EXCLUDED.created_at,
+                        phone_number = EXCLUDED.phone_number,
+                        amount = EXCLUDED.amount,
+                        status = EXCLUDED.status,
+                        method = EXCLUDED.method,
+                        transaction_number = EXCLUDED.transaction_number,
+                        withdraw_ticket_id = EXCLUDED.withdraw_ticket_id,
+                        bank = EXCLUDED.bank,
+                        account_number = EXCLUDED.account_number,
+                        account_holder = EXCLUDED.account_holder,
+                        actor_phone = EXCLUDED.actor_phone,
+                        note = EXCLUDED.note,
+                        updated_at = EXCLUDED.updated_at,
+                        updated_by = EXCLUDED.updated_by
+                    """,
+                    (
+                        event.get("id"),
+                        event.get("event_type"),
+                        event.get("created_at"),
+                        event.get("phone_number"),
+                        round(float(event.get("amount", 0.0)), 2),
+                        event.get("status"),
+                        event.get("method"),
+                        event.get("transaction_number"),
+                        event.get("withdraw_ticket_id"),
+                        event.get("bank"),
+                        event.get("account_number"),
+                        event.get("account_holder"),
+                        event.get("actor_phone"),
+                        event.get("note"),
+                        event.get("updated_at"),
+                        event.get("updated_by"),
+                    ),
+                )
+            conn.commit()
+
+    def load_audit_events(self, limit: int = 1000, event_type: str | None = None) -> list[dict[str, Any]]:
+        if not self.enabled():
+            return []
+        safe_limit = max(1, min(5000, int(limit)))
+        with psycopg.connect(self.dsn, row_factory=dict_row, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                if event_type:
+                    rows = cur.execute(
+                        "SELECT * FROM audit_events WHERE event_type = %s ORDER BY created_at DESC LIMIT %s",
+                        (event_type, safe_limit),
+                    ).fetchall()
+                else:
+                    rows = cur.execute(
+                        "SELECT * FROM audit_events ORDER BY created_at DESC LIMIT %s",
+                        (safe_limit,),
+                    ).fetchall()
+        return [
+            {
+                "id": str(row["id"]),
+                "event_type": str(row["event_type"]),
+                "created_at": str(row["created_at"]),
+                "phone_number": str(row["phone_number"]),
+                "amount": float(row["amount"]),
+                "status": str(row["status"]),
+                "method": str(row["method"]) if row["method"] is not None else None,
+                "transaction_number": str(row["transaction_number"]) if row["transaction_number"] is not None else None,
+                "withdraw_ticket_id": str(row["withdraw_ticket_id"]) if row["withdraw_ticket_id"] is not None else None,
+                "bank": str(row["bank"]) if row["bank"] is not None else None,
+                "account_number": str(row["account_number"]) if row["account_number"] is not None else None,
+                "account_holder": str(row["account_holder"]) if row["account_holder"] is not None else None,
+                "actor_phone": str(row["actor_phone"]) if row["actor_phone"] is not None else None,
+                "note": str(row["note"]) if row["note"] is not None else None,
+                "updated_at": str(row["updated_at"]) if row["updated_at"] is not None else None,
+                "updated_by": str(row["updated_by"]) if row["updated_by"] is not None else None,
+            }
+            for row in rows
+        ]
+
+    def update_deposited_record(
+        self,
+        event_id: str,
+        *,
+        amount: float,
+        method: str | None,
+        transaction_number: str | None,
+        note: str | None,
+        actor_phone: str,
+        updated_at: str,
+    ) -> dict[str, Any] | None:
+        if not self.enabled():
+            raise RuntimeError("Postgres store is not enabled")
+        with psycopg.connect(self.dsn, row_factory=dict_row, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                row = cur.execute(
+                    """
+                    UPDATE audit_events
+                    SET
+                        amount = %s,
+                        method = COALESCE(%s, method),
+                        transaction_number = COALESCE(%s, transaction_number),
+                        note = %s,
+                        actor_phone = %s,
+                        updated_at = %s,
+                        updated_by = %s
+                    WHERE id = %s
+                      AND event_type = 'deposit_confirmed'
+                    RETURNING *
+                    """,
+                    (
+                        round(float(amount), 2),
+                        method,
+                        transaction_number,
+                        note,
+                        actor_phone,
+                        updated_at,
+                        actor_phone,
+                        event_id,
+                    ),
+                ).fetchone()
+            conn.commit()
+        if not row:
+            return None
+        return {
+            "id": str(row["id"]),
+            "event_type": str(row["event_type"]),
+            "created_at": str(row["created_at"]),
+            "phone_number": str(row["phone_number"]),
+            "amount": float(row["amount"]),
+            "status": str(row["status"]),
+            "method": str(row["method"]) if row["method"] is not None else None,
+            "transaction_number": str(row["transaction_number"]) if row["transaction_number"] is not None else None,
+            "withdraw_ticket_id": str(row["withdraw_ticket_id"]) if row["withdraw_ticket_id"] is not None else None,
+            "bank": str(row["bank"]) if row["bank"] is not None else None,
+            "account_number": str(row["account_number"]) if row["account_number"] is not None else None,
+            "account_holder": str(row["account_holder"]) if row["account_holder"] is not None else None,
+            "actor_phone": str(row["actor_phone"]) if row["actor_phone"] is not None else None,
+            "note": str(row["note"]) if row["note"] is not None else None,
+            "updated_at": str(row["updated_at"]) if row["updated_at"] is not None else None,
+            "updated_by": str(row["updated_by"]) if row["updated_by"] is not None else None,
+        }
 
 
 def read_sqlite_state(sqlite_path: Path) -> dict[str, Any]:
