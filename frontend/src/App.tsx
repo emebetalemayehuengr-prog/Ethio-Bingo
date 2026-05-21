@@ -1619,7 +1619,17 @@ export default function App() {
     setWorking(true);
     setError("");
     try {
-      const res = await fetchStakeRoom(stake.id);
+      let res = await fetchStakeRoom(stake.id);
+      // Guard against stale room snapshots during phase transitions:
+      // if dashboard says live/selecting but first sync says finished,
+      // force a second sync before deciding what to render.
+      if ((stake.room_phase === "playing" || stake.room_phase === "selecting") && res.room.phase === "finished") {
+        try {
+          res = await fetchStakeRoom(stake.id);
+        } catch {
+          // Keep initial snapshot if retry fails.
+        }
+      }
       setPickerRoomWithSyncMeta(res.room);
       setRoomWithPendingMarks(res.room);
       const ownedCards = res.cards ?? (res.card ? [res.card] : []);
@@ -2390,10 +2400,24 @@ export default function App() {
     setWorking(true);
     setError("");
     try {
+      const shouldPreflightReserve = !preview || preview.card_no !== selectedCartella;
+      let candidateRoom = pickerRoom;
+      if (shouldPreflightReserve) {
+        const reserveRoundId =
+          candidateRoom?.active_queue === "next"
+            ? candidateRoom?.next_round_id
+            : candidateRoom?.round_id ?? room?.round_id;
+        const reserve = await previewCard(selectedStake.id, selectedCartella, reserveRoundId);
+        setPickerRoomWithSyncMeta(reserve.room);
+        setRoomWithPendingMarks(reserve.room);
+        setPreview(reserve.card);
+        candidateRoom = reserve.room;
+      }
+
       const preferredRoundId =
-        pickerRoom?.active_queue === "next"
-          ? pickerRoom?.next_round_id
-          : pickerRoom?.round_id ?? room?.round_id;
+        candidateRoom?.active_queue === "next"
+          ? candidateRoom?.next_round_id
+          : candidateRoom?.round_id ?? room?.round_id;
       let res;
       try {
         res = await joinStake(selectedStake.id, selectedCartella, preferredRoundId);
@@ -2409,7 +2433,12 @@ export default function App() {
           refreshed.room.active_queue === "next"
             ? refreshed.room.next_round_id
             : refreshed.room.round_id;
-        res = await joinStake(selectedStake.id, selectedCartella, refreshedRoundId);
+        const reserve = await previewCard(selectedStake.id, selectedCartella, refreshedRoundId);
+        setPickerRoomWithSyncMeta(reserve.room);
+        setRoomWithPendingMarks(reserve.room);
+        setPreview(reserve.card);
+        const confirmedRoundId = reserve.room.active_queue === "next" ? reserve.room.next_round_id : reserve.room.round_id;
+        res = await joinStake(selectedStake.id, selectedCartella, confirmedRoundId);
       }
       setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
       setDashboard((prev) => {
@@ -2839,7 +2868,10 @@ export default function App() {
   }, [overlayOpen, showBrandModal, shareQrOpen, selectedBet?.id, depositGuideOpen, cartellaOpen, drawerOpen]);
 
   useEffect(() => {
-    const showResultOverlay = room?.phase === "finished" && (room?.winners?.length ?? 0) > 0;
+    const showResultOverlay =
+      room?.phase === "finished" &&
+      (room?.winners?.length ?? 0) > 0 &&
+      (room?.next_my_cartellas?.length ?? 0) === 0;
     if (service !== "game" || !room || !card || showResultOverlay) return;
 
     let frameId = 0;
@@ -2968,11 +3000,14 @@ export default function App() {
     if (pendingMarksRef.current[requestKey] !== undefined) return;
 
     const currentMarks = targetCardNo === selectedCardNo ? markedNumbers : marksForCard(room, targetCardNo);
-    const nextMarked = !currentMarks.includes(value);
-    if (room.auto_mark_called_numbers && !nextMarked) {
-      setNotice("Called numbers are auto-marked for this room.");
+    const isAlreadyMarked = currentMarks.includes(value);
+    if (isAlreadyMarked) {
+      if (room.auto_mark_called_numbers) {
+        setNotice("Called numbers are auto-marked for this room.");
+      }
       return;
     }
+    const nextMarked = true;
     setSelectedCardNo(targetCardNo);
     setPendingMarkState({ ...pendingMarksRef.current, [requestKey]: nextMarked });
     setRoom((prev) => applyMarkMutationToRoom(prev, targetCardNo, value, nextMarked));
@@ -3091,23 +3126,31 @@ export default function App() {
     return Math.max(0, Math.ceil((deadline - stakeCountdownNow) / 1000));
   };
 
-  const getAuthoritativeCallCountdown = (state: RoomState | null, syncedAtMs: number) => {
-    if (!state || state.phase !== "playing") return Math.max(0, state?.call_countdown_seconds ?? 0);
-    const fallback = Math.max(0, state.call_countdown_seconds);
-    if (typeof state.server_time_ms !== "number" || typeof state.next_call_at_ms !== "number") return fallback;
+  const getAuthoritativePhaseCountdown = (state: RoomState | null, syncedAtMs: number) => {
+    if (!state) return 0;
     const elapsedSinceSyncMs = Math.max(0, liveCountdownNow - syncedAtMs);
-    const virtualServerNowMs = state.server_time_ms + elapsedSinceSyncMs;
-    return Math.max(0, Math.ceil((state.next_call_at_ms - virtualServerNowMs) / 1000));
+
+    if (state.phase === "playing") {
+      const fallback = Math.max(0, state.call_countdown_seconds);
+      if (typeof state.server_time_ms === "number" && typeof state.next_call_at_ms === "number") {
+        const virtualServerNowMs = state.server_time_ms + elapsedSinceSyncMs;
+        return Math.max(0, Math.ceil((state.next_call_at_ms - virtualServerNowMs) / 1000));
+      }
+      return Math.max(0, Math.ceil(Math.max(0, fallback * 1000 - elapsedSinceSyncMs) / 1000));
+    }
+
+    if (state.phase === "selecting") {
+      const fallback = Math.max(0, state.countdown_seconds ?? 0);
+      return Math.max(0, Math.ceil(Math.max(0, fallback * 1000 - elapsedSinceSyncMs) / 1000));
+    }
+
+    const fallback = Math.max(0, state.announcement_seconds ?? 0);
+    return Math.max(0, Math.ceil(Math.max(0, fallback * 1000 - elapsedSinceSyncMs) / 1000));
   };
 
   const bingoClaimable = room?.phase === "playing" && !!card ? hasBingo(card, room?.called_numbers ?? [], markedNumbers) : false;
-  const liveCallCountdown = getAuthoritativeCallCountdown(room, roomSyncReceivedAtRef.current);
-  const gameCountdownValue =
-    room?.phase === "selecting"
-      ? room.countdown_seconds
-      : room?.phase === "playing"
-        ? liveCallCountdown
-        : room?.announcement_seconds ?? 0;
+  const liveCallCountdown = room?.phase === "playing" ? getAuthoritativePhaseCountdown(room, roomSyncReceivedAtRef.current) : 0;
+  const gameCountdownValue = getAuthoritativePhaseCountdown(room, roomSyncReceivedAtRef.current);
   const gameCountdownLabel = `0:${String(Math.max(0, gameCountdownValue)).padStart(2, "0")}`;
   const gameStatusLabel =
     room?.phase === "selecting"
@@ -3119,7 +3162,8 @@ export default function App() {
         : room?.announcement_seconds
           ? `Next game in ${room.announcement_seconds}s`
           : "Round Complete";
-  const pickerLiveCallCountdown = getAuthoritativeCallCountdown(pickerRoom, pickerRoomSyncReceivedAtRef.current);
+  const pickerLiveCallCountdown =
+    pickerRoom?.phase === "playing" ? getAuthoritativePhaseCountdown(pickerRoom, pickerRoomSyncReceivedAtRef.current) : 0;
   const currentPaidCount = room?.current_paid_count ?? room?.display_paid_count ?? room?.paid_cartellas.length ?? 0;
   const currentTotalSales = room ? room.current_total_sales ?? currentPaidCount * room.card_price : 0;
   const currentHouseCommission = room ? room.current_house_commission ?? currentTotalSales * 0.15 : 0;
@@ -3127,7 +3171,10 @@ export default function App() {
   const winnerEntries = room?.winners ?? [];
   const myWinnerEntry = winnerEntries.find((entry) => entry.phone_number === profile.phone_number) ?? null;
   const resultAmount = myWinnerEntry?.payout ?? winnerEntries[0]?.payout ?? 0;
-  const showResultOverlay = room?.phase === "finished" && winnerEntries.length > 0;
+  const showResultOverlay =
+    room?.phase === "finished" &&
+    winnerEntries.length > 0 &&
+    (room?.next_my_cartellas?.length ?? 0) === 0;
   const sessionPanelId = room ? `game-session-panel-${room.id}` : "game-session-panel";
   const nowPlayingPanelId = room ? `now-playing-panel-${room.id}` : "now-playing-panel";
   const callerLockedOpen =
@@ -3136,12 +3183,7 @@ export default function App() {
     (room.phase === "playing" || (room.phase === "selecting" && (room.called_numbers?.length ?? 0) > 0));
   const effectiveNowPlayingExpanded = callerLockedOpen ? true : nowPlayingExpanded;
   const nowPlayingCardLabel = selectedCardNo ? `Card ${selectedCardNo}` : `${cards.length} ${cards.length === 1 ? "Card" : "Cards"}`;
-  const pickerCountdownValue =
-    pickerRoom?.phase === "selecting"
-      ? pickerRoom.countdown_seconds
-      : pickerRoom?.phase === "playing"
-        ? pickerLiveCallCountdown
-        : pickerRoom?.announcement_seconds ?? 0;
+  const pickerCountdownValue = getAuthoritativePhaseCountdown(pickerRoom, pickerRoomSyncReceivedAtRef.current);
   const pickerPaidCount = pickerRoom?.display_paid_count ?? pickerRoom?.paid_cartellas.length ?? 0;
   const lockedPickerPaidCount = Math.max(pickerPaidCount, lockedPickerPaidCartellas.length);
   const pickerPhase = pickerRoom?.phase ?? "selecting";
@@ -3149,10 +3191,10 @@ export default function App() {
     pickerRoom?.active_queue === "next"
       ? "Holding open for next game"
       : pickerRoom?.phase === "selecting"
-        ? `Game starts in ${Math.max(0, pickerRoom?.countdown_seconds ?? 0)}s`
-        : pickerRoom?.phase === "playing"
-          ? "Live calls in progress"
-          : `Next game opens in ${Math.max(0, pickerRoom?.announcement_seconds ?? 0)}s`;
+        ? `Game starts in ${Math.max(0, pickerCountdownValue)}s`
+      : pickerRoom?.phase === "playing"
+        ? "Live calls in progress"
+          : `Next game opens in ${Math.max(0, pickerCountdownValue)}s`;
   const cardBuyAmount = selectedStake?.stake ?? pickerRoom?.card_price ?? 0;
   const insufficientCardBalance = cardBuyAmount > 0 && wallet.main_balance < cardBuyAmount;
   const latestBallLetter = typeof room?.latest_number === "number" ? toBingoLetter(room.latest_number) : null;
@@ -3198,7 +3240,7 @@ export default function App() {
                   setSelectedCardNo(ownedCard.card_no);
                   void toggleMarked(value, ownedCard.card_no);
                 }}
-                disabled={typeof value !== "number" || !clickable || markPending || room?.phase !== "playing"}
+                disabled={typeof value !== "number" || !clickable || marked || markPending || room?.phase !== "playing"}
               >
                 {value}
               </button>

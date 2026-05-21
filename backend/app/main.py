@@ -3457,16 +3457,18 @@ def compute_effective_marks_for_user_card(
 ) -> tuple[list[int], bool]:
     key = mark_key(phone_number, cartella_no)
     existing = get_user_marked_numbers(room, phone_number, cartella_no)
-    allowed_marks = sorted(called_set.intersection(card_numbers_set(cartella_no)))
     if auto_mark_enabled:
+        allowed_marks = sorted(called_set.intersection(card_numbers_set(cartella_no)))
         next_marks = allowed_marks
-    else:
-        allowed_set = set(allowed_marks)
-        next_marks = [value for value in existing if value in allowed_set]
-    changed = next_marks != existing
-    if changed:
-        room.marked_by_user_card[key] = next_marks
-    return next_marks, changed
+        changed = next_marks != existing
+        if changed:
+            room.marked_by_user_card[key] = next_marks
+        return next_marks, changed
+
+    # Manual mode: never auto-prune user marks during room sync.
+    # This prevents transient sync jitter from silently removing clicks.
+    room.marked_by_user_card[key] = existing
+    return existing, False
 
 
 def card_numbers_set(cartella_no: int) -> set[int]:
@@ -5125,14 +5127,15 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
 
     user_cards_in_queue = get_user_cartellas_from_map(taken_map, user.phone_number)
     if payload.cartella_no in user_cards_in_queue:
-        current_cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in get_user_cartellas_from_map(room.taken_cartellas, user.phone_number)]
+        room_state = build_room_state(room, user.phone_number)
+        current_cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in room_state.my_cartellas]
         return {
             "message": "You already own this cartella.",
             "stake": stake.model_dump(),
             "wallet": user.wallet.model_dump(),
             "card": create_bingo_card(payload.cartella_no).model_dump(),
             "cards": current_cards,
-            "room": build_room_state(room, user.phone_number).model_dump(),
+            "room": room_state.model_dump(),
             "queue": queue,
         }
 
@@ -5220,15 +5223,16 @@ def join_stake(payload: JoinStakeRequest, user: UserStore = Depends(get_current_
         persist_room(room)
     emit_room_push_update(room, reason="join", force=True)
 
+    room_state = build_room_state(room, user.phone_number)
     card = create_bingo_card(payload.cartella_no)
-    current_cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in get_user_cartellas_from_map(room.taken_cartellas, user.phone_number)]
+    current_cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in room_state.my_cartellas]
     return {
         "message": "Card purchased for current game." if queue == "current" else "Card booked for next game.",
         "stake": stake.model_dump(),
         "wallet": user.wallet.model_dump(),
         "card": card.model_dump(),
         "cards": current_cards,
-        "room": build_room_state(room, user.phone_number).model_dump(),
+        "room": room_state.model_dump(),
         "queue": queue,
     }
 
@@ -5238,10 +5242,11 @@ def get_room_by_stake(stake_id: str, user: UserStore = Depends(get_current_user)
     stake = find_stake(stake_id)
     room = get_or_create_room(stake)
     refresh_user_holds(room, user.phone_number)
-    cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in get_user_cartellas_from_map(room.taken_cartellas, user.phone_number)]
+    room_state = build_room_state(room, user.phone_number)
+    cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in room_state.my_cartellas]
     card = cards[0] if cards else None
     return {
-        "room": build_room_state(room, user.phone_number).model_dump(),
+        "room": room_state.model_dump(),
         "card": card,
         "cards": cards,
     }
@@ -5250,11 +5255,11 @@ def get_room_by_stake(stake_id: str, user: UserStore = Depends(get_current_user)
 @app.get("/api/game/room/{room_id}")
 def get_room(room_id: str, user: UserStore = Depends(get_current_user)) -> dict:
     room = get_room_by_id(room_id)
-
-    cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in get_user_cartellas_from_map(room.taken_cartellas, user.phone_number)]
+    room_state = build_room_state(room, user.phone_number)
+    cards = [create_bingo_card(cartella_no).model_dump() for cartella_no in room_state.my_cartellas]
     card = cards[0] if cards else None
     return {
-        "room": build_room_state(room, user.phone_number).model_dump(),
+        "room": room_state.model_dump(),
         "card": card,
         "cards": cards,
     }
