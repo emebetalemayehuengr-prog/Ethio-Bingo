@@ -48,6 +48,7 @@ import type {
   Wallet,
   WithdrawTicket,
 } from "./types";
+import DepositModalContent from "./components/modals/DepositModalContent";
 
 type AuthMode = "login" | "signup";
 type ServiceView = "home" | "stakes" | "game" | "casino" | "casino-launch" | "wallet" | "history" | "how" | "contact";
@@ -87,12 +88,10 @@ declare global {
 }
 
 const loadCartellaModalContent = () => import("./components/modals/CartellaModalContent");
-const loadDepositModalContent = () => import("./components/modals/DepositModalContent");
 const loadBetHistoryModalContent = () => import("./components/modals/BetHistoryModalContent");
 const loadBrandModalContent = () => import("./components/modals/BrandModalContent");
 
 const CartellaModalContent = lazy(loadCartellaModalContent);
-const DepositModalContent = lazy(loadDepositModalContent);
 const BetHistoryModalContent = lazy(loadBetHistoryModalContent);
 const BrandModalContent = lazy(loadBrandModalContent);
 
@@ -1705,10 +1704,6 @@ export default function App() {
       void loadCartellaModalContent();
       return;
     }
-    if (service === "wallet") {
-      void loadDepositModalContent();
-      return;
-    }
     if (service === "history") {
       void loadBetHistoryModalContent();
     }
@@ -2051,8 +2046,9 @@ export default function App() {
       } else if (service === "game") {
         // Never switch service from popstate while caller is open.
         // Game -> Rooms transition must only happen through explicit app flow (finished round redirect).
-      } else if (service !== "home") {
-        setService("home");
+      } else {
+        // Do not force-navigate to home on generic history events.
+        // Some webviews emit popstate unexpectedly, which caused random kickouts.
       }
       try {
         const currentState =
@@ -4950,51 +4946,40 @@ export default function App() {
             tabIndex={-1}
             onClick={(event) => event.stopPropagation()}
           >
-            <Suspense
-              fallback={
-                <ModalBodyFallback
-                  title={selectedMethod?.label ?? "Deposit"}
-                  message="Loading deposit instructions..."
-                  onClose={() => setDepositGuideOpen(false)}
-                  headingId="deposit-dialog-title"
-                />
-              }
-            >
-              <DepositModalContent
-                selectedMethod={selectedMethod}
-                selectedMethodDraftAccounts={selectedMethodDraftAccounts}
-                isAdmin={profile.is_admin}
-                copiedPhone={copiedPhone}
-                adminWorking={selectedMethodAdminSaving}
-                submitWorking={depositSubmitting}
-                fieldErrors={{
-                  depositAmount: walletFieldErrors.depositAmount,
-                  txNo: walletFieldErrors.txNo,
-                  receiptMessage: walletFieldErrors.receiptMessage,
-                }}
-                depositAmount={depositAmount}
-                txNo={txNo}
-                receiptMessage={receiptMessage}
-                onClose={() => setDepositGuideOpen(false)}
-                onCopyPhone={(phone) => void onCopyPhone(phone)}
-                onDraftPhoneChange={onDraftPhoneChange}
-                onDraftOwnerChange={onDraftOwnerChange}
-                onRemoveDraftAccount={onRemoveDraftAccount}
-                onAddDraftAccount={onAddDraftAccount}
-                onSaveAccounts={(code) => void onSaveDepositAccounts(code)}
-                onDepositAmountChange={(value) => {
-                  clearWalletFieldError("depositAmount");
-                  setDepositAmount(value);
-                }}
-                onTxChange={onDepositTxChange}
-                onTxBlur={(value) => {
-                  clearWalletFieldError("txNo");
-                  setTxNo(normalizeTransactionNumberInput(value));
-                }}
-                onReceiptChange={onDepositReceiptChange}
-                onSubmit={submitDepositForm}
-              />
-            </Suspense>
+            <DepositModalContent
+              selectedMethod={selectedMethod}
+              selectedMethodDraftAccounts={selectedMethodDraftAccounts}
+              isAdmin={profile.is_admin}
+              copiedPhone={copiedPhone}
+              adminWorking={selectedMethodAdminSaving}
+              submitWorking={depositSubmitting}
+              fieldErrors={{
+                depositAmount: walletFieldErrors.depositAmount,
+                txNo: walletFieldErrors.txNo,
+                receiptMessage: walletFieldErrors.receiptMessage,
+              }}
+              depositAmount={depositAmount}
+              txNo={txNo}
+              receiptMessage={receiptMessage}
+              onClose={() => setDepositGuideOpen(false)}
+              onCopyPhone={(phone) => void onCopyPhone(phone)}
+              onDraftPhoneChange={onDraftPhoneChange}
+              onDraftOwnerChange={onDraftOwnerChange}
+              onRemoveDraftAccount={onRemoveDraftAccount}
+              onAddDraftAccount={onAddDraftAccount}
+              onSaveAccounts={(code) => void onSaveDepositAccounts(code)}
+              onDepositAmountChange={(value) => {
+                clearWalletFieldError("depositAmount");
+                setDepositAmount(value);
+              }}
+              onTxChange={onDepositTxChange}
+              onTxBlur={(value) => {
+                clearWalletFieldError("txNo");
+                setTxNo(normalizeTransactionNumberInput(value));
+              }}
+              onReceiptChange={onDepositReceiptChange}
+              onSubmit={submitDepositForm}
+            />
           </div>
         </div>
       )}

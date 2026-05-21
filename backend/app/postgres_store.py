@@ -1513,7 +1513,6 @@ class PostgresStateStore:
                     SELECT id, phone_number, amount, status, created_at
                     FROM transactions
                     WHERE type = 'Deposit'
-                      AND status = 'Completed'
                       {where_sql}
                     ORDER BY created_at DESC
                     LIMIT %s

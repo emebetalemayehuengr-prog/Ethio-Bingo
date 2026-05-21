@@ -1832,7 +1832,7 @@ def serialize_legacy_deposit_transactions(limit: int = 5000, day: str | None = N
     rows: list[dict] = []
     for phone_number, user in USERS.items():
         for idx, entry in enumerate(user.history):
-            if entry.type != "Deposit" or entry.status != "Completed":
+            if entry.type != "Deposit":
                 continue
             created_at = str(entry.created_at)
             if day and not created_at.startswith(day):
@@ -1846,7 +1846,7 @@ def serialize_legacy_deposit_transactions(limit: int = 5000, day: str | None = N
                     "created_at": created_at,
                     "phone_number": phone_number,
                     "amount": amount_value,
-                    "status": "Completed",
+                    "status": str(entry.status),
                     "method": None,
                     "transaction_number": None,
                     "withdraw_ticket_id": None,
