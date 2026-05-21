@@ -125,6 +125,7 @@ const PUSHER_JS_URL = "https://js.pusher.com/8.4.0/pusher.min.js";
 const REALTIME_SYNC_THROTTLE_MS = 400;
 const REALTIME_PUSH_STALE_MS = 6000;
 const REALTIME_FALLBACK_POLL_MS = 2500;
+const OPEN_STALE_FINISHED_RETRIES = 3;
 
 let pusherScriptReadyPromise: Promise<void> | null = null;
 function ensurePusherScriptLoaded() {
@@ -581,6 +582,28 @@ const getPickerQueueKey = (state: RoomState | null) => {
   if (!state) return "";
   const queueRoundId = state.active_queue === "next" ? state.next_round_id : state.round_id;
   return `${state.id}:${state.active_queue}:${queueRoundId}:${state.phase}`;
+};
+
+const deriveStakeUiFromRoom = (stake: StakeOption, room: RoomState): StakeOption => {
+  const myCardsCurrent = room.my_cartellas?.length ?? stake.my_cards_current;
+  const myCardsNext = room.next_my_cartellas?.length ?? stake.my_cards_next;
+  const phase = room.phase;
+  const status: StakeOption["status"] = phase === "playing" ? "playing" : "countdown";
+  const countdownSeconds =
+    phase === "selecting"
+      ? room.countdown_seconds
+      : phase === "finished"
+        ? room.announcement_seconds
+        : null;
+  return {
+    ...stake,
+    status,
+    countdown_seconds: countdownSeconds,
+    room_phase: phase,
+    my_cards_current: myCardsCurrent,
+    my_cards_next: myCardsNext,
+    open_available: phase === "playing" && myCardsCurrent > 0,
+  };
 };
 
 const stabilizeRoomMarks = (previous: RoomState | null, incoming: RoomState | null) => {
@@ -1620,19 +1643,31 @@ export default function App() {
     setError("");
     try {
       let res = await fetchStakeRoom(stake.id);
-      // Guard against stale room snapshots during phase transitions:
-      // if dashboard says live/selecting but first sync says finished,
-      // force a second sync before deciding what to render.
-      if ((stake.room_phase === "playing" || stake.room_phase === "selecting") && res.room.phase === "finished") {
+      let ownedCards = res.cards ?? (res.card ? [res.card] : []);
+      const expectedLiveOrOwned =
+        (stake.my_cards_current ?? 0) > 0 ||
+        stake.open_available ||
+        stake.room_phase === "playing" ||
+        stake.room_phase === "selecting";
+
+      // Guard against stale snapshots during phase boundaries. Retry a few times
+      // before deciding to render a finished view with no current ownership.
+      for (let attempt = 1; attempt < OPEN_STALE_FINISHED_RETRIES; attempt += 1) {
+        const likelyStaleFinished =
+          expectedLiveOrOwned &&
+          res.room.phase === "finished" &&
+          (res.room.my_cartellas?.length ?? 0) === 0 &&
+          ownedCards.length === 0;
+        if (!likelyStaleFinished) break;
         try {
           res = await fetchStakeRoom(stake.id);
+          ownedCards = res.cards ?? (res.card ? [res.card] : []);
         } catch {
-          // Keep initial snapshot if retry fails.
+          break;
         }
       }
       setPickerRoomWithSyncMeta(res.room);
       setRoomWithPendingMarks(res.room);
-      const ownedCards = res.cards ?? (res.card ? [res.card] : []);
       setCards(ownedCards);
       if (!ownedCards.length) {
         if ((res.room.next_my_cartellas?.length ?? 0) > 0) {
@@ -2445,11 +2480,7 @@ export default function App() {
         if (!prev || !selectedStake) return prev;
         const updatedOptions = (prev.stake_options ?? []).map((option) => {
           if (option.id !== selectedStake.id) return option;
-          return {
-            ...option,
-            my_cards_current: res.room.my_cartellas?.length ?? option.my_cards_current,
-            my_cards_next: res.room.next_my_cartellas?.length ?? option.my_cards_next,
-          };
+          return deriveStakeUiFromRoom(option, res.room);
         });
         return { ...prev, stake_options: updatedOptions };
       });

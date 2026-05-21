@@ -103,6 +103,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     response = await fetch(`${API_BASE}${path}`, {
       ...options,
       headers,
+      cache: options?.cache ?? "no-store",
       signal: controller.signal,
     });
   } catch (err) {
