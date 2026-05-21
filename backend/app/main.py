@@ -1569,11 +1569,13 @@ def send_admin_withdraw_email(ticket: WithdrawTicket) -> bool:
         return False
 
     alert_phones = ", ".join(WITHDRAW_ALERT_PHONES) if WITHDRAW_ALERT_PHONES else "-"
-    subject = f"[40bingo] Withdraw request {ticket.id} needs manual payout"
+    subject = f"[40bingo][TO_PAY][ACTION REQUIRED] Withdraw {ticket.id}"
     body = (
-        "A user submitted a withdraw request.\n\n"
+        "WITHDRAW ALERT TYPE: TO_PAY (ACTION REQUIRED)\n"
+        "A user submitted a withdraw request and payout is pending.\n\n"
         f"Request ID: {ticket.id}\n"
         f"Audit Event: withdraw_requested\n"
+        f"Current Status: {ticket.status}\n"
         f"User: {ticket.user_name}\n"
         f"Phone: {ticket.phone_number}\n"
         f"Bank: {ticket.bank}\n"
@@ -1593,6 +1595,8 @@ def send_admin_withdraw_email(ticket: WithdrawTicket) -> bool:
     msg["Subject"] = subject
     msg["From"] = SMTP_FROM
     msg["To"] = ", ".join(recipients)
+    msg["X-40Bingo-Alert-Type"] = "withdraw_to_pay"
+    msg["X-40Bingo-Alert-Severity"] = "action_required"
     msg.set_content(body)
     return send_smtp_message(msg, context_label=f"withdraw alert email for ticket {ticket.id}")
 
@@ -1627,11 +1631,13 @@ def send_admin_withdraw_paid_email(ticket: WithdrawTicket) -> bool:
         return False
 
     alert_phones = ", ".join(WITHDRAW_ALERT_PHONES) if WITHDRAW_ALERT_PHONES else "-"
-    subject = f"[40bingo] Withdraw payout completed: {ticket.id}"
+    subject = f"[40bingo][PAID][CONFIRMATION] Withdraw {ticket.id}"
     body = (
+        "WITHDRAW ALERT TYPE: PAID (CONFIRMATION)\n"
         "A withdraw request has been marked as PAID.\n\n"
         f"Request ID: {ticket.id}\n"
         f"Audit Event: withdraw_paid\n"
+        f"Current Status: {ticket.status}\n"
         f"User: {ticket.user_name}\n"
         f"Phone: {ticket.phone_number}\n"
         f"Bank: {ticket.bank}\n"
@@ -1650,6 +1656,8 @@ def send_admin_withdraw_paid_email(ticket: WithdrawTicket) -> bool:
     msg["Subject"] = subject
     msg["From"] = SMTP_FROM
     msg["To"] = ", ".join(recipients)
+    msg["X-40Bingo-Alert-Type"] = "withdraw_paid_confirmation"
+    msg["X-40Bingo-Alert-Severity"] = "info"
     msg.set_content(body)
     return send_smtp_message(msg, context_label=f"withdraw paid email for ticket {ticket.id}")
 
@@ -4495,7 +4503,24 @@ def approve_withdraw_request(ticket_id: str, user: UserStore = Depends(get_curre
 
     persist_withdraw_tickets()
 
-    return {"message": "Withdraw request moved to processing. Send bank payout, then mark paid.", "item": ticket.model_dump()}
+    email_notified = send_admin_withdraw_email(ticket)
+    sms_alert_configured = bool(build_withdraw_sms_gateway_recipients() and SMTP_HOST)
+    sms_notified = send_admin_withdraw_sms_alert(ticket)
+    message = "Withdraw request moved to processing. Send bank payout, then mark paid."
+    if email_notified:
+        message = f"{message} Admin email alert sent."
+    if sms_notified:
+        message = f"{message} Admin SMS alert sent."
+    elif sms_alert_configured:
+        message = f"{message} Admin SMS alert failed delivery."
+
+    return {
+        "message": message,
+        "item": ticket.model_dump(),
+        "email_notified": email_notified,
+        "sms_alert_configured": sms_alert_configured,
+        "sms_notified": sms_notified,
+    }
 
 
 @app.post("/api/admin/withdraw-requests/{ticket_id}/mark-paid")
@@ -4760,23 +4785,14 @@ def withdraw_balance(payload: WithdrawRequest, user: UserStore = Depends(get_cur
         account_holder=ticket.account_holder,
         note="Withdraw request submitted and waiting for admin payout.",
     )
-    email_notified = send_admin_withdraw_email(ticket)
-    sms_alert_configured = bool(build_withdraw_sms_gateway_recipients() and SMTP_HOST)
-    sms_notified = send_admin_withdraw_sms_alert(ticket)
     message = "Withdraw request submitted to admin. It will be reviewed shortly."
-    if email_notified:
-        message = f"{message} Admin email alert sent."
-    if sms_notified:
-        message = f"{message} Admin SMS alert sent."
-    elif sms_alert_configured:
-        message = f"{message} Admin SMS alert failed delivery."
     return {
         "message": message,
         "wallet": user.wallet.model_dump(),
         "request_id": ticket.id,
-        "email_notified": email_notified,
-        "sms_alert_configured": sms_alert_configured,
-        "sms_notified": sms_notified,
+        "email_notified": False,
+        "sms_alert_configured": False,
+        "sms_notified": False,
     }
 
 
