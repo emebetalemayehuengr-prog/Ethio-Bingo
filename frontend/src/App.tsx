@@ -3502,28 +3502,26 @@ export default function App() {
   const profileInitials = (profile.user_name.trim().slice(0, 2) || "40").toUpperCase();
   const selectedMethodDraftAccounts = selectedMethod ? adminDraftAccounts[selectedMethod.code] ?? [] : [];
   const selectedMethodAdminSaving = selectedMethod ? adminAccountsSavingByMethod[selectedMethod.code] ?? false : false;
-  const filteredAdminDepositedRecords = useMemo(() => {
-    const query = adminDepositedSearch.trim().toLowerCase();
-    const dayFilter = adminDepositedDayFilter.trim();
-    return adminDepositedRecords.filter((item) => {
-      if (dayFilter && !item.created_at.startsWith(dayFilter)) {
-        return false;
-      }
-      if (!query) return true;
-      const methodLabel = item.method ?? "";
-      const transactionNumber = item.transaction_number ?? "";
-      const note = item.note ?? "";
-      return (
-        item.phone_number.toLowerCase().includes(query) ||
-        methodLabel.toLowerCase().includes(query) ||
-        transactionNumber.toLowerCase().includes(query) ||
-        note.toLowerCase().includes(query)
-      );
-    });
-  }, [adminDepositedRecords, adminDepositedSearch, adminDepositedDayFilter]);
-  const filteredAdminDepositedTotal = useMemo(
-    () => filteredAdminDepositedRecords.reduce((sum, item) => sum + (Number.isFinite(item.amount) ? item.amount : 0), 0),
-    [filteredAdminDepositedRecords],
+  const query = adminDepositedSearch.trim().toLowerCase();
+  const dayFilter = adminDepositedDayFilter.trim();
+  const filteredAdminDepositedRecords = adminDepositedRecords.filter((item) => {
+    if (dayFilter && !item.created_at.startsWith(dayFilter)) {
+      return false;
+    }
+    if (!query) return true;
+    const methodLabel = item.method ?? "";
+    const transactionNumber = item.transaction_number ?? "";
+    const note = item.note ?? "";
+    return (
+      item.phone_number.toLowerCase().includes(query) ||
+      methodLabel.toLowerCase().includes(query) ||
+      transactionNumber.toLowerCase().includes(query) ||
+      note.toLowerCase().includes(query)
+    );
+  });
+  const filteredAdminDepositedTotal = filteredAdminDepositedRecords.reduce(
+    (sum, item) => sum + (Number.isFinite(item.amount) ? item.amount : 0),
+    0,
   );
   const updateAdminDraftRows = (
     code: "telebirr" | "cbebirr",
