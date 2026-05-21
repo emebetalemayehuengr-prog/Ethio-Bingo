@@ -3532,7 +3532,7 @@ export default function App() {
   const profileInitials = (profile.user_name.trim().slice(0, 2) || "40").toUpperCase();
   const selectedMethodDraftAccounts = selectedMethod ? adminDraftAccounts[selectedMethod.code] ?? [] : [];
   const selectedMethodAdminSaving = selectedMethod ? adminAccountsSavingByMethod[selectedMethod.code] ?? false : false;
-  const filteredAdminDepositedRecords = useMemo(() => {
+  const filteredAdminDepositedRecords = (() => {
     const query = adminDepositedSearch.trim().toLowerCase();
     if (!query) return adminDepositedRecords;
     return adminDepositedRecords.filter((item) => {
@@ -3546,7 +3546,7 @@ export default function App() {
         note.toLowerCase().includes(query)
       );
     });
-  }, [adminDepositedRecords, adminDepositedSearch]);
+  })();
   const updateAdminDraftRows = (
     code: "telebirr" | "cbebirr",
     updater: (rows: Array<{ phone_number: string; owner_name: string }>) => Array<{ phone_number: string; owner_name: string }>,
