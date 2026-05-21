@@ -67,6 +67,21 @@ export type WithdrawTicket = {
   admin_note: string | null;
 };
 
+export type DepositedRecord = {
+  id: string;
+  event_type: "deposit_confirmed";
+  created_at: string;
+  phone_number: string;
+  amount: number;
+  status: string;
+  method: string | null;
+  transaction_number: string | null;
+  note: string | null;
+  actor_phone: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+};
+
 export type StakeOption = {
   id: string;
   stake: number;

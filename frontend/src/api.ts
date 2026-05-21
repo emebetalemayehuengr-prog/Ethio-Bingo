@@ -6,6 +6,7 @@ import type {
   CasinoPlayResponse,
   DashboardResponse,
   DepositMethod,
+  DepositedRecord,
   JoinStakeResponse,
   PreviewCardResponse,
   RoomSyncResponse,
@@ -264,6 +265,20 @@ export function updateAdminDepositMethod(
 
 export function fetchAdminWithdrawRequests() {
   return request<{ items: WithdrawTicket[] }>("/api/admin/withdraw-requests");
+}
+
+export function fetchAdminDepositedRecords() {
+  return request<{ items: DepositedRecord[] }>("/api/admin/deposited-records");
+}
+
+export function updateAdminDepositedRecord(
+  recordId: string,
+  payload: { amount: number; method?: "telebirr" | "cbebirr"; transaction_number?: string; note?: string | null },
+) {
+  return request<{ message: string; item: DepositedRecord }>(`/api/admin/deposited-records/${recordId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function approveAdminWithdrawRequest(ticketId: string) {

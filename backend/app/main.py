@@ -338,11 +338,20 @@ class AuditEvent(BaseModel):
     account_holder: str | None = None
     actor_phone: str | None = None
     note: str | None = None
+    updated_at: str | None = None
+    updated_by: str | None = None
 
 
 class AdminMarkPaidRequest(BaseModel):
     payout_reference: str = Field(min_length=3, max_length=120)
     admin_note: str | None = Field(default=None, max_length=300)
+
+
+class AdminUpdateDepositedRecordRequest(BaseModel):
+    amount: float = Field(gt=0, le=200000)
+    method: Literal["telebirr", "cbebirr"] | None = None
+    transaction_number: str | None = Field(default=None, min_length=3, max_length=120)
+    note: str | None = Field(default=None, max_length=300)
 
 
 class PreviewCardRequest(BaseModel):
@@ -839,6 +848,8 @@ USER_REFRESH_AT: dict[str, datetime] = {}
 ROOM_PUSH_SIGNATURES: dict[str, str] = {}
 ROOMS_REFRESHED_AT: datetime | None = None
 WITHDRAW_FLOW_LOCK = threading.Lock()
+DEPOSIT_METHODS_LOCK = threading.Lock()
+AUDIT_EVENTS_LOCK = threading.Lock()
 
 PUSHER_CLIENT = (
     pusher.Pusher(
@@ -1758,6 +1769,30 @@ def find_deposit_method(method_code: Literal["telebirr", "cbebirr"]) -> DepositM
     if method is None:
         raise HTTPException(status_code=404, detail="Deposit method not found")
     return method
+
+
+def serialize_deposit_methods() -> list[dict]:
+    with DEPOSIT_METHODS_LOCK:
+        return [method.model_dump() for method in DEPOSIT_METHODS]
+
+
+def serialize_admin_audit_events(limit: int = 1000) -> list[dict]:
+    with AUDIT_EVENTS_LOCK:
+        return [event.model_dump() for event in AUDIT_EVENTS[: max(1, limit)]]
+
+
+def serialize_deposited_records(limit: int = 5000) -> list[dict]:
+    remaining = max(1, limit)
+    rows: list[dict] = []
+    with AUDIT_EVENTS_LOCK:
+        for event in AUDIT_EVENTS:
+            if event.event_type != "deposit_confirmed":
+                continue
+            rows.append(event.model_dump())
+            remaining -= 1
+            if remaining <= 0:
+                break
+    return rows
 
 
 def get_casino_game_or_404(game_id: str) -> CasinoGameItem:
@@ -2685,31 +2720,32 @@ def append_audit_event(
     actor_phone: str | None = None,
     note: str | None = None,
 ) -> None:
-    AUDIT_EVENTS.insert(
-        0,
-        AuditEvent(
-            id=secrets.token_hex(10),
-            event_type=event_type,
-            created_at=utc_now().replace(microsecond=0).isoformat(),
-            phone_number=phone_number,
-            amount=round(float(amount), 2),
-            status=status,
-            method=method,
-            transaction_number=transaction_number,
-            withdraw_ticket_id=withdraw_ticket_id,
-            bank=bank,
-            account_number=account_number,
-            account_holder=account_holder,
-            actor_phone=actor_phone,
-            note=note,
-        ),
-    )
-    if len(AUDIT_EVENTS) > 5000:
-        del AUDIT_EVENTS[5000:]
-    try:
-        persist_audit_events()
-    except Exception as exc:
-        print(f"Failed to persist audit event {event_type}: {exc}")
+    with AUDIT_EVENTS_LOCK:
+        AUDIT_EVENTS.insert(
+            0,
+            AuditEvent(
+                id=secrets.token_hex(10),
+                event_type=event_type,
+                created_at=utc_now().replace(microsecond=0).isoformat(),
+                phone_number=phone_number,
+                amount=round(float(amount), 2),
+                status=status,
+                method=method,
+                transaction_number=transaction_number,
+                withdraw_ticket_id=withdraw_ticket_id,
+                bank=bank,
+                account_number=account_number,
+                account_holder=account_holder,
+                actor_phone=actor_phone,
+                note=note,
+            ),
+        )
+        if len(AUDIT_EVENTS) > 5000:
+            del AUDIT_EVENTS[5000:]
+        try:
+            persist_audit_events()
+        except Exception as exc:
+            print(f"Failed to persist audit event {event_type}: {exc}")
 
 
 def get_withdraw_ticket_or_404(ticket_id: str) -> WithdrawTicket:
@@ -4427,7 +4463,7 @@ def dashboard(user: UserStore = Depends(get_current_user)) -> dict:
         "user": make_public_user(user).model_dump(),
         "is_admin": can_manage_deposit_accounts(user),
         "wallet": user.wallet.model_dump(),
-        "deposit_methods": [method.model_dump() for method in DEPOSIT_METHODS],
+        "deposit_methods": serialize_deposit_methods(),
         "stake_options": stake_options,
         "faq": FAQ_ITEMS,
         "games": [
@@ -4440,7 +4476,7 @@ def dashboard(user: UserStore = Depends(get_current_user)) -> dict:
 @app.get("/api/admin/deposit-methods")
 def admin_deposit_methods(user: UserStore = Depends(get_current_user)) -> dict:
     require_admin_user(user)
-    return {"items": [method.model_dump() for method in DEPOSIT_METHODS]}
+    return {"items": serialize_deposit_methods()}
 
 
 @app.put("/api/admin/deposit-methods/{method_code}")
@@ -4450,30 +4486,38 @@ def update_admin_deposit_method(
     user: UserStore = Depends(get_current_user),
 ) -> dict:
     require_admin_user(user)
-    method = find_deposit_method(method_code)
+    with DEPOSIT_METHODS_LOCK:
+        method = find_deposit_method(method_code)
 
-    normalized_accounts: list[DepositAccount] = []
-    seen_phones: set[str] = set()
-    for account in payload.transfer_accounts:
-        normalized_phone = normalize_phone(account.phone_number)
-        if not re.fullmatch(r"^(09\d{8}|\+2519\d{8})$", normalized_phone):
-            raise HTTPException(status_code=400, detail=f"Invalid phone number: {account.phone_number}")
-        if normalized_phone in seen_phones:
-            raise HTTPException(status_code=400, detail="Duplicate transfer account phone number in update payload.")
-        seen_phones.add(normalized_phone)
-        normalized_accounts.append(
-            DepositAccount(
-                phone_number=normalized_phone,
-                owner_name=account.owner_name.strip(),
+        normalized_accounts: list[DepositAccount] = []
+        seen_phones: set[str] = set()
+        for account in payload.transfer_accounts:
+            normalized_phone = normalize_phone(account.phone_number)
+            if not re.fullmatch(r"^(09\d{8}|\+2519\d{8})$", normalized_phone):
+                raise HTTPException(status_code=400, detail=f"Invalid phone number: {account.phone_number}")
+            if normalized_phone in seen_phones:
+                raise HTTPException(status_code=400, detail="Duplicate transfer account phone number in update payload.")
+            seen_phones.add(normalized_phone)
+
+            owner_name = account.owner_name.strip()
+            if len(owner_name) < 2 or len(owner_name) > 60:
+                raise HTTPException(status_code=400, detail="Owner name must be between 2 and 60 characters.")
+
+            normalized_accounts.append(
+                DepositAccount(
+                    phone_number=normalized_phone,
+                    owner_name=owner_name,
+                )
             )
-        )
 
-    method.transfer_accounts = normalized_accounts
-    persist_deposit_methods()
+        method.transfer_accounts = normalized_accounts
+        persist_deposit_methods()
+        method_payload = method.model_dump()
+        deposit_methods_payload = [item.model_dump() for item in DEPOSIT_METHODS]
     return {
         "message": f"{method.label} accounts updated.",
-        "method": method.model_dump(),
-        "deposit_methods": [item.model_dump() for item in DEPOSIT_METHODS],
+        "method": method_payload,
+        "deposit_methods": deposit_methods_payload,
     }
 
 
@@ -4488,7 +4532,48 @@ def admin_withdraw_requests(user: UserStore = Depends(get_current_user)) -> dict
 @app.get("/api/admin/audit-events")
 def admin_audit_events(user: UserStore = Depends(get_current_user)) -> dict:
     require_admin_user(user)
-    return {"items": [event.model_dump() for event in AUDIT_EVENTS[:1000]]}
+    return {"items": serialize_admin_audit_events(limit=1000)}
+
+
+@app.get("/api/admin/deposited-records")
+def admin_deposited_records(user: UserStore = Depends(get_current_user)) -> dict:
+    require_admin_user(user)
+    return {"items": serialize_deposited_records(limit=5000)}
+
+
+@app.put("/api/admin/deposited-records/{event_id}")
+def update_admin_deposited_record(
+    event_id: str,
+    payload: AdminUpdateDepositedRecordRequest,
+    user: UserStore = Depends(get_current_user),
+) -> dict:
+    require_admin_user(user)
+
+    normalized_tx_number = normalize_transaction_number(payload.transaction_number or "")
+    if normalized_tx_number:
+        ensure_valid_transaction_number(normalized_tx_number)
+
+    note_value = payload.note.strip() if payload.note else None
+    now_iso = utc_now().replace(microsecond=0).isoformat()
+
+    with AUDIT_EVENTS_LOCK:
+        event = next((item for item in AUDIT_EVENTS if item.id == event_id and item.event_type == "deposit_confirmed"), None)
+        if event is None:
+            raise HTTPException(status_code=404, detail="Deposited record not found")
+
+        event.amount = round(float(payload.amount), 2)
+        if payload.method is not None:
+            event.method = payload.method
+        if normalized_tx_number:
+            event.transaction_number = normalized_tx_number
+        event.note = note_value
+        event.actor_phone = user.phone_number
+        event.updated_at = now_iso
+        event.updated_by = user.phone_number
+        persist_audit_events()
+        item_payload = event.model_dump()
+
+    return {"message": "Deposited record updated.", "item": item_payload}
 
 
 @app.post("/api/admin/withdraw-requests/{ticket_id}/approve")
@@ -4682,7 +4767,8 @@ def submit_deposit(payload: DepositRequest, user: UserStore = Depends(get_curren
             status_code=400,
             detail="Transaction number is required. Paste your receipt message to auto-detect it.",
         )
-    method = find_deposit_method(payload.method)
+    with DEPOSIT_METHODS_LOCK:
+        method = find_deposit_method(payload.method).model_copy(deep=True)
     ensure_valid_transaction_number(tx_number)
     links = validate_receipt_source_links(method.code, payload.receipt_message)
     validate_receipt_recipient(method, payload.receipt_message, source_links=links)

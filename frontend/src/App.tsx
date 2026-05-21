@@ -4,6 +4,7 @@ import {
   approveAdminWithdrawRequest,
   claimBingo,
   clearAuthToken,
+  fetchAdminDepositedRecords,
   fetchAdminWithdrawRequests,
   fetchBetHistory,
   fetchCasinoGames,
@@ -29,6 +30,7 @@ import {
   submitWithdraw,
   syncRoom,
   updateAdminDepositMethod,
+  updateAdminDepositedRecord,
 } from "./api";
 import type {
   AuthResponse,
@@ -37,6 +39,7 @@ import type {
   CasinoGame,
   CasinoLaunchResponse,
   DashboardResponse,
+  DepositedRecord,
   DepositMethod,
   RoomState,
   StakeOption,
@@ -607,6 +610,12 @@ const deriveStakeUiFromRoom = (stake: StakeOption, room: RoomState): StakeOption
 };
 
 type WithdrawFlowStatus = "Pending" | "Processing" | "Paid" | "Rejected";
+type DepositedRecordDraft = {
+  amount: string;
+  method: "telebirr" | "cbebirr";
+  transaction_number: string;
+  note: string;
+};
 
 const normalizeWithdrawFlowStatus = (status: WithdrawTicket["status"]): WithdrawFlowStatus => {
   if (status === "Approved") return "Paid";
@@ -652,6 +661,16 @@ const upsertWithdrawTicketForward = (tickets: WithdrawTicket[], incoming: Withdr
   next[index] = nextTicket;
   return next;
 };
+
+const toDepositedDraftMethod = (value: string | null | undefined): "telebirr" | "cbebirr" =>
+  value === "cbebirr" ? "cbebirr" : "telebirr";
+
+const buildDepositedDraft = (item: DepositedRecord): DepositedRecordDraft => ({
+  amount: item.amount.toFixed(2),
+  method: toDepositedDraftMethod(item.method),
+  transaction_number: item.transaction_number ?? "",
+  note: item.note ?? "",
+});
 
 const stabilizeRoomMarks = (previous: RoomState | null, incoming: RoomState | null) => {
   if (!incoming || !previous) return incoming;
@@ -1150,6 +1169,7 @@ export default function App() {
   const lastPickerTransitionLogRef = useRef<string>("");
   const lastFinishedRoomRef = useRef<string | null>(null);
   const lastFinishedRedirectRef = useRef<string | null>(null);
+  const adminDepositedDirtyByIdRef = useRef<Record<string, boolean>>({});
   const sharedStakeOpeningRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [pusherReady, setPusherReady] = useState(false);
@@ -1204,8 +1224,21 @@ export default function App() {
     telebirr: [],
     cbebirr: [],
   });
+  const [adminAccountsSavingByMethod, setAdminAccountsSavingByMethod] = useState<Record<"telebirr" | "cbebirr", boolean>>({
+    telebirr: false,
+    cbebirr: false,
+  });
+  const [adminDraftDirtyByMethod, setAdminDraftDirtyByMethod] = useState<Record<"telebirr" | "cbebirr", boolean>>({
+    telebirr: false,
+    cbebirr: false,
+  });
   const [adminWithdrawRequests, setAdminWithdrawRequests] = useState<WithdrawTicket[]>([]);
   const [adminPayoutRefs, setAdminPayoutRefs] = useState<Record<string, string>>({});
+  const [adminDepositedRecords, setAdminDepositedRecords] = useState<DepositedRecord[]>([]);
+  const [adminDepositedDraftById, setAdminDepositedDraftById] = useState<Record<string, DepositedRecordDraft>>({});
+  const [adminDepositedDirtyById, setAdminDepositedDirtyById] = useState<Record<string, boolean>>({});
+  const [adminDepositedSavingById, setAdminDepositedSavingById] = useState<Record<string, boolean>>({});
+  const [adminDepositedSearch, setAdminDepositedSearch] = useState("");
   const [copiedPhone, setCopiedPhone] = useState("");
   const [copiedAccountNumber, setCopiedAccountNumber] = useState("");
   const [showBrandModal, setShowBrandModal] = useState(false);
@@ -1375,6 +1408,10 @@ export default function App() {
   useEffect(() => {
     latestServiceRef.current = service;
   }, [service]);
+
+  useEffect(() => {
+    adminDepositedDirtyByIdRef.current = adminDepositedDirtyById;
+  }, [adminDepositedDirtyById]);
 
   useEffect(() => {
     if (!profile || !PUSHER_KEY) return;
@@ -1578,6 +1615,13 @@ export default function App() {
       setWalletFieldErrors({});
       setLoading(false);
       setWorking(false);
+      setAdminWithdrawRequests([]);
+      setAdminPayoutRefs({});
+      setAdminDepositedRecords([]);
+      setAdminDepositedDraftById({});
+      setAdminDepositedDirtyById({});
+      setAdminDepositedSavingById({});
+      setAdminDepositedSearch("");
       setNotice("Session expired. Please sign in again.");
     };
     window.addEventListener("auth:expired", onAuthExpired);
@@ -1655,21 +1699,23 @@ export default function App() {
 
   useEffect(() => {
     if (!dashboard?.deposit_methods?.length) return;
-    if (walletTab === "admin" && profile?.is_admin) return;
+    const onAdminTab = walletTab === "admin" && profile?.is_admin;
     setAdminDraftAccounts((prev) => {
       const next: Record<"telebirr" | "cbebirr", Array<{ phone_number: string; owner_name: string }>> = {
-        telebirr:
-          dashboard.deposit_methods
-            .find((method) => method.code === "telebirr")
-            ?.transfer_accounts.map((account) => ({ ...account })) ?? prev.telebirr,
-        cbebirr:
-          dashboard.deposit_methods
-            .find((method) => method.code === "cbebirr")
-            ?.transfer_accounts.map((account) => ({ ...account })) ?? prev.cbebirr,
+        telebirr: prev.telebirr,
+        cbebirr: prev.cbebirr,
       };
+      for (const code of ["telebirr", "cbebirr"] as const) {
+        const keepLocalDraft = onAdminTab && adminDraftDirtyByMethod[code];
+        if (keepLocalDraft) continue;
+        const serverRows = dashboard.deposit_methods.find((method) => method.code === code)?.transfer_accounts.map((account) => ({ ...account }));
+        if (serverRows) {
+          next[code] = serverRows;
+        }
+      }
       return next;
     });
-  }, [dashboard?.deposit_methods, walletTab, profile?.is_admin]);
+  }, [dashboard?.deposit_methods, walletTab, profile?.is_admin, adminDraftDirtyByMethod.telebirr, adminDraftDirtyByMethod.cbebirr]);
 
   useEffect(() => {
     if (service === "stakes") {
@@ -1860,6 +1906,31 @@ export default function App() {
     });
   };
 
+  const refreshAdminDepositedRecords = async () => {
+    if (!profile?.is_admin) return;
+    const data = await fetchAdminDepositedRecords();
+    setAdminDepositedRecords(data.items);
+    const liveIds = new Set(data.items.map((item) => item.id));
+    setAdminDepositedDraftById((prev) => {
+      const next: Record<string, DepositedRecordDraft> = {};
+      for (const [id, draft] of Object.entries(prev)) {
+        if (liveIds.has(id)) next[id] = draft;
+      }
+      for (const item of data.items) {
+        if (adminDepositedDirtyByIdRef.current[item.id]) continue;
+        next[item.id] = buildDepositedDraft(item);
+      }
+      return next;
+    });
+    setAdminDepositedDirtyById((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const [id, dirty] of Object.entries(prev)) {
+        if (liveIds.has(id) && dirty) next[id] = true;
+      }
+      return next;
+    });
+  };
+
   const loadData = async () => {
     setLoading(true);
     setError("");
@@ -1967,7 +2038,7 @@ export default function App() {
       inFlight = true;
       void (async () => {
         try {
-          await refreshAdminWithdrawRequests();
+          await Promise.all([refreshAdminWithdrawRequests(), refreshAdminDepositedRecords()]);
         } finally {
           inFlight = false;
         }
@@ -2691,26 +2762,116 @@ export default function App() {
 
   const onSaveDepositAccounts = async (methodCodeToSave: "telebirr" | "cbebirr") => {
     const draft = adminDraftAccounts[methodCodeToSave] ?? [];
+    const partialRow = draft.find((row) => {
+      const phone = row.phone_number.trim();
+      const owner = row.owner_name.trim();
+      return (phone.length > 0 && owner.length === 0) || (phone.length === 0 && owner.length > 0);
+    });
+    if (partialRow) {
+      setError("Complete both phone number and account owner for every row before saving.");
+      return;
+    }
+
     const cleaned = draft
-      .map((row) => ({ phone_number: row.phone_number.trim(), owner_name: row.owner_name.trim() }))
+      .map((row) => ({
+        phone_number: normalizeAuthPhoneInput(row.phone_number),
+        owner_name: row.owner_name.trim(),
+      }))
       .filter((row) => row.phone_number.length > 0 && row.owner_name.length > 0);
     if (!cleaned.length) {
       setError("Add at least one transfer account before saving.");
       return;
     }
 
-    setWorking(true);
+    const invalidPhone = cleaned.find((row) => !isValidAuthPhoneInput(row.phone_number));
+    if (invalidPhone) {
+      setError(`Invalid phone number: ${invalidPhone.phone_number}. Use 09XXXXXXXX or +2519XXXXXXXX.`);
+      return;
+    }
+
+    const seen = new Set<string>();
+    for (const row of cleaned) {
+      const normalized = normalizePhoneForMatch(row.phone_number);
+      if (seen.has(normalized)) {
+        setError("Duplicate transfer account phone numbers are not allowed.");
+        return;
+      }
+      seen.add(normalized);
+    }
+
+    setAdminAccountsSavingByMethod((prev) => ({ ...prev, [methodCodeToSave]: true }));
     setError("");
     try {
       const res = await updateAdminDepositMethod(methodCodeToSave, {
         transfer_accounts: cleaned,
       });
       setDashboard((prev) => (prev ? { ...prev, deposit_methods: res.deposit_methods } : prev));
+      setAdminDraftAccounts((prev) => ({
+        ...prev,
+        [methodCodeToSave]: res.method.transfer_accounts.map((account) => ({ ...account })),
+      }));
+      setAdminDraftDirtyByMethod((prev) => ({ ...prev, [methodCodeToSave]: false }));
       setNotice(res.message);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save deposit accounts");
     } finally {
-      setWorking(false);
+      setAdminAccountsSavingByMethod((prev) => ({ ...prev, [methodCodeToSave]: false }));
+    }
+  };
+
+  const setAdminDepositedDraftField = <K extends keyof DepositedRecordDraft>(recordId: string, key: K, value: DepositedRecordDraft[K]) => {
+    setAdminDepositedDraftById((prev) => {
+      const baseline: DepositedRecordDraft = prev[recordId] ?? {
+        amount: "",
+        method: "telebirr",
+        transaction_number: "",
+        note: "",
+      };
+      return {
+        ...prev,
+        [recordId]: {
+          ...baseline,
+          [key]: value,
+        },
+      };
+    });
+    setAdminDepositedDirtyById((prev) => ({ ...prev, [recordId]: true }));
+  };
+
+  const onSaveAdminDepositedRecord = async (item: DepositedRecord) => {
+    const draft = adminDepositedDraftById[item.id] ?? buildDepositedDraft(item);
+    const amount = Number(draft.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setError("Enter a valid deposited amount before saving.");
+      return;
+    }
+
+    const normalizedTxNumber = normalizeTransactionNumberInput(draft.transaction_number);
+    if (normalizedTxNumber.length < 3) {
+      setError("Transaction number must be at least 3 characters.");
+      return;
+    }
+
+    setAdminDepositedSavingById((prev) => ({ ...prev, [item.id]: true }));
+    setError("");
+    try {
+      const res = await updateAdminDepositedRecord(item.id, {
+        amount,
+        method: draft.method,
+        transaction_number: normalizedTxNumber,
+        note: draft.note.trim() || null,
+      });
+      setNotice(res.message);
+      setAdminDepositedRecords((prev) => prev.map((row) => (row.id === item.id ? res.item : row)));
+      setAdminDepositedDraftById((prev) => ({
+        ...prev,
+        [item.id]: buildDepositedDraft(res.item),
+      }));
+      setAdminDepositedDirtyById((prev) => ({ ...prev, [item.id]: false }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update deposited record");
+    } finally {
+      setAdminDepositedSavingById((prev) => ({ ...prev, [item.id]: false }));
     }
   };
 
@@ -3370,33 +3531,51 @@ export default function App() {
 
   const profileInitials = (profile.user_name.trim().slice(0, 2) || "40").toUpperCase();
   const selectedMethodDraftAccounts = selectedMethod ? adminDraftAccounts[selectedMethod.code] ?? [] : [];
-  const onDraftPhoneChange = (idx: number, value: string) => {
-    if (!selectedMethod) return;
+  const selectedMethodAdminSaving = selectedMethod ? adminAccountsSavingByMethod[selectedMethod.code] ?? false : false;
+  const filteredAdminDepositedRecords = useMemo(() => {
+    const query = adminDepositedSearch.trim().toLowerCase();
+    if (!query) return adminDepositedRecords;
+    return adminDepositedRecords.filter((item) => {
+      const methodLabel = item.method ?? "";
+      const transactionNumber = item.transaction_number ?? "";
+      const note = item.note ?? "";
+      return (
+        item.phone_number.toLowerCase().includes(query) ||
+        methodLabel.toLowerCase().includes(query) ||
+        transactionNumber.toLowerCase().includes(query) ||
+        note.toLowerCase().includes(query)
+      );
+    });
+  }, [adminDepositedRecords, adminDepositedSearch]);
+  const updateAdminDraftRows = (
+    code: "telebirr" | "cbebirr",
+    updater: (rows: Array<{ phone_number: string; owner_name: string }>) => Array<{ phone_number: string; owner_name: string }>,
+  ) => {
     setAdminDraftAccounts((prev) => ({
       ...prev,
-      [selectedMethod.code]: (prev[selectedMethod.code] ?? []).map((item, rowIdx) => (rowIdx === idx ? { ...item, phone_number: value } : item)),
+      [code]: updater(prev[code] ?? []),
     }));
+    setAdminDraftDirtyByMethod((prev) => ({ ...prev, [code]: true }));
+  };
+  const onDraftPhoneChange = (idx: number, value: string) => {
+    if (!selectedMethod) return;
+    updateAdminDraftRows(selectedMethod.code, (rows) =>
+      rows.map((item, rowIdx) => (rowIdx === idx ? { ...item, phone_number: value } : item)),
+    );
   };
   const onDraftOwnerChange = (idx: number, value: string) => {
     if (!selectedMethod) return;
-    setAdminDraftAccounts((prev) => ({
-      ...prev,
-      [selectedMethod.code]: (prev[selectedMethod.code] ?? []).map((item, rowIdx) => (rowIdx === idx ? { ...item, owner_name: value } : item)),
-    }));
+    updateAdminDraftRows(selectedMethod.code, (rows) =>
+      rows.map((item, rowIdx) => (rowIdx === idx ? { ...item, owner_name: value } : item)),
+    );
   };
   const onRemoveDraftAccount = (idx: number) => {
     if (!selectedMethod) return;
-    setAdminDraftAccounts((prev) => ({
-      ...prev,
-      [selectedMethod.code]: (prev[selectedMethod.code] ?? []).filter((_, rowIdx) => rowIdx !== idx),
-    }));
+    updateAdminDraftRows(selectedMethod.code, (rows) => rows.filter((_, rowIdx) => rowIdx !== idx));
   };
   const onAddDraftAccount = () => {
     if (!selectedMethod) return;
-    setAdminDraftAccounts((prev) => ({
-      ...prev,
-      [selectedMethod.code]: [...(prev[selectedMethod.code] ?? []), { phone_number: "", owner_name: "" }],
-    }));
+    updateAdminDraftRows(selectedMethod.code, (rows) => [...rows, { phone_number: "", owner_name: "" }]);
   };
   const onDepositTxChange = (rawValue: string) => {
     clearWalletFieldError("txNo");
@@ -4303,24 +4482,22 @@ export default function App() {
                             <input
                               value={row.phone_number}
                               onChange={(event) =>
-                                setAdminDraftAccounts((prev) => ({
-                                  ...prev,
-                                  [code]: prev[code].map((candidate, candidateIdx) =>
+                                updateAdminDraftRows(code, (rows) =>
+                                  rows.map((candidate, candidateIdx) =>
                                     candidateIdx === idx ? { ...candidate, phone_number: event.target.value } : candidate,
                                   ),
-                                }))
+                                )
                               }
                               placeholder="Phone number"
                             />
                             <input
                               value={row.owner_name}
                               onChange={(event) =>
-                                setAdminDraftAccounts((prev) => ({
-                                  ...prev,
-                                  [code]: prev[code].map((candidate, candidateIdx) =>
+                                updateAdminDraftRows(code, (rows) =>
+                                  rows.map((candidate, candidateIdx) =>
                                     candidateIdx === idx ? { ...candidate, owner_name: event.target.value } : candidate,
                                   ),
-                                }))
+                                )
                               }
                               placeholder="Owner"
                             />
@@ -4328,10 +4505,7 @@ export default function App() {
                               className="secondary-btn"
                               type="button"
                               onClick={() =>
-                                setAdminDraftAccounts((prev) => ({
-                                  ...prev,
-                                  [code]: prev[code].filter((_, rowIdx) => rowIdx !== idx),
-                                }))
+                                updateAdminDraftRows(code, (existingRows) => existingRows.filter((_, rowIdx) => rowIdx !== idx))
                               }
                             >
                               Remove
@@ -4344,21 +4518,119 @@ export default function App() {
                           className="secondary-btn"
                           type="button"
                           onClick={() =>
-                            setAdminDraftAccounts((prev) => ({
-                              ...prev,
-                              [code]: [...prev[code], { phone_number: "", owner_name: "" }],
-                            }))
+                            updateAdminDraftRows(code, (existingRows) => [...existingRows, { phone_number: "", owner_name: "" }])
                           }
                         >
                           Add Account
                         </button>
-                        <button className="primary-btn" type="button" disabled={working} onClick={() => void onSaveDepositAccounts(code)}>
-                          {working ? "Saving..." : `Save ${label}`}
+                        <button
+                          className="primary-btn"
+                          type="button"
+                          disabled={adminAccountsSavingByMethod[code]}
+                          onClick={() => void onSaveDepositAccounts(code)}
+                        >
+                          {adminAccountsSavingByMethod[code] ? "Saving..." : `Save ${label}`}
                         </button>
                       </div>
                     </article>
                   );
                 })}
+                <article className="admin-method-box">
+                  <h3>Deposited Records (All Users)</h3>
+                  <input
+                    value={adminDepositedSearch}
+                    onChange={(event) => setAdminDepositedSearch(event.target.value)}
+                    placeholder="Trace by phone, method, tx number, or note"
+                  />
+                  <div className="history-scroll">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>User</th>
+                          <th>Method</th>
+                          <th>Transaction No</th>
+                          <th>Amount</th>
+                          <th>Note</th>
+                          <th>Status</th>
+                          <th>Edited</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredAdminDepositedRecords.length === 0 ? (
+                          <tr>
+                            <td colSpan={8}>
+                              <div className="table-empty">No deposited records found.</div>
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredAdminDepositedRecords.map((item) => {
+                            const draft = adminDepositedDraftById[item.id] ?? buildDepositedDraft(item);
+                            const saving = Boolean(adminDepositedSavingById[item.id]);
+                            return (
+                              <tr key={item.id}>
+                                <td>
+                                  <small>{fmtDate(item.created_at)}</small>
+                                  <br />
+                                  <small>{item.phone_number}</small>
+                                </td>
+                                <td>
+                                  <select
+                                    value={draft.method}
+                                    disabled={saving}
+                                    onChange={(event) =>
+                                      setAdminDepositedDraftField(item.id, "method", event.target.value === "cbebirr" ? "cbebirr" : "telebirr")
+                                    }
+                                  >
+                                    <option value="telebirr">Telebirr</option>
+                                    <option value="cbebirr">CBE Birr</option>
+                                  </select>
+                                </td>
+                                <td>
+                                  <input
+                                    value={draft.transaction_number}
+                                    disabled={saving}
+                                    placeholder="Transaction no"
+                                    onChange={(event) => setAdminDepositedDraftField(item.id, "transaction_number", event.target.value)}
+                                  />
+                                </td>
+                                <td>
+                                  <input
+                                    type="number"
+                                    min={0.01}
+                                    step={0.01}
+                                    value={draft.amount}
+                                    disabled={saving}
+                                    onChange={(event) => setAdminDepositedDraftField(item.id, "amount", event.target.value)}
+                                  />
+                                </td>
+                                <td>
+                                  <input
+                                    value={draft.note}
+                                    disabled={saving}
+                                    placeholder="Optional admin note"
+                                    onChange={(event) => setAdminDepositedDraftField(item.id, "note", event.target.value)}
+                                  />
+                                </td>
+                                <td>{item.status}</td>
+                                <td>
+                                  <small>{item.updated_at ? fmtDate(item.updated_at) : "-"}</small>
+                                  <br />
+                                  <small>{item.updated_by ?? "-"}</small>
+                                </td>
+                                <td>
+                                  <button className="primary-btn" type="button" disabled={saving} onClick={() => void onSaveAdminDepositedRecord(item)}>
+                                    {saving ? "Saving..." : "Save"}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
                 <article className="admin-method-box">
                   <h3>Withdraw Requests</h3>
                   <div className="history-scroll">
@@ -4737,7 +5009,7 @@ export default function App() {
                 selectedMethodDraftAccounts={selectedMethodDraftAccounts}
                 isAdmin={profile.is_admin}
                 copiedPhone={copiedPhone}
-                adminWorking={working}
+                adminWorking={selectedMethodAdminSaving}
                 submitWorking={depositSubmitting}
                 fieldErrors={{
                   depositAmount: walletFieldErrors.depositAmount,
