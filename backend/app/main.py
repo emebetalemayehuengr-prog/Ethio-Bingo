@@ -1797,26 +1797,120 @@ def normalize_admin_day_filter(day: str | None) -> str | None:
     return parsed.strftime("%Y-%m-%d")
 
 
-def serialize_deposited_records(limit: int = 5000, day: str | None = None) -> list[dict]:
-    normalized_day = normalize_admin_day_filter(day)
+def build_deposited_trace_key(phone_number: str, amount: float, created_at: str) -> str:
+    return f"{normalize_phone(phone_number)}|{round(float(amount), 2):.2f}|{str(created_at)[:19]}"
+
+
+def serialize_legacy_deposit_transactions(limit: int = 5000, day: str | None = None) -> list[dict]:
+    safe_limit = max(1, limit)
     if PG_STORE.enabled():
         try:
-            return PG_STORE.load_audit_events(limit=limit, event_type="deposit_confirmed", created_date=normalized_day)
+            return [
+                {
+                    "id": f"legacy-txn-{row['id']}",
+                    "event_type": "deposit_confirmed",
+                    "created_at": str(row["created_at"]),
+                    "phone_number": str(row["phone_number"]),
+                    "amount": round(float(row["amount"]), 2),
+                    "status": str(row["status"]),
+                    "method": None,
+                    "transaction_number": None,
+                    "withdraw_ticket_id": None,
+                    "bank": None,
+                    "account_number": None,
+                    "account_holder": None,
+                    "actor_phone": None,
+                    "note": "Imported from wallet transaction history.",
+                    "updated_at": None,
+                    "updated_by": None,
+                }
+                for row in PG_STORE.load_admin_deposit_transactions(limit=safe_limit, created_date=day)
+            ]
         except Exception:
             pass
-    remaining = max(1, limit)
+
     rows: list[dict] = []
+    for phone_number, user in USERS.items():
+        for idx, entry in enumerate(user.history):
+            if entry.type != "Deposit" or entry.status != "Completed":
+                continue
+            created_at = str(entry.created_at)
+            if day and not created_at.startswith(day):
+                continue
+            amount_value = round(float(entry.amount), 2)
+            digest = hashlib.sha1(f"{phone_number}|{amount_value:.2f}|{created_at}|{idx}".encode("utf-8")).hexdigest()[:20]
+            rows.append(
+                {
+                    "id": f"legacy-local-{digest}",
+                    "event_type": "deposit_confirmed",
+                    "created_at": created_at,
+                    "phone_number": phone_number,
+                    "amount": amount_value,
+                    "status": "Completed",
+                    "method": None,
+                    "transaction_number": None,
+                    "withdraw_ticket_id": None,
+                    "bank": None,
+                    "account_number": None,
+                    "account_holder": None,
+                    "actor_phone": None,
+                    "note": "Imported from wallet transaction history.",
+                    "updated_at": None,
+                    "updated_by": None,
+                }
+            )
+    rows.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+    return rows[:safe_limit]
+
+
+def serialize_deposited_records(limit: int = 5000, day: str | None = None) -> list[dict]:
+    normalized_day = normalize_admin_day_filter(day)
+    safe_limit = max(1, limit)
+    if PG_STORE.enabled():
+        try:
+            audit_rows = PG_STORE.load_audit_events(limit=safe_limit, event_type="deposit_confirmed", created_date=normalized_day)
+            legacy_rows = serialize_legacy_deposit_transactions(limit=safe_limit, day=normalized_day)
+            seen_keys = {
+                build_deposited_trace_key(str(item.get("phone_number", "")), float(item.get("amount", 0.0)), str(item.get("created_at", "")))
+                for item in audit_rows
+            }
+            merged_rows = list(audit_rows)
+            for item in legacy_rows:
+                key = build_deposited_trace_key(str(item.get("phone_number", "")), float(item.get("amount", 0.0)), str(item.get("created_at", "")))
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                merged_rows.append(item)
+            merged_rows.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+            return merged_rows[:safe_limit]
+        except Exception:
+            pass
+    remaining = safe_limit
+    audit_rows: list[dict] = []
     with AUDIT_EVENTS_LOCK:
         for event in AUDIT_EVENTS:
             if event.event_type != "deposit_confirmed":
                 continue
             if normalized_day and not str(event.created_at).startswith(normalized_day):
                 continue
-            rows.append(event.model_dump())
+            audit_rows.append(event.model_dump())
             remaining -= 1
             if remaining <= 0:
                 break
-    return rows
+    legacy_rows = serialize_legacy_deposit_transactions(limit=safe_limit, day=normalized_day)
+    seen_keys = {
+        build_deposited_trace_key(str(item.get("phone_number", "")), float(item.get("amount", 0.0)), str(item.get("created_at", "")))
+        for item in audit_rows
+    }
+    merged_rows = list(audit_rows)
+    for item in legacy_rows:
+        key = build_deposited_trace_key(str(item.get("phone_number", "")), float(item.get("amount", 0.0)), str(item.get("created_at", "")))
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        merged_rows.append(item)
+    merged_rows.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+    return merged_rows[:safe_limit]
 
 
 def get_casino_game_or_404(game_id: str) -> CasinoGameItem:

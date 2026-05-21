@@ -1497,6 +1497,40 @@ class PostgresStateStore:
             conn.commit()
         return int(deleted)
 
+    def load_admin_deposit_transactions(self, limit: int = 5000, created_date: str | None = None) -> list[dict[str, Any]]:
+        if not self.enabled():
+            return []
+        safe_limit = max(1, min(5000, int(limit)))
+        where_sql = ""
+        params: list[Any] = []
+        if created_date:
+            where_sql = " AND created_at LIKE %s"
+            params.append(f"{created_date}%")
+        with psycopg.connect(self.dsn, row_factory=dict_row, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                rows = cur.execute(
+                    f"""
+                    SELECT id, phone_number, amount, status, created_at
+                    FROM transactions
+                    WHERE type = 'Deposit'
+                      AND status = 'Completed'
+                      {where_sql}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params + [safe_limit]),
+                ).fetchall()
+        return [
+            {
+                "id": int(row["id"]),
+                "phone_number": str(row["phone_number"]),
+                "amount": float(row["amount"]),
+                "status": str(row["status"]),
+                "created_at": str(row["created_at"]),
+            }
+            for row in rows
+        ]
+
     def update_deposited_record(
         self,
         event_id: str,

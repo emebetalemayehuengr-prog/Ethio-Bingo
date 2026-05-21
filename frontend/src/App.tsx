@@ -3512,11 +3512,13 @@ export default function App() {
     const methodLabel = item.method ?? "";
     const transactionNumber = item.transaction_number ?? "";
     const note = item.note ?? "";
+    const amountLabel = Number.isFinite(item.amount) ? item.amount.toFixed(2) : "";
     return (
       item.phone_number.toLowerCase().includes(query) ||
       methodLabel.toLowerCase().includes(query) ||
       transactionNumber.toLowerCase().includes(query) ||
-      note.toLowerCase().includes(query)
+      note.toLowerCase().includes(query) ||
+      amountLabel.includes(query)
     );
   });
   const filteredAdminDepositedTotal = filteredAdminDepositedRecords.reduce(
