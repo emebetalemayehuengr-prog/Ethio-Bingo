@@ -606,6 +606,53 @@ const deriveStakeUiFromRoom = (stake: StakeOption, room: RoomState): StakeOption
   };
 };
 
+type WithdrawFlowStatus = "Pending" | "Processing" | "Paid" | "Rejected";
+
+const normalizeWithdrawFlowStatus = (status: WithdrawTicket["status"]): WithdrawFlowStatus => {
+  if (status === "Approved") return "Paid";
+  return status;
+};
+
+const mergeWithdrawTicketForward = (previous: WithdrawTicket | undefined, incoming: WithdrawTicket): WithdrawTicket => {
+  const incomingStatus = normalizeWithdrawFlowStatus(incoming.status);
+  if (!previous) return { ...incoming, status: incomingStatus };
+
+  const previousStatus = normalizeWithdrawFlowStatus(previous.status);
+
+  if (previousStatus === "Paid") {
+    if (incomingStatus !== "Paid") return previous;
+    return { ...incoming, status: "Paid" };
+  }
+
+  if (previousStatus === "Rejected") {
+    if (incomingStatus !== "Rejected") return previous;
+    return { ...incoming, status: "Rejected" };
+  }
+
+  if (previousStatus === "Processing" && incomingStatus === "Pending") {
+    return { ...incoming, ...previous, status: "Processing" };
+  }
+
+  return { ...incoming, status: incomingStatus };
+};
+
+const mergeWithdrawTicketsForward = (previousTickets: WithdrawTicket[], incomingTickets: WithdrawTicket[]): WithdrawTicket[] => {
+  const previousById = new Map(previousTickets.map((ticket) => [ticket.id, ticket]));
+  return incomingTickets.map((ticket) => mergeWithdrawTicketForward(previousById.get(ticket.id), ticket));
+};
+
+const upsertWithdrawTicketForward = (tickets: WithdrawTicket[], incoming: WithdrawTicket): WithdrawTicket[] => {
+  const nextTicket = mergeWithdrawTicketForward(
+    tickets.find((ticket) => ticket.id === incoming.id),
+    incoming,
+  );
+  const index = tickets.findIndex((ticket) => ticket.id === incoming.id);
+  if (index < 0) return [nextTicket, ...tickets];
+  const next = [...tickets];
+  next[index] = nextTicket;
+  return next;
+};
+
 const stabilizeRoomMarks = (previous: RoomState | null, incoming: RoomState | null) => {
   if (!incoming || !previous) return incoming;
   if (incoming.id !== previous.id) return incoming;
@@ -1794,12 +1841,18 @@ export default function App() {
   const refreshAdminWithdrawRequests = async () => {
     if (!profile?.is_admin) return;
     const data = await fetchAdminWithdrawRequests();
-    setAdminWithdrawRequests(data.items);
+    setAdminWithdrawRequests((prev) => mergeWithdrawTicketsForward(prev, data.items));
     setAdminPayoutRefs((prev) => {
       const next = { ...prev };
       for (const item of data.items) {
+        const normalizedStatus = normalizeWithdrawFlowStatus(item.status);
+        const serverRef = item.payout_reference ?? "";
+        if (normalizedStatus === "Paid" && serverRef) {
+          next[item.id] = serverRef;
+          continue;
+        }
         if (!next[item.id]) {
-          next[item.id] = item.payout_reference ?? "";
+          next[item.id] = serverRef;
         }
       }
       return next;
@@ -4328,6 +4381,7 @@ export default function App() {
                                           try {
                                             const res = await approveAdminWithdrawRequest(item.id);
                                             setNotice(res.message);
+                                            setAdminWithdrawRequests((prev) => upsertWithdrawTicketForward(prev, res.item));
                                             await refreshAdminWithdrawRequests();
                                           } catch (err) {
                                             setError(err instanceof Error ? err.message : "Unable to start withdraw processing");
@@ -4348,6 +4402,7 @@ export default function App() {
                                           try {
                                             const res = await rejectAdminWithdrawRequest(item.id);
                                             setNotice(res.message);
+                                            setAdminWithdrawRequests((prev) => upsertWithdrawTicketForward(prev, res.item));
                                             await refreshAdminWithdrawRequests();
                                           } catch (err) {
                                             setError(err instanceof Error ? err.message : "Unable to reject withdraw request");
@@ -4374,7 +4429,7 @@ export default function App() {
                                       <button
                                         className="primary-btn"
                                         type="button"
-                                        disabled={working}
+                                        disabled={working || !payoutRef.trim()}
                                         onClick={async () => {
                                           setWorking(true);
                                           setError("");
@@ -4386,6 +4441,7 @@ export default function App() {
                                               payout_reference: payoutRef.trim(),
                                             });
                                             setNotice(res.message);
+                                            setAdminWithdrawRequests((prev) => upsertWithdrawTicketForward(prev, res.item));
                                             setAdminPayoutRefs((prev) => ({
                                               ...prev,
                                               [item.id]: "",
@@ -4410,6 +4466,7 @@ export default function App() {
                                           try {
                                             const res = await rejectAdminWithdrawRequest(item.id);
                                             setNotice(res.message);
+                                            setAdminWithdrawRequests((prev) => upsertWithdrawTicketForward(prev, res.item));
                                             await refreshAdminWithdrawRequests();
                                           } catch (err) {
                                             setError(err instanceof Error ? err.message : "Unable to reject withdraw request");

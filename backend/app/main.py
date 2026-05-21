@@ -320,6 +320,7 @@ class WithdrawTicket(BaseModel):
     paid_by: str | None = None
     payout_reference: str | None = None
     admin_note: str | None = None
+    processing_alert_sent_at: str | None = None
 
 
 class AuditEvent(BaseModel):
@@ -837,6 +838,7 @@ CASINO_LAUNCH_SESSIONS: dict[str, dict[str, str]] = {}
 USER_REFRESH_AT: dict[str, datetime] = {}
 ROOM_PUSH_SIGNATURES: dict[str, str] = {}
 ROOMS_REFRESHED_AT: datetime | None = None
+WITHDRAW_FLOW_LOCK = threading.Lock()
 
 PUSHER_CLIENT = (
     pusher.Pusher(
@@ -4492,34 +4494,57 @@ def admin_audit_events(user: UserStore = Depends(get_current_user)) -> dict:
 @app.post("/api/admin/withdraw-requests/{ticket_id}/approve")
 def approve_withdraw_request(ticket_id: str, user: UserStore = Depends(get_current_user)) -> dict:
     require_admin_user(user)
-    ticket = get_withdraw_ticket_or_404(ticket_id)
-    if ticket.status != "Pending":
-        raise HTTPException(status_code=400, detail=f"Request already {ticket.status.lower()}.")
-    ticket.status = "Processing"
-    ticket.processing_at = utc_now().replace(microsecond=0).isoformat()
-    ticket.processing_by = user.phone_number
-    ticket.reviewed_at = utc_now().replace(microsecond=0).isoformat()
-    ticket.reviewed_by = user.phone_number
+    with WITHDRAW_FLOW_LOCK:
+        ticket = get_withdraw_ticket_or_404(ticket_id)
+        if ticket.status in {"Paid", "Rejected"}:
+            raise HTTPException(status_code=400, detail=f"Request already {ticket.status.lower()}.")
 
-    persist_withdraw_tickets()
+        moved_to_processing = ticket.status == "Pending"
+        now_iso = utc_now().replace(microsecond=0).isoformat()
+        if moved_to_processing:
+            ticket.status = "Processing"
+            ticket.processing_at = now_iso
+            ticket.processing_by = user.phone_number
+            ticket.reviewed_at = now_iso
+            ticket.reviewed_by = user.phone_number
 
-    email_notified = send_admin_withdraw_email(ticket)
+        should_send_processing_alert = ticket.processing_alert_sent_at is None
+        if should_send_processing_alert:
+            # Reserve alert dispatch for this request so retries/double-clicks
+            # cannot send duplicate TO_PAY emails for the same ticket.
+            ticket.processing_alert_sent_at = now_iso
+
+        persist_withdraw_tickets()
+        ticket_payload = ticket.model_dump()
+
+    email_notified = False
     sms_alert_configured = bool(build_withdraw_sms_gateway_recipients() and SMTP_HOST)
-    sms_notified = send_admin_withdraw_sms_alert(ticket)
-    message = "Withdraw request moved to processing. Send bank payout, then mark paid."
+    sms_notified = False
+    if should_send_processing_alert:
+        email_notified = send_admin_withdraw_email(ticket)
+        sms_notified = send_admin_withdraw_sms_alert(ticket)
+
+    message = (
+        "Withdraw request moved to processing. Send bank payout, then mark paid."
+        if moved_to_processing
+        else "Withdraw request is already in processing."
+    )
     if email_notified:
         message = f"{message} Admin email alert sent."
     if sms_notified:
         message = f"{message} Admin SMS alert sent."
     elif sms_alert_configured:
         message = f"{message} Admin SMS alert failed delivery."
+    if not should_send_processing_alert:
+        message = f"{message} Processing alert already sent for this request."
 
     return {
         "message": message,
-        "item": ticket.model_dump(),
+        "item": ticket_payload,
         "email_notified": email_notified,
         "sms_alert_configured": sms_alert_configured,
         "sms_notified": sms_notified,
+        "processing_alert_already_sent": not should_send_processing_alert,
     }
 
 
