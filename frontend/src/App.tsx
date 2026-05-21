@@ -2967,8 +2967,7 @@ export default function App() {
         setMethodCode(fallbackMethod.code);
       }
     }
-    // Defer open to next frame to avoid same-click close races on some mobile webviews.
-    window.requestAnimationFrame(() => setDepositGuideOpen(true));
+    setDepositGuideOpen(true);
   };
 
   const onCloseBrandModal = () => {
@@ -3509,28 +3508,35 @@ export default function App() {
   const profileInitials = (profile.user_name.trim().slice(0, 2) || "40").toUpperCase();
   const selectedMethodDraftAccounts = selectedMethod ? adminDraftAccounts[selectedMethod.code] ?? [] : [];
   const selectedMethodAdminSaving = selectedMethod ? adminAccountsSavingByMethod[selectedMethod.code] ?? false : false;
-  const query = adminDepositedSearch.trim().toLowerCase();
-  const dayFilter = adminDepositedDayFilter.trim();
-  const filteredAdminDepositedRecords = adminDepositedRecords.filter((item) => {
-    if (dayFilter && !item.created_at.startsWith(dayFilter)) {
-      return false;
-    }
-    if (!query) return true;
-    const methodLabel = item.method ?? "";
-    const transactionNumber = item.transaction_number ?? "";
-    const note = item.note ?? "";
-    const amountLabel = Number.isFinite(item.amount) ? item.amount.toFixed(2) : "";
-    return (
-      item.phone_number.toLowerCase().includes(query) ||
-      methodLabel.toLowerCase().includes(query) ||
-      transactionNumber.toLowerCase().includes(query) ||
-      note.toLowerCase().includes(query) ||
-      amountLabel.includes(query)
-    );
-  });
-  const filteredAdminDepositedTotal = filteredAdminDepositedRecords.reduce(
-    (sum, item) => sum + (Number.isFinite(item.amount) ? item.amount : 0),
-    0,
+  const filteredAdminDepositedRecords = useMemo(() => {
+    if (!profile.is_admin || walletTab !== "admin") return [];
+    const query = adminDepositedSearch.trim().toLowerCase();
+    const dayFilter = adminDepositedDayFilter.trim();
+    return adminDepositedRecords.filter((item) => {
+      if (dayFilter && !item.created_at.startsWith(dayFilter)) {
+        return false;
+      }
+      if (!query) return true;
+      const methodLabel = item.method ?? "";
+      const transactionNumber = item.transaction_number ?? "";
+      const note = item.note ?? "";
+      const amountLabel = Number.isFinite(item.amount) ? item.amount.toFixed(2) : "";
+      return (
+        item.phone_number.toLowerCase().includes(query) ||
+        methodLabel.toLowerCase().includes(query) ||
+        transactionNumber.toLowerCase().includes(query) ||
+        note.toLowerCase().includes(query) ||
+        amountLabel.includes(query)
+      );
+    });
+  }, [profile.is_admin, walletTab, adminDepositedRecords, adminDepositedSearch, adminDepositedDayFilter]);
+  const filteredAdminDepositedTotal = useMemo(
+    () =>
+      filteredAdminDepositedRecords.reduce(
+        (sum, item) => sum + (Number.isFinite(item.amount) ? item.amount : 0),
+        0,
+      ),
+    [filteredAdminDepositedRecords],
   );
   const updateAdminDraftRows = (
     code: "telebirr" | "cbebirr",
