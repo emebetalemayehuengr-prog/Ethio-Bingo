@@ -655,6 +655,7 @@ HOUSE_COMMISSION_RATE = 0.15
 RESULT_ANNOUNCE_SECONDS = 15
 MAX_CARDS_PER_USER = 10
 CLAIM_GRACE_SECONDS = 2
+FINAL_CALL_AUTO_CLOSE_SECONDS = max(CLAIM_GRACE_SECONDS, env_int("FINAL_CALL_AUTO_CLOSE_SECONDS", 20))
 ENABLE_DEMO_SEED = env_flag("ENABLE_DEMO_SEED", False)
 ENABLE_SIMULATED_ACTIVITY = env_flag("ENABLE_SIMULATED_ACTIVITY", True)
 ENABLE_AUTO_MARK_CALLED_NUMBERS = env_flag("ENABLE_AUTO_MARK_CALLED_NUMBERS", True)
@@ -3804,9 +3805,38 @@ def end_room_if_calls_complete(room: RoomStore, now: datetime) -> None:
     total_round_seconds = SELECT_PHASE_SECONDS + (len(room.called_sequence) * CALL_INTERVAL_SECONDS)
     if elapsed_seconds < total_round_seconds:
         return
-    # Intentionally keep the room open after the final call until a winner is claimed.
-    # Claim flow itself will open a short split window and then finalize the round.
-    return
+
+    # Allow a short final-claim window after the last call, then close the round.
+    if elapsed_seconds < total_round_seconds + FINAL_CALL_AUTO_CLOSE_SECONDS:
+        return
+
+    called_numbers = compute_called_numbers(room, now)
+    changed_user_phones: set[str] = set()
+    changed_user_phones.update(
+        record_bet_history_for_round(
+            room=room,
+            now=now,
+            called_numbers=called_numbers,
+            winners=[],
+            game_winning=0.0,
+        )
+    )
+    changed_user_phones.update(refund_unplayed_cards_for_round(room))
+
+    room.winners = []
+    room.ended_at = now
+    room.winner_phone = None
+    room.winner_cartella = None
+    room.winner_payout = None
+    room.house_commission = None
+    room.result_until = now + timedelta(seconds=RESULT_ANNOUNCE_SECONDS)
+    room.pending_claims = []
+    room.claim_window_ends_at = None
+    room.claim_window_reference_time = None
+
+    if changed_user_phones:
+        persist_users(changed_user_phones)
+    persist_room(room)
 
 
 def get_queue_maps(

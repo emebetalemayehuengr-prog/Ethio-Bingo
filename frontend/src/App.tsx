@@ -1655,10 +1655,10 @@ export default function App() {
           setMethodCode((prev) => (dash.deposit_methods.some((method) => method.code === prev) ? prev : dash.deposit_methods[0].code));
         }
       }
-      const stake =
-        dash.stake_options.find(
-          (option) => (option.my_cards_current ?? 0) > 0 || (option.my_cards_next ?? 0) > 0,
-        ) ?? null;
+      const ownedStakes = dash.stake_options.filter(
+        (option) => (option.my_cards_current ?? 0) > 0 || (option.my_cards_next ?? 0) > 0,
+      );
+      const stake = ownedStakes.find((option) => option.room_phase !== "finished") ?? ownedStakes[0] ?? null;
       if (!stake) {
         setService("stakes");
         setNotice("Choose stake and buy cartella first.");
@@ -3449,8 +3449,9 @@ export default function App() {
                       ? "Playing"
                       : stake.room_phase === "finished"
                         ? fmtClock(liveCountdown)
-                        : "None";
-                const canOpen = (stake.my_cards_current ?? 0) > 0;
+                      : "None";
+                const hasCurrentCards = (stake.my_cards_current ?? 0) > 0;
+                const canOpen = hasCurrentCards && stake.room_phase !== "finished";
                 return (
                   <div key={stake.id} className={`stake-row ${stake.bonus ? "bonus" : ""}`}>
                     <span className="stake-col">
