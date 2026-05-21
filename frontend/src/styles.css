@@ -1211,6 +1211,11 @@ textarea {
   display: flex;
 }
 
+.deposit-guide-overlay {
+  z-index: 1301;
+  display: flex;
+}
+
 .modal-card {
   width: min(760px, 100%);
   max-height: min(90vh, 960px);

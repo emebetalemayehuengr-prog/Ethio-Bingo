@@ -60,6 +60,8 @@ export default function DepositModalContent({
   onSubmit,
 }: Props) {
   const formBusy = adminWorking || submitWorking;
+  const transferAccounts = selectedMethod?.transfer_accounts ?? [];
+  const receiptExample = selectedMethod?.receipt_example ?? "";
   return (
     <>
       <div className="modal-head">
@@ -108,10 +110,10 @@ export default function DepositModalContent({
                     </div>
                   </div>
                 ))
-              : selectedMethod.transfer_accounts.map((account) => (
-                  <div key={`${selectedMethod.code}-${account.phone_number}`} className="account-box">
-                    <span>{account.phone_number}</span>
-                    <small>{account.owner_name}</small>
+               : transferAccounts.map((account) => (
+                   <div key={`${selectedMethod.code}-${account.phone_number}`} className="account-box">
+                     <span>{account.phone_number}</span>
+                     <small>{account.owner_name}</small>
                     <button className="secondary-btn copy-btn" type="button" onClick={() => onCopyPhone(account.phone_number)}>
                       {copiedPhone === account.phone_number ? "Copied" : "Copy"}
                     </button>
@@ -170,7 +172,7 @@ export default function DepositModalContent({
                 required
                 rows={5}
                 value={receiptMessage}
-                placeholder={`Paste the payment SMS or receipt text here. Example transaction number: ${selectedMethod.receipt_example}`}
+                placeholder={`Paste the payment SMS or receipt text here. Example transaction number: ${receiptExample}`}
                 spellCheck={false}
                 aria-invalid={Boolean(fieldErrors.receiptMessage)}
                 className={fieldErrors.receiptMessage ? "input-error" : undefined}

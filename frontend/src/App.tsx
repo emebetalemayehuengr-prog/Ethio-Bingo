@@ -2960,6 +2960,17 @@ export default function App() {
     }
   };
 
+  const openDepositGuide = () => {
+    if (!selectedMethod) {
+      const fallbackMethod = dashboard?.deposit_methods?.[0];
+      if (fallbackMethod) {
+        setMethodCode(fallbackMethod.code);
+      }
+    }
+    // Defer open to next frame to avoid same-click close races on some mobile webviews.
+    window.requestAnimationFrame(() => setDepositGuideOpen(true));
+  };
+
   const onCloseBrandModal = () => {
     window.localStorage.setItem(BRAND_MODAL_STORAGE_KEY, String(Date.now()));
     window.localStorage.removeItem(LEGACY_BRAND_MODAL_STORAGE_KEY);
@@ -4251,7 +4262,7 @@ export default function App() {
                     />
                   ))}
                 </div>
-                <button className="primary-btn" type="button" onClick={() => setDepositGuideOpen(true)}>
+                <button className="primary-btn" type="button" onClick={openDepositGuide}>
                   Open Deposit Instructions
                 </button>
                 <div className="wallet-language-note" aria-label="Deposit instructions in Amharic">
@@ -4936,7 +4947,7 @@ export default function App() {
       )}
 
       {depositGuideOpen && (
-        <div className="modal-overlay show" onClick={() => setDepositGuideOpen(false)}>
+        <div className="modal-overlay show deposit-guide-overlay" onClick={() => setDepositGuideOpen(false)}>
           <div
             ref={depositDialogRef}
             className="modal-card deposit-modal"
