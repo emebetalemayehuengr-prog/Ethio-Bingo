@@ -10,6 +10,7 @@ import {
   fetchBetHistory,
   fetchCasinoGames,
   fetchDashboard,
+  fetchMe,
   fetchHistory,
   fetchStakeRoom,
   getAuthToken,
@@ -1317,6 +1318,7 @@ export default function App() {
   const lastPickerTransitionLogRef = useRef<string>("");
   const lastFinishedRoomRef = useRef<string | null>(null);
   const lastFinishedRedirectRef = useRef<string | null>(null);
+  const lastWinnerWalletSyncRef = useRef<string | null>(null);
   const lastSeenRoundKeyRef = useRef<string>("");
   const sharedStakeOpeningRef = useRef(false);
   const roomsRefreshInFlightRef = useRef(false);
@@ -2575,6 +2577,34 @@ export default function App() {
     setNowPlayingExpanded(true);
     setNotice("Round finished. Winners are shown below. Use Play again when you're ready.");
   }, [service, room?.phase, room?.id, room?.round_id, room?.winners]);
+
+  useEffect(() => {
+    const finishedRoundKey =
+      service === "game" && room?.phase === "finished" && room?.id
+        ? `${room.id}:${room.round_id}`
+        : null;
+    if (!finishedRoundKey) {
+      lastWinnerWalletSyncRef.current = null;
+      return;
+    }
+    const myPhone = profile?.phone_number ?? "";
+    if (!myPhone) return;
+    const iAmWinner = (room?.winners ?? []).some((entry) => entry.phone_number === myPhone);
+    if (!iAmWinner) return;
+    if (lastWinnerWalletSyncRef.current === finishedRoundKey) return;
+    lastWinnerWalletSyncRef.current = finishedRoundKey;
+    void (async () => {
+      try {
+        const me = await fetchMe();
+        startTransition(() => {
+          setProfile(me.user);
+          setDashboard((prev) => (prev ? { ...prev, wallet: me.wallet } : prev));
+        });
+      } catch (err) {
+        console.warn("[wallet] Winner balance refresh failed", err);
+      }
+    })();
+  }, [service, room?.phase, room?.id, room?.round_id, room?.winners, profile?.phone_number]);
 
   useEffect(() => {
     if (!cardRechargeLabel) return;

@@ -5703,6 +5703,14 @@ def set_auto_mark_preference(payload: AutoMarkPreferenceRequest, user: UserStore
 
 @app.post("/api/game/claim-bingo")
 def claim_bingo(payload: ClaimBingoRequest, user: UserStore = Depends(get_current_user)) -> dict:
+    def latest_wallet_for(current_user: UserStore) -> tuple[dict, UserStore]:
+        latest_user = current_user
+        if PG_STORE.enabled():
+            refreshed = refresh_user_from_primary_store(current_user.phone_number)
+            if refreshed is not None:
+                latest_user = refreshed
+        return latest_user.wallet.model_dump(), latest_user
+
     room = get_room_by_id(payload.room_id)
     room_state = build_room_state(room, user.phone_number)
 
@@ -5715,9 +5723,10 @@ def claim_bingo(payload: ClaimBingoRequest, user: UserStore = Depends(get_curren
             winner = winners
         else:
             winner = room_state.winner_name or "Unknown"
+        wallet_payload, _ = latest_wallet_for(user)
         return {
             "message": f"Game already finished. Winner: {winner}",
-            "wallet": user.wallet.model_dump(),
+            "wallet": wallet_payload,
             "room": room_state.model_dump(),
         }
 
@@ -5761,15 +5770,17 @@ def claim_bingo(payload: ClaimBingoRequest, user: UserStore = Depends(get_curren
     if next_state.phase == "finished":
         winner_count = len(next_state.winners)
         split_note = f"split between {winner_count} winner(s)" if winner_count > 1 else "single winner payout"
+        wallet_payload, _ = latest_wallet_for(user)
         return {
             "message": f"Bingo finalized: {split_note}. House commission is 15%.",
-            "wallet": user.wallet.model_dump(),
+            "wallet": wallet_payload,
             "room": next_state.model_dump(),
         }
 
+    wallet_payload, _ = latest_wallet_for(user)
     return {
         "message": f"Claim received. Waiting {next_state.claim_window_seconds}s for final winner split.",
-        "wallet": user.wallet.model_dump(),
+        "wallet": wallet_payload,
         "room": next_state.model_dump(),
     }
 
