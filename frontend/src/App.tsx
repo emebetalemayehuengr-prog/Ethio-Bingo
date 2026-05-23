@@ -613,25 +613,45 @@ const deriveStakeUiFromRoom = (stake: StakeOption, room: RoomState): StakeOption
   };
 };
 
+const parseFiniteNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
 const sanitizeStakeOptions = (source: unknown): StakeOption[] => {
   if (!Array.isArray(source)) return [];
   const sanitized: StakeOption[] = [];
   for (const entry of source) {
     if (!entry || typeof entry !== "object") continue;
     const item = entry as Partial<StakeOption>;
-    if (typeof item.id !== "string" || !item.id.trim()) continue;
-    if (typeof item.stake !== "number" || !Number.isFinite(item.stake)) continue;
+    const normalizedId =
+      typeof item.id === "string"
+        ? item.id.trim()
+        : typeof item.id === "number" && Number.isFinite(item.id)
+          ? String(item.id)
+          : "";
+    const normalizedStake = parseFiniteNumber(item.stake);
+    if (!normalizedId || normalizedStake == null) continue;
+    const normalizedStatus = typeof item.status === "string" ? item.status.toLowerCase() : "";
     sanitized.push({
-      id: item.id,
-      stake: item.stake,
-      status: item.status === "playing" || item.status === "none" ? item.status : "countdown",
-      countdown_seconds: typeof item.countdown_seconds === "number" && Number.isFinite(item.countdown_seconds) ? item.countdown_seconds : null,
-      possible_win: typeof item.possible_win === "number" && Number.isFinite(item.possible_win) ? item.possible_win : null,
+      id: normalizedId,
+      stake: normalizedStake,
+      status: normalizedStatus === "playing" || normalizedStatus === "none" ? normalizedStatus : "countdown",
+      countdown_seconds: parseFiniteNumber(item.countdown_seconds),
+      possible_win: parseFiniteNumber(item.possible_win),
       bonus: Boolean(item.bonus),
-      room_phase: item.room_phase === "selecting" || item.room_phase === "playing" || item.room_phase === "finished" ? item.room_phase : null,
-      my_cards_current:
-        typeof item.my_cards_current === "number" && Number.isFinite(item.my_cards_current) ? item.my_cards_current : 0,
-      my_cards_next: typeof item.my_cards_next === "number" && Number.isFinite(item.my_cards_next) ? item.my_cards_next : 0,
+      room_phase:
+        item.room_phase === "selecting" || item.room_phase === "playing" || item.room_phase === "finished"
+          ? item.room_phase
+          : null,
+      my_cards_current: Math.max(0, Math.trunc(parseFiniteNumber(item.my_cards_current) ?? 0)),
+      my_cards_next: Math.max(0, Math.trunc(parseFiniteNumber(item.my_cards_next) ?? 0)),
       open_available: Boolean(item.open_available),
     });
   }
@@ -1249,6 +1269,7 @@ export default function App() {
   const lastFinishedRedirectRef = useRef<string | null>(null);
   const lastSeenRoundKeyRef = useRef<string>("");
   const sharedStakeOpeningRef = useRef(false);
+  const roomsRefreshInFlightRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [pusherReady, setPusherReady] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => readInitialDarkModePreference());
@@ -1287,6 +1308,7 @@ export default function App() {
   const [methodCode, setMethodCode] = useState<"telebirr" | "cbebirr">("telebirr");
   const [walletTab, setWalletTab] = useState<WalletTab>("deposit");
   const [depositGuideOpen, setDepositGuideOpen] = useState(false);
+  const [cachedStakeOptions, setCachedStakeOptions] = useState<StakeOption[]>([]);
   const [cachedDepositMethods, setCachedDepositMethods] = useState<DepositMethod[]>([]);
   const [depositAmount, setDepositAmount] = useState("100");
   const [txNo, setTxNo] = useState("");
@@ -1360,7 +1382,11 @@ export default function App() {
     () => depositMethodsForRender.find((method) => method.code === methodCode) ?? depositMethodsForRender[0] ?? null,
     [depositMethodsForRender, methodCode],
   );
-  const stakeOptionsForRender = useMemo(() => sanitizeStakeOptions(dashboard?.stake_options), [dashboard?.stake_options]);
+  const liveStakeOptions = useMemo(() => sanitizeStakeOptions(dashboard?.stake_options), [dashboard?.stake_options]);
+  const stakeOptionsForRender = useMemo(() => {
+    if (liveStakeOptions.length > 0) return liveStakeOptions;
+    return cachedStakeOptions;
+  }, [liveStakeOptions, cachedStakeOptions]);
   const selectedCartellaOwned = useMemo(() => {
     if (!pickerRoom || !selectedCartella) return false;
     return pickerRoom.my_cartellas.includes(selectedCartella) || pickerRoom.next_my_cartellas.includes(selectedCartella);
@@ -1753,6 +1779,16 @@ export default function App() {
   }, [service, cartellaOpen]);
 
   useEffect(() => {
+    if (!liveStakeOptions.length) return;
+    setCachedStakeOptions((previous) => {
+      const previousSignature = JSON.stringify(previous);
+      const nextSignature = JSON.stringify(liveStakeOptions);
+      if (previousSignature === nextSignature) return previous;
+      return liveStakeOptions;
+    });
+  }, [liveStakeOptions]);
+
+  useEffect(() => {
     if (!stakeOptionsForRender.length) {
       setStakeCountdownDeadlines({});
       return;
@@ -1899,6 +1935,26 @@ export default function App() {
     }
   }
 
+  const refreshRoomsStakeOptions = async () => {
+    if (roomsRefreshInFlightRef.current) return;
+    roomsRefreshInFlightRef.current = true;
+    try {
+      const dash = await fetchDashboard();
+      startTransition(() => {
+        setDashboard(dash);
+        setProfile(dash.user);
+        const methods = sanitizeDepositMethods(dash.deposit_methods);
+        if (methods.length > 0) {
+          setMethodCode((prev) => (methods.some((method) => method.code === prev) ? prev : methods[0].code));
+        }
+      });
+    } catch (err) {
+      console.error("[rooms] Stake options refresh failed", err);
+    } finally {
+      roomsRefreshInFlightRef.current = false;
+    }
+  };
+
   const openService = (next: ServiceView) => {
     if (!CASINO_ENABLED && (next === "casino" || next === "casino-launch")) {
       setService("home");
@@ -1913,6 +1969,8 @@ export default function App() {
     if (next === "stakes") {
       console.warn("[rooms] Opening Rooms view", {
         stake_count: stakeOptionsForRender.length,
+        live_stake_count: liveStakeOptions.length,
+        cached_stake_count: cachedStakeOptions.length,
         has_dashboard: Boolean(dashboard),
       });
       if (!stakeOptionsForRender.length) {
@@ -1920,6 +1978,8 @@ export default function App() {
           has_dashboard: Boolean(dashboard),
           has_profile: Boolean(profile),
         });
+        setNotice("Syncing rooms...");
+        void refreshRoomsStakeOptions();
       }
     }
     setService(next);
@@ -2028,6 +2088,11 @@ export default function App() {
           const methods = sanitizeDepositMethods(dash.deposit_methods);
           if (methods.length > 0) {
             setMethodCode((prev) => (methods.some((method) => method.code === prev) ? prev : methods[0].code));
+          }
+        } else {
+          console.error("[app] Dashboard fetch failed", dashResult.reason);
+          if (!dashboard || !stakeOptionsForRender.length) {
+            setError("Unable to refresh rooms. Check your connection and try again.");
           }
         }
 
