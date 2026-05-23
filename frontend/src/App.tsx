@@ -133,6 +133,7 @@ const STAKES_DASHBOARD_POLL_MS = 2000;
 const DEFAULT_DASHBOARD_POLL_MS = 4800;
 const CARTELLA_POLL_MS = 2200;
 const CARTELLA_HEARTBEAT_POLL_MS = 9000;
+const STAKE_AUTO_OPEN_THROTTLE_MS = 1200;
 const AUTO_MARK_AUTO_CLAIM_RETRY_MS = 1200;
 const OPEN_STALE_FINISHED_RETRIES = 12;
 const OPEN_STALE_RETRY_DELAY_MS = 300;
@@ -1321,6 +1322,8 @@ export default function App() {
   const lastFinishedRedirectRef = useRef<string | null>(null);
   const lastWinnerWalletSyncRef = useRef<string | null>(null);
   const lastAutoMarkClaimAttemptRef = useRef<{ key: string; at: number }>({ key: "", at: 0 });
+  const stakeAutoOpenAttemptRef = useRef<{ key: string; at: number }>({ key: "", at: 0 });
+  const stakeAutoOpenInFlightRef = useRef(false);
   const countdownStabilityRef = useRef<Record<"game" | "picker", { phaseKey: string; value: number }>>({
     game: { phaseKey: "", value: 0 },
     picker: { phaseKey: "", value: 0 },
@@ -2333,7 +2336,14 @@ export default function App() {
     if (!profile || !isPageVisible) return;
     if (cartellaOpen || service === "game") return;
     let inFlight = false;
-    const pollIntervalMs = service === "stakes" ? STAKES_DASHBOARD_POLL_MS : DEFAULT_DASHBOARD_POLL_MS;
+    const hasOwnedStakePresence = stakeOptionsForRender.some(
+      (option) =>
+        (option.my_cards_current ?? 0) > 0 ||
+        (option.my_cards_next ?? 0) > 0 ||
+        Boolean(option.open_available),
+    );
+    const pollIntervalMs =
+      service === "stakes" || hasOwnedStakePresence ? STAKES_DASHBOARD_POLL_MS : DEFAULT_DASHBOARD_POLL_MS;
     const pollDashboard = () => {
       if (inFlight) return;
       inFlight = true;
@@ -2356,7 +2366,33 @@ export default function App() {
       pollDashboard();
     }, pollIntervalMs);
     return () => window.clearInterval(timer);
-  }, [profile?.phone_number, service, cartellaOpen, isPageVisible]);
+  }, [profile?.phone_number, service, cartellaOpen, isPageVisible, stakeOptionsForRender]);
+
+  useEffect(() => {
+    if (!profile || !isPageVisible) return;
+    if (service !== "home" && service !== "stakes") return;
+    if (overlayOpen || working) return;
+    const candidate = stakeOptionsForRender.find(
+      (option) =>
+        option.room_phase === "playing" &&
+        ((option.my_cards_current ?? 0) > 0 || Boolean(option.open_available)),
+    );
+    if (!candidate) return;
+    const attemptKey = `${service}:${candidate.id}:${candidate.room_phase ?? ""}:${candidate.my_cards_current ?? 0}:${candidate.my_cards_next ?? 0}`;
+    const now = Date.now();
+    if (stakeAutoOpenInFlightRef.current) return;
+    const lastAttempt = stakeAutoOpenAttemptRef.current;
+    if (lastAttempt.key === attemptKey && now - lastAttempt.at < STAKE_AUTO_OPEN_THROTTLE_MS) return;
+    stakeAutoOpenAttemptRef.current = { key: attemptKey, at: now };
+    stakeAutoOpenInFlightRef.current = true;
+    void (async () => {
+      try {
+        await openOwnedStakeGame(candidate);
+      } finally {
+        stakeAutoOpenInFlightRef.current = false;
+      }
+    })();
+  }, [profile?.phone_number, service, overlayOpen, working, stakeOptionsForRender, isPageVisible]);
 
   useEffect(() => {
     if (!room?.id || service !== "game" || !isPageVisible) return;
@@ -2545,17 +2581,26 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (
-      cartellaOpen &&
-      pickerRoom?.phase === "playing" &&
-      room?.id === pickerRoom.id &&
-      pickerRoom?.my_cartellas?.length > 0 &&
-      cards.length > 0
-    ) {
+    if (!cartellaOpen) return;
+    if (pickerRoom?.phase !== "playing") return;
+    if ((pickerRoom?.my_cartellas?.length ?? 0) === 0) return;
+    if (room?.id === pickerRoom.id && cards.length > 0) {
       setCartellaOpen(false);
       setService("game");
+      return;
     }
-  }, [cartellaOpen, pickerRoom?.phase, pickerRoom?.id, pickerRoom?.my_cartellas, room?.id, cards.length]);
+    if (!selectedStake || working) return;
+    if (stakeAutoOpenInFlightRef.current) return;
+    stakeAutoOpenInFlightRef.current = true;
+    void (async () => {
+      try {
+        await openOwnedStakeGame(selectedStake);
+        setCartellaOpen(false);
+      } finally {
+        stakeAutoOpenInFlightRef.current = false;
+      }
+    })();
+  }, [cartellaOpen, pickerRoom?.phase, pickerRoom?.id, pickerRoom?.my_cartellas, room?.id, cards.length, selectedStake, working]);
 
   useEffect(() => {
     const finishedRoomKey =
