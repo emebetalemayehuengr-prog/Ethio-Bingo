@@ -43,8 +43,10 @@ const API_BASE = normalizedRuntimeApiBase || normalizedEnvApiBase || inferApiBas
 const TOKEN_KEY = "40bingo_token";
 const LEGACY_TOKEN_KEY = "ethio_bingo_token";
 const REQUEST_TIMEOUT_MS = 12000;
+const READ_REQUEST_TIMEOUT_MS = 15000;
+const DASHBOARD_REQUEST_TIMEOUT_MS = 20000;
 const GAME_READ_REQUEST_TIMEOUT_MS = 15000;
-const GAME_TRANSPORT_RETRY_LIMIT = 1;
+const TRANSPORT_RETRY_LIMIT = 1;
 const AUTH_RECOVERY_TIMEOUT_MS = 7000;
 const AUTH_RECOVERY_RETRY_LIMIT = 1;
 const AUTH_SESSION_PROBE_PATH = "/api/auth/me";
@@ -109,6 +111,7 @@ const isAuthEndpointPath = (path: string) => {
 };
 
 const isGameEndpointPath = (path: string) => normalizePath(path).startsWith("/api/game/");
+const isDashboardEndpointPath = (path: string) => normalizePath(path) === "/api/dashboard";
 
 const normalizeMethod = (method?: string) => (method ?? "GET").toUpperCase();
 
@@ -118,8 +121,10 @@ const isRetrySafeMethod = (method?: string) => {
 };
 
 const getRequestTimeoutForPath = (path: string, method?: string) => {
-  if (!isGameEndpointPath(path)) return REQUEST_TIMEOUT_MS;
-  return isRetrySafeMethod(method) ? GAME_READ_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+  if (!isRetrySafeMethod(method)) return REQUEST_TIMEOUT_MS;
+  if (isDashboardEndpointPath(path)) return DASHBOARD_REQUEST_TIMEOUT_MS;
+  if (isGameEndpointPath(path)) return GAME_READ_REQUEST_TIMEOUT_MS;
+  return READ_REQUEST_TIMEOUT_MS;
 };
 
 const notifyAuthExpired = () => {
@@ -214,12 +219,11 @@ async function request<T>(
     response = await performFetch(path, options, headers, getRequestTimeoutForPath(path, options?.method));
   } catch (err) {
     const message = err instanceof Error ? err.message.toLowerCase() : "";
-    const canRetryGameTransport =
-      transportRetryAttempt < GAME_TRANSPORT_RETRY_LIMIT &&
-      isGameEndpointPath(path) &&
+    const canRetryTransport =
+      transportRetryAttempt < TRANSPORT_RETRY_LIMIT &&
       isRetrySafeMethod(options?.method) &&
       (message.includes("timed out") || message.includes("network error") || message.includes("offline"));
-    if (canRetryGameTransport) {
+    if (canRetryTransport) {
       return request<T>(path, options, authRetryAttempt, transportRetryAttempt + 1);
     }
     throw err;

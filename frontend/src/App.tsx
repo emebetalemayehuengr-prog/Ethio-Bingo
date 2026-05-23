@@ -718,6 +718,54 @@ const FALLBACK_DEPOSIT_METHODS: DepositMethod[] = [
   },
 ];
 
+const FALLBACK_STAKE_OPTIONS: StakeOption[] = [
+  { id: "stake-10", stake: 10, status: "countdown", countdown_seconds: 30, possible_win: null, bonus: true, room_phase: "selecting", my_cards_current: 0, my_cards_next: 0, open_available: false },
+  { id: "stake-20", stake: 20, status: "playing", countdown_seconds: null, possible_win: null, bonus: false, room_phase: "playing", my_cards_current: 0, my_cards_next: 0, open_available: false },
+  { id: "stake-30", stake: 30, status: "countdown", countdown_seconds: 30, possible_win: null, bonus: false, room_phase: "selecting", my_cards_current: 0, my_cards_next: 0, open_available: false },
+  { id: "stake-50", stake: 50, status: "playing", countdown_seconds: null, possible_win: null, bonus: false, room_phase: "playing", my_cards_current: 0, my_cards_next: 0, open_available: false },
+  { id: "stake-80", stake: 80, status: "none", countdown_seconds: null, possible_win: null, bonus: false, room_phase: null, my_cards_current: 0, my_cards_next: 0, open_available: false },
+  { id: "stake-100", stake: 100, status: "countdown", countdown_seconds: 30, possible_win: null, bonus: true, room_phase: "selecting", my_cards_current: 0, my_cards_next: 0, open_available: false },
+  { id: "stake-150", stake: 150, status: "none", countdown_seconds: null, possible_win: null, bonus: false, room_phase: null, my_cards_current: 0, my_cards_next: 0, open_available: false },
+  { id: "stake-200", stake: 200, status: "none", countdown_seconds: null, possible_win: null, bonus: false, room_phase: null, my_cards_current: 0, my_cards_next: 0, open_available: false },
+  { id: "stake-300", stake: 300, status: "none", countdown_seconds: null, possible_win: null, bonus: false, room_phase: null, my_cards_current: 0, my_cards_next: 0, open_available: false },
+];
+
+const mergeDashboardSnapshot = (
+  previous: DashboardResponse | null,
+  incoming: DashboardResponse,
+): DashboardResponse => {
+  const previousMethods = sanitizeDepositMethods(previous?.deposit_methods);
+  const incomingMethods = sanitizeDepositMethods(incoming.deposit_methods);
+  const methods =
+    incomingMethods.length > 0
+      ? incomingMethods
+      : previousMethods.length > 0
+        ? previousMethods
+        : FALLBACK_DEPOSIT_METHODS;
+
+  const previousStakes = sanitizeStakeOptions(previous?.stake_options);
+  const incomingStakes = sanitizeStakeOptions(incoming.stake_options);
+  const stakes =
+    incomingStakes.length > 0
+      ? incomingStakes
+      : previousStakes.length > 0
+        ? previousStakes
+        : FALLBACK_STAKE_OPTIONS;
+
+  if (incomingStakes.length === 0) {
+    console.warn("[rooms] Incoming dashboard snapshot had empty stake list; preserving previous/fallback stakes", {
+      previous_stake_count: previousStakes.length,
+      fallback_stake_count: FALLBACK_STAKE_OPTIONS.length,
+    });
+  }
+
+  return {
+    ...incoming,
+    deposit_methods: methods,
+    stake_options: stakes,
+  };
+};
+
 type WithdrawFlowStatus = "Pending" | "Processing" | "Paid" | "Rejected";
 
 const normalizeWithdrawFlowStatus = (status: WithdrawTicket["status"]): WithdrawFlowStatus => {
@@ -1270,6 +1318,7 @@ export default function App() {
   const lastSeenRoundKeyRef = useRef<string>("");
   const sharedStakeOpeningRef = useRef(false);
   const roomsRefreshInFlightRef = useRef(false);
+  const depositMethodsRefreshInFlightRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [pusherReady, setPusherReady] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => readInitialDarkModePreference());
@@ -1385,7 +1434,8 @@ export default function App() {
   const liveStakeOptions = useMemo(() => sanitizeStakeOptions(dashboard?.stake_options), [dashboard?.stake_options]);
   const stakeOptionsForRender = useMemo(() => {
     if (liveStakeOptions.length > 0) return liveStakeOptions;
-    return cachedStakeOptions;
+    if (cachedStakeOptions.length > 0) return cachedStakeOptions;
+    return FALLBACK_STAKE_OPTIONS;
   }, [liveStakeOptions, cachedStakeOptions]);
   const selectedCartellaOwned = useMemo(() => {
     if (!pickerRoom || !selectedCartella) return false;
@@ -1909,7 +1959,7 @@ export default function App() {
     try {
       const dash = dashboard ?? (await fetchDashboard());
       if (!dashboard) {
-        setDashboard(dash);
+        setDashboard((prev) => mergeDashboardSnapshot(prev, dash));
         setProfile(dash.user);
         const methods = sanitizeDepositMethods(dash.deposit_methods);
         if (methods.length > 0) {
@@ -1941,7 +1991,7 @@ export default function App() {
     try {
       const dash = await fetchDashboard();
       startTransition(() => {
-        setDashboard(dash);
+        setDashboard((prev) => mergeDashboardSnapshot(prev, dash));
         setProfile(dash.user);
         const methods = sanitizeDepositMethods(dash.deposit_methods);
         if (methods.length > 0) {
@@ -1954,6 +2004,13 @@ export default function App() {
       roomsRefreshInFlightRef.current = false;
     }
   };
+
+  useEffect(() => {
+    if (service !== "stakes") return;
+    if (!profile) return;
+    if (liveStakeOptions.length > 0) return;
+    void refreshRoomsStakeOptions();
+  }, [service, profile, liveStakeOptions.length]);
 
   const openService = (next: ServiceView) => {
     if (!CASINO_ENABLED && (next === "casino" || next === "casino-launch")) {
@@ -2083,7 +2140,7 @@ export default function App() {
       startTransition(() => {
         if (dashResult.status === "fulfilled") {
           const dash = dashResult.value;
-          setDashboard(dash);
+          setDashboard((prev) => mergeDashboardSnapshot(prev, dash));
           setProfile(dash.user);
           const methods = sanitizeDepositMethods(dash.deposit_methods);
           if (methods.length > 0) {
@@ -2264,7 +2321,7 @@ export default function App() {
         try {
           const dash = await fetchDashboard();
           startTransition(() => {
-            setDashboard(dash);
+            setDashboard((prev) => mergeDashboardSnapshot(prev, dash));
             setProfile(dash.user);
           });
         } catch {
@@ -3060,7 +3117,7 @@ export default function App() {
         (async () => {
           const dash = await fetchDashboard();
           startTransition(() => {
-            setDashboard(dash);
+            setDashboard((prev) => mergeDashboardSnapshot(prev, dash));
             setProfile(dash.user);
           });
         })(),
@@ -3163,12 +3220,14 @@ export default function App() {
     });
     setDepositGuideOpen(true);
     if (liveDepositMethods.length > 0) return;
+    if (depositMethodsRefreshInFlightRef.current) return;
+    depositMethodsRefreshInFlightRef.current = true;
     console.warn("[deposit] Opening instructions without live methods, forcing dashboard refresh");
     void (async () => {
       try {
         const dash = await fetchDashboard();
         startTransition(() => {
-          setDashboard(dash);
+          setDashboard((prev) => mergeDashboardSnapshot(prev, dash));
           setProfile(dash.user);
           const methods = sanitizeDepositMethods(dash.deposit_methods);
           if (methods.length > 0) {
@@ -3176,7 +3235,10 @@ export default function App() {
           }
         });
       } catch (err) {
-        console.error("[deposit] Failed to refresh deposit methods", err);
+        console.warn("[deposit] Failed to refresh deposit methods", err);
+        setNotice((prev) => (prev || "Deposit methods are loading. Please retry in a moment."));
+      } finally {
+        depositMethodsRefreshInFlightRef.current = false;
       }
     })();
   };
