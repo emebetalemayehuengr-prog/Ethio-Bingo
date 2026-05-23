@@ -662,7 +662,7 @@ DEMO_START_BALANCE = 700.0
 HOUSE_COMMISSION_RATE = 0.15
 RESULT_ANNOUNCE_SECONDS = 15
 MAX_CARDS_PER_USER = 10
-CLAIM_GRACE_SECONDS = 2
+CLAIM_GRACE_SECONDS = max(2, env_int("CLAIM_GRACE_SECONDS", 2))
 FINAL_CALL_AUTO_CLOSE_SECONDS = max(CLAIM_GRACE_SECONDS, env_int("FINAL_CALL_AUTO_CLOSE_SECONDS", 20))
 ENABLE_DEMO_SEED = env_flag("ENABLE_DEMO_SEED", False)
 ENABLE_SIMULATED_ACTIVITY = env_flag("ENABLE_SIMULATED_ACTIVITY", True)
@@ -858,6 +858,17 @@ ROOMS_REFRESHED_AT: datetime | None = None
 WITHDRAW_FLOW_LOCK = threading.Lock()
 DEPOSIT_METHODS_LOCK = threading.Lock()
 AUDIT_EVENTS_LOCK = threading.Lock()
+ROOM_STATE_LOCKS: dict[str, threading.RLock] = {}
+ROOM_STATE_LOCKS_GUARD = threading.Lock()
+
+
+def get_room_state_lock(room_id: str) -> threading.RLock:
+    with ROOM_STATE_LOCKS_GUARD:
+        lock = ROOM_STATE_LOCKS.get(room_id)
+        if lock is None:
+            lock = threading.RLock()
+            ROOM_STATE_LOCKS[room_id] = lock
+        return lock
 
 PUSHER_CLIENT = (
     pusher.Pusher(
@@ -3972,116 +3983,119 @@ def start_next_round(room: RoomStore, now: datetime) -> None:
 
 
 def finalize_claim_window_if_needed(room: RoomStore, now: datetime) -> None:
-    if room.claim_window_ends_at is None:
-        return
-    if now < room.claim_window_ends_at:
-        return
+    with get_room_state_lock(room.id):
+        if room.ended_at is not None:
+            return
+        if room.claim_window_ends_at is None:
+            return
+        if now < room.claim_window_ends_at:
+            return
 
-    if not room.pending_claims:
-        room.claim_window_ends_at = None
-        room.claim_window_reference_time = None
-        persist_room(room)
-        return
+        if not room.pending_claims:
+            room.claim_window_ends_at = None
+            room.claim_window_reference_time = None
+            persist_room(room)
+            return
 
-    valid_claims: list[ClaimEntry] = []
-    seen: set[tuple[str, int]] = set()
-    reference_time = room.claim_window_reference_time or room.claim_window_ends_at
-    called_numbers = compute_called_numbers(room, reference_time)
+        valid_claims: list[ClaimEntry] = []
+        seen: set[tuple[str, int]] = set()
+        reference_time = room.claim_window_reference_time or room.claim_window_ends_at
+        called_numbers = compute_called_numbers(room, reference_time)
 
-    for claim in room.pending_claims:
-        key = (claim.phone_number, claim.cartella_no)
-        if key in seen:
-            continue
-        seen.add(key)
-        owner_phone = room.taken_cartellas.get(claim.cartella_no)
-        if owner_phone != claim.phone_number:
-            continue
-        if claim.phone_number not in USERS:
-            continue
-        if is_simulated_phone(claim.phone_number):
-            marks = sorted(set(called_numbers).intersection(card_numbers_set(claim.cartella_no)))
-        else:
-            marks = get_user_marked_numbers(room, claim.phone_number, claim.cartella_no)
-        if has_bingo_for_marks(claim.cartella_no, called_numbers, marks):
-            valid_claims.append(claim)
-
-    if not valid_claims:
-        room.pending_claims = []
-        room.claim_window_ends_at = None
-        room.claim_window_reference_time = None
-        persist_room(room)
-        return
-
-    total_sales = round(float(len(room.taken_cartellas) * room.card_price), 2)
-    house_commission = round(total_sales * HOUSE_COMMISSION_RATE, 2)
-    distributable = round(total_sales - house_commission, 2)
-    split_count = len(valid_claims)
-    base_payout = round(distributable / split_count, 2) if split_count > 0 else 0.0
-
-    winners: list[WinnerEntry] = []
-    changed_user_phones: set[str] = set()
-    assigned = 0.0
-
-    for idx, claim in enumerate(valid_claims):
-        payout = base_payout
-        if idx == split_count - 1:
-            payout = round(distributable - assigned, 2)
-        assigned += payout
-
-        winner_user = USERS.get(claim.phone_number)
-        if not winner_user:
-            continue
-
-        if not is_simulated_phone(claim.phone_number):
-            if PG_STORE.enabled():
-                PG_STORE.adjust_wallet_and_record_transaction(claim.phone_number, payout, "Win", "Completed")
-                refreshed_winner = refresh_user_from_primary_store(claim.phone_number)
-                if refreshed_winner is not None:
-                    winner_user = refreshed_winner
+        for claim in room.pending_claims:
+            key = (claim.phone_number, claim.cartella_no)
+            if key in seen:
+                continue
+            seen.add(key)
+            owner_phone = room.taken_cartellas.get(claim.cartella_no)
+            if owner_phone != claim.phone_number:
+                continue
+            if claim.phone_number not in USERS:
+                continue
+            if is_simulated_phone(claim.phone_number):
+                marks = sorted(set(called_numbers).intersection(card_numbers_set(claim.cartella_no)))
             else:
-                winner_user.wallet.main_balance = round(winner_user.wallet.main_balance + payout, 2)
-                record_transaction(winner_user, "Win", payout, "Completed")
-            changed_user_phones.add(claim.phone_number)
-        winners.append(
-            WinnerEntry(
-                phone_number=claim.phone_number,
-                user_name=winner_user.user_name,
-                cartella_no=claim.cartella_no,
-                payout=payout,
-                card=create_bingo_card(claim.cartella_no),
+                marks = get_user_marked_numbers(room, claim.phone_number, claim.cartella_no)
+            if has_bingo_for_marks(claim.cartella_no, called_numbers, marks):
+                valid_claims.append(claim)
+
+        if not valid_claims:
+            room.pending_claims = []
+            room.claim_window_ends_at = None
+            room.claim_window_reference_time = None
+            persist_room(room)
+            return
+
+        total_sales = round(float(len(room.taken_cartellas) * room.card_price), 2)
+        house_commission = round(total_sales * HOUSE_COMMISSION_RATE, 2)
+        distributable = round(total_sales - house_commission, 2)
+        split_count = len(valid_claims)
+        base_payout = round(distributable / split_count, 2) if split_count > 0 else 0.0
+
+        winners: list[WinnerEntry] = []
+        changed_user_phones: set[str] = set()
+        assigned = 0.0
+
+        for idx, claim in enumerate(valid_claims):
+            payout = base_payout
+            if idx == split_count - 1:
+                payout = round(distributable - assigned, 2)
+            assigned += payout
+
+            winner_user = USERS.get(claim.phone_number)
+            if not winner_user:
+                continue
+
+            if not is_simulated_phone(claim.phone_number):
+                if PG_STORE.enabled():
+                    PG_STORE.adjust_wallet_and_record_transaction(claim.phone_number, payout, "Win", "Completed")
+                    refreshed_winner = refresh_user_from_primary_store(claim.phone_number)
+                    if refreshed_winner is not None:
+                        winner_user = refreshed_winner
+                else:
+                    winner_user.wallet.main_balance = round(winner_user.wallet.main_balance + payout, 2)
+                    record_transaction(winner_user, "Win", payout, "Completed")
+                changed_user_phones.add(claim.phone_number)
+            winners.append(
+                WinnerEntry(
+                    phone_number=claim.phone_number,
+                    user_name=winner_user.user_name,
+                    cartella_no=claim.cartella_no,
+                    payout=payout,
+                    card=create_bingo_card(claim.cartella_no),
+                )
+            )
+
+        if not winners:
+            room.pending_claims = []
+            room.claim_window_ends_at = None
+            persist_room(room)
+            return
+
+        changed_user_phones.update(
+            record_bet_history_for_round(
+                room=room,
+                now=now,
+                called_numbers=called_numbers,
+                winners=winners,
+                game_winning=distributable,
             )
         )
+        changed_user_phones.update(refund_unplayed_cards_for_round(room))
 
-    if not winners:
+        room.winners = winners
+        room.ended_at = now
+        room.winner_phone = winners[0].phone_number
+        room.winner_cartella = winners[0].cartella_no
+        room.winner_payout = winners[0].payout
+        room.house_commission = house_commission
+        room.result_until = now + timedelta(seconds=RESULT_ANNOUNCE_SECONDS)
         room.pending_claims = []
         room.claim_window_ends_at = None
+        room.claim_window_reference_time = None
+        if changed_user_phones:
+            persist_users(changed_user_phones)
         persist_room(room)
-        return
-
-    changed_user_phones.update(
-        record_bet_history_for_round(
-            room=room,
-            now=now,
-            called_numbers=called_numbers,
-            winners=winners,
-            game_winning=distributable,
-        )
-    )
-    changed_user_phones.update(refund_unplayed_cards_for_round(room))
-
-    room.winners = winners
-    room.ended_at = now
-    room.winner_phone = winners[0].phone_number
-    room.winner_cartella = winners[0].cartella_no
-    room.winner_payout = winners[0].payout
-    room.house_commission = house_commission
-    room.result_until = now + timedelta(seconds=RESULT_ANNOUNCE_SECONDS)
-    room.pending_claims = []
-    room.claim_window_ends_at = None
-    room.claim_window_reference_time = None
-    if changed_user_phones:
-        persist_users(changed_user_phones)
-    persist_room(room)
 
 
 def end_room_if_calls_complete(room: RoomStore, now: datetime) -> None:
@@ -4277,14 +4291,15 @@ def inject_simulated_claims(room: RoomStore, now: datetime) -> bool:
 
 
 def advance_room_if_needed(room: RoomStore) -> None:
-    now = utc_now()
-    ensure_simulated_activity(room, now)
-    if inject_simulated_claims(room, now):
-        persist_room(room)
-    finalize_claim_window_if_needed(room, now)
-    end_room_if_calls_complete(room, now)
-    if room.ended_at is not None and room.result_until is not None and now >= room.result_until:
-        start_next_round(room, now)
+    with get_room_state_lock(room.id):
+        now = utc_now()
+        ensure_simulated_activity(room, now)
+        if inject_simulated_claims(room, now):
+            persist_room(room)
+        finalize_claim_window_if_needed(room, now)
+        end_room_if_calls_complete(room, now)
+        if room.ended_at is not None and room.result_until is not None and now >= room.result_until:
+            start_next_round(room, now)
 
 
 def compute_simulated_paid_cartellas(

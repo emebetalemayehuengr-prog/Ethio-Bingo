@@ -1321,6 +1321,7 @@ export default function App() {
   const lastFinishedRoomRef = useRef<string | null>(null);
   const lastFinishedRedirectRef = useRef<string | null>(null);
   const lastWinnerWalletSyncRef = useRef<string | null>(null);
+  const lastWinnerOptimisticCreditRef = useRef<string | null>(null);
   const lastAutoMarkClaimAttemptRef = useRef<{ key: string; at: number }>({ key: "", at: 0 });
   const stakeAutoOpenAttemptRef = useRef<{ key: string; at: number }>({ key: "", at: 0 });
   const stakeAutoOpenInFlightRef = useRef(false);
@@ -2645,12 +2646,34 @@ export default function App() {
         : null;
     if (!finishedRoundKey) {
       lastWinnerWalletSyncRef.current = null;
+      lastWinnerOptimisticCreditRef.current = null;
       return;
     }
     const myPhone = profile?.phone_number ?? "";
     if (!myPhone) return;
-    const iAmWinner = (room?.winners ?? []).some((entry) => entry.phone_number === myPhone);
+    const winnerEntries = room?.winners ?? [];
+    const myPayout = winnerEntries
+      .filter((entry) => entry.phone_number === myPhone)
+      .reduce((sum, entry) => sum + entry.payout, 0);
+    const iAmWinner = myPayout > 0;
     if (!iAmWinner) return;
+    if (lastWinnerOptimisticCreditRef.current !== finishedRoundKey) {
+      const payout = Math.round((myPayout + Number.EPSILON) * 100) / 100;
+      if (payout > 0) {
+        setDashboard((prev) => {
+          if (!prev) return prev;
+          const nextMain = Math.round((prev.wallet.main_balance + payout + Number.EPSILON) * 100) / 100;
+          return {
+            ...prev,
+            wallet: {
+              ...prev.wallet,
+              main_balance: nextMain,
+            },
+          };
+        });
+      }
+      lastWinnerOptimisticCreditRef.current = finishedRoundKey;
+    }
     if (lastWinnerWalletSyncRef.current === finishedRoundKey) return;
     lastWinnerWalletSyncRef.current = finishedRoundKey;
     void (async () => {
@@ -3878,8 +3901,10 @@ export default function App() {
   const currentHouseCommission = room ? room.current_house_commission ?? currentTotalSales * 0.15 : 0;
   const realWinnerPool = room ? room.current_distributable ?? Math.max(0, currentTotalSales - currentHouseCommission) : 0;
   const winnerEntries = room?.winners ?? [];
-  const myWinnerEntry = winnerEntries.find((entry) => entry.phone_number === profile.phone_number) ?? null;
-  const resultAmount = myWinnerEntry?.payout ?? winnerEntries[0]?.payout ?? 0;
+  const myWinnerEntries = winnerEntries.filter((entry) => entry.phone_number === profile.phone_number);
+  const myWinnerEntry = myWinnerEntries[0] ?? null;
+  const myWinnerTotalPayout = myWinnerEntries.reduce((sum, entry) => sum + entry.payout, 0);
+  const resultAmount = myWinnerEntry ? myWinnerTotalPayout : winnerEntries[0]?.payout ?? 0;
   const showResultOverlay =
     room?.phase === "finished" &&
     winnerEntries.length > 0 &&
@@ -4461,7 +4486,7 @@ export default function App() {
                   <div className={`result-overlay ${myWinnerEntry ? "won" : "lost"}`}>
                     <div className={`result-modal ${myWinnerEntry ? "won" : "lost"}`}>
                       <h2>{myWinnerEntry ? "You Won" : "You Lost"}</h2>
-                      <h3>ETB {Math.round(resultAmount)}</h3>
+                      <h3>ETB {resultAmount.toFixed(2)}</h3>
                       <p className="result-subtitle">Payout is split equally between all confirmed winners.</p>
                       <div className={`result-winners ${winnerEntries.length > 1 ? "stacked" : ""}`}>
                         {winnerEntries.map((winner) => (
