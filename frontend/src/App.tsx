@@ -133,6 +133,7 @@ const STAKES_DASHBOARD_POLL_MS = 2000;
 const DEFAULT_DASHBOARD_POLL_MS = 4800;
 const CARTELLA_POLL_MS = 2200;
 const CARTELLA_HEARTBEAT_POLL_MS = 9000;
+const AUTO_MARK_AUTO_CLAIM_RETRY_MS = 1200;
 const OPEN_STALE_FINISHED_RETRIES = 12;
 const OPEN_STALE_RETRY_DELAY_MS = 300;
 
@@ -1319,6 +1320,7 @@ export default function App() {
   const lastFinishedRoomRef = useRef<string | null>(null);
   const lastFinishedRedirectRef = useRef<string | null>(null);
   const lastWinnerWalletSyncRef = useRef<string | null>(null);
+  const lastAutoMarkClaimAttemptRef = useRef<{ key: string; at: number }>({ key: "", at: 0 });
   const lastSeenRoundKeyRef = useRef<string>("");
   const sharedStakeOpeningRef = useRef(false);
   const roomsRefreshInFlightRef = useRef(false);
@@ -2631,6 +2633,31 @@ export default function App() {
     }
     void onClaimBingo();
   }, [autoClaimRequested, hasPendingMarks, claimingBingo, room, card, markedNumbers]);
+
+  useEffect(() => {
+    if (!room?.id || room.phase !== "playing" || !room.auto_mark_called_numbers || !card || !selectedCardNo) return;
+    if (hasPendingMarks || claimingBingo) return;
+    const claimReady = hasBingo(card, room.called_numbers ?? [], markedNumbers);
+    if (!claimReady) return;
+    const roundCardKey = `${room.id}:${room.round_id}:${selectedCardNo}`;
+    const now = Date.now();
+    const lastAttempt = lastAutoMarkClaimAttemptRef.current;
+    if (lastAttempt.key === roundCardKey && now - lastAttempt.at < AUTO_MARK_AUTO_CLAIM_RETRY_MS) return;
+    lastAutoMarkClaimAttemptRef.current = { key: roundCardKey, at: now };
+    setAutoClaimRequested(true);
+    void onClaimBingo();
+  }, [
+    room?.id,
+    room?.round_id,
+    room?.phase,
+    room?.auto_mark_called_numbers,
+    room?.called_numbers,
+    card,
+    selectedCardNo,
+    markedNumbers,
+    hasPendingMarks,
+    claimingBingo,
+  ]);
 
   const onAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

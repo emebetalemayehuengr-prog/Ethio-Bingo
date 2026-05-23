@@ -4232,10 +4232,6 @@ def inject_simulated_claims(room: RoomStore, now: datetime) -> bool:
         return False
     if room.ended_at is not None:
         return False
-    # Never let bots auto-finish a live round when real players are present.
-    # This avoids abrupt caller/round collapse before humans can play/claim.
-    if any(not is_simulated_phone(owner_phone) for owner_phone in room.taken_cartellas.values()):
-        return False
     if (now - room.started_at).total_seconds() < SELECT_PHASE_SECONDS:
         return False
 
