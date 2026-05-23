@@ -46,6 +46,7 @@ const REQUEST_TIMEOUT_MS = 12000;
 const READ_REQUEST_TIMEOUT_MS = 15000;
 const DASHBOARD_REQUEST_TIMEOUT_MS = 30000;
 const GAME_READ_REQUEST_TIMEOUT_MS = 15000;
+const GAME_JOIN_REQUEST_TIMEOUT_MS = 25000;
 const TRANSPORT_RETRY_LIMIT = 1;
 const DASHBOARD_TRANSPORT_RETRY_LIMIT = 2;
 const AUTH_RECOVERY_TIMEOUT_MS = 7000;
@@ -112,6 +113,7 @@ const isAuthEndpointPath = (path: string) => {
 };
 
 const isGameEndpointPath = (path: string) => normalizePath(path).startsWith("/api/game/");
+const isGameJoinEndpointPath = (path: string) => normalizePath(path) === "/api/game/join";
 const isDashboardEndpointPath = (path: string) => normalizePath(path) === "/api/dashboard";
 
 const normalizeMethod = (method?: string) => (method ?? "GET").toUpperCase();
@@ -122,6 +124,7 @@ const isRetrySafeMethod = (method?: string) => {
 };
 
 const getRequestTimeoutForPath = (path: string, method?: string) => {
+  if (isGameJoinEndpointPath(path)) return GAME_JOIN_REQUEST_TIMEOUT_MS;
   if (!isRetrySafeMethod(method)) return REQUEST_TIMEOUT_MS;
   if (isDashboardEndpointPath(path)) return DASHBOARD_REQUEST_TIMEOUT_MS;
   if (isGameEndpointPath(path)) return GAME_READ_REQUEST_TIMEOUT_MS;

@@ -133,8 +133,8 @@ const STAKES_DASHBOARD_POLL_MS = 2000;
 const DEFAULT_DASHBOARD_POLL_MS = 4800;
 const CARTELLA_POLL_MS = 2200;
 const CARTELLA_HEARTBEAT_POLL_MS = 9000;
-const OPEN_STALE_FINISHED_RETRIES = 4;
-const OPEN_STALE_RETRY_DELAY_MS = 250;
+const OPEN_STALE_FINISHED_RETRIES = 12;
+const OPEN_STALE_RETRY_DELAY_MS = 300;
 
 let pusherScriptReadyPromise: Promise<void> | null = null;
 function ensurePusherScriptLoaded() {
@@ -1919,15 +1919,20 @@ export default function App() {
         (stake.my_cards_current ?? 0) > 0 ||
         stake.open_available ||
         stake.room_phase === "playing";
+      const expectedQueuedNext = (stake.my_cards_next ?? 0) > 0;
 
       // Guard against stale snapshots during phase boundaries. Retry a few times
       // before deciding to render a finished view with no current ownership.
       for (let attempt = 1; attempt < OPEN_STALE_FINISHED_RETRIES; attempt += 1) {
-        const likelyStaleFinished =
+        const likelyStaleFinishedWithoutOwnership =
           expectedLiveOrOwned &&
           res.room.phase === "finished" &&
           (res.room.my_cartellas?.length ?? 0) === 0 &&
           ownedCards.length === 0;
+        const likelyStaleFinishedBeforeQueueAdvance =
+          res.room.phase === "finished" &&
+          ((res.room.next_my_cartellas?.length ?? 0) > 0 || expectedQueuedNext);
+        const likelyStaleFinished = likelyStaleFinishedWithoutOwnership || likelyStaleFinishedBeforeQueueAdvance;
         if (!likelyStaleFinished) break;
         await new Promise<void>((resolve) => window.setTimeout(resolve, OPEN_STALE_RETRY_DELAY_MS));
         try {
@@ -1937,12 +1942,15 @@ export default function App() {
           break;
         }
       }
+      if (res.room.phase === "finished" && (res.room.next_my_cartellas?.length ?? 0) > 0) {
+        ownedCards = [];
+      }
       setPickerRoomWithSyncMeta(res.room);
       setRoomWithPendingMarks(res.room);
       setCards(ownedCards);
       if (!ownedCards.length) {
         if ((res.room.next_my_cartellas?.length ?? 0) > 0) {
-          setNotice("You have cartella booked for the next game. Wait for this round to finish.");
+          setNotice("Your card is queued for the next game. Caller will open automatically when the new round starts.");
           setService("game");
         } else {
           setNotice("No active bought cartella for this live game.");
@@ -2479,6 +2487,7 @@ export default function App() {
             setPickerRoomWithSyncMeta(res.room);
             if (res.room.my_held_cartella && cartellaStep === "pick" && !selectedCartella) {
               setSelectedCartella(res.room.my_held_cartella);
+              setReservedCartellaNo(res.room.my_held_cartella);
             }
           });
         } catch {
@@ -2797,6 +2806,7 @@ export default function App() {
 
     if (alreadyReserved && hasPreview) {
       setSelectedCartella(cartellaNo);
+      setReservedCartellaNo(cartellaNo);
       if (showPreview) {
         setCartellaStep("preview");
       }
@@ -2860,12 +2870,17 @@ export default function App() {
         res = await joinStake(stakeId, cartellaNo, preferredRoundId);
       } catch (err) {
         const message = err instanceof Error ? err.message.toLowerCase() : "";
-        if (!message.includes("round changed")) {
+        const isRoundChanged = message.includes("round changed");
+        const isTransportIssue =
+          message.includes("timed out") || message.includes("network error") || message.includes("offline");
+        if (!isRoundChanged && !isTransportIssue) {
           throw err;
         }
-        console.warn("[cartella] Round changed while buying; refreshing room snapshot and retrying", {
+        const reason = isRoundChanged ? "round change" : "transport timeout";
+        console.warn("[cartella] Join requires re-sync; refreshing room snapshot and retrying", {
           stakeId,
           cartellaNo,
+          reason,
         });
         const refreshed = await fetchStakeRoom(stakeId);
         setPickerRoomWithSyncMeta(refreshed.room);
