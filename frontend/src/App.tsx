@@ -126,8 +126,11 @@ const PUSHER_CLUSTER = ((import.meta.env.VITE_PUSHER_CLUSTER as string | undefin
 const PUSHER_JS_URL = "https://js.pusher.com/8.4.0/pusher.min.js";
 const REALTIME_SYNC_THROTTLE_MS = 400;
 const REALTIME_PUSH_STALE_MS = 6000;
-const REALTIME_FALLBACK_POLL_MS = 2500;
-const OPEN_STALE_FINISHED_RETRIES = 3;
+const REALTIME_FALLBACK_POLL_MS = 3000;
+const STAKES_DASHBOARD_POLL_MS = 3200;
+const DEFAULT_DASHBOARD_POLL_MS = 4800;
+const CARTELLA_POLL_MS = 2200;
+const OPEN_STALE_FINISHED_RETRIES = 2;
 
 let pusherScriptReadyPromise: Promise<void> | null = null;
 function ensurePusherScriptLoaded() {
@@ -2068,7 +2071,7 @@ export default function App() {
     if (!profile || !isPageVisible) return;
     if (cartellaOpen || service === "game") return;
     let inFlight = false;
-    const pollIntervalMs = service === "stakes" ? 2200 : 3600;
+    const pollIntervalMs = service === "stakes" ? STAKES_DASHBOARD_POLL_MS : DEFAULT_DASHBOARD_POLL_MS;
     const pollDashboard = () => {
       if (inFlight) return;
       inFlight = true;
@@ -2209,6 +2212,12 @@ export default function App() {
     let inFlight = false;
     const pollStakeRoom = () => {
       if (inFlight) return;
+      if (pusherReady) {
+        const msSinceRealtimeSync = Date.now() - realtimeLastSyncAtRef.current;
+        if (msSinceRealtimeSync < REALTIME_PUSH_STALE_MS) {
+          return;
+        }
+      }
       inFlight = true;
       void (async () => {
         try {
@@ -2229,12 +2238,13 @@ export default function App() {
 
     pollStakeRoom();
 
+    const pollIntervalMs = pusherReady ? REALTIME_FALLBACK_POLL_MS : CARTELLA_POLL_MS;
     const timer = window.setInterval(() => {
       pollStakeRoom();
-    }, 1500);
+    }, pollIntervalMs);
 
     return () => window.clearInterval(timer);
-  }, [cartellaOpen, selectedStake, cartellaStep, selectedCartella, isPageVisible]);
+  }, [cartellaOpen, selectedStake, cartellaStep, selectedCartella, isPageVisible, pusherReady]);
 
   useEffect(() => {
     if (!cartellaOpen || !selectedCartella || processingCartella === selectedCartella) return;
