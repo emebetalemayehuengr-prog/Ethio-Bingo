@@ -1321,6 +1321,10 @@ export default function App() {
   const lastFinishedRedirectRef = useRef<string | null>(null);
   const lastWinnerWalletSyncRef = useRef<string | null>(null);
   const lastAutoMarkClaimAttemptRef = useRef<{ key: string; at: number }>({ key: "", at: 0 });
+  const countdownStabilityRef = useRef<Record<"game" | "picker", { phaseKey: string; value: number }>>({
+    game: { phaseKey: "", value: 0 },
+    picker: { phaseKey: "", value: 0 },
+  });
   const lastSeenRoundKeyRef = useRef<string>("");
   const sharedStakeOpeningRef = useRef(false);
   const roomsRefreshInFlightRef = useRef(false);
@@ -3694,7 +3698,31 @@ export default function App() {
       void refreshHistory();
       void refreshBetHistory();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to claim bingo");
+      const message = err instanceof Error ? err.message : "Unable to claim bingo";
+      const normalized = message.toLowerCase();
+      const transportIssue =
+        normalized.includes("timed out") || normalized.includes("network error") || normalized.includes("offline");
+      if (transportIssue) {
+        try {
+          const synced = await syncRoom(room.id);
+          const syncedCards = synced.cards ?? (synced.card ? [synced.card] : []);
+          const previousCards = latestCardsRef.current;
+          const previousRoom = latestRoomRef.current;
+          const resolvedCards = resolveSyncedCards(synced.room, syncedCards, previousCards, previousRoom);
+          setRoomWithPendingMarks(synced.room);
+          setCards(resolvedCards);
+          if (synced.room.phase === "finished" || synced.room.claim_window_seconds > 0) {
+            setError("");
+            setNotice("Claim was received. Live room synced.");
+            void refreshHistory();
+            void refreshBetHistory();
+            return;
+          }
+        } catch {
+          // keep original transport error below
+        }
+      }
+      setError(message);
     } finally {
       setClaimingBingo(false);
     }
@@ -3747,31 +3775,45 @@ export default function App() {
     return Math.max(0, Math.ceil((deadline - stakeCountdownNow) / 1000));
   };
 
-  const getAuthoritativePhaseCountdown = (state: RoomState | null, syncedAtMs: number) => {
+  const getAuthoritativePhaseCountdown = (state: RoomState | null, syncedAtMs: number, slot: "game" | "picker") => {
     if (!state) return 0;
     const elapsedSinceSyncMs = Math.max(0, liveCountdownNow - syncedAtMs);
+
+    const phaseKey = `${state.id}:${state.round_id}:${state.phase}:${state.called_numbers.length}`;
+    const stabilizeCountdown = (rawValue: number) => {
+      const clamped = Math.max(0, rawValue);
+      const tracker = countdownStabilityRef.current[slot];
+      if (tracker.phaseKey !== phaseKey) {
+        countdownStabilityRef.current[slot] = { phaseKey, value: clamped };
+        return clamped;
+      }
+      // Keep seconds monotonic within the same call-step to avoid stale snapshot bounce.
+      const stableValue = clamped > tracker.value + 1 ? tracker.value : clamped;
+      countdownStabilityRef.current[slot] = { phaseKey, value: stableValue };
+      return stableValue;
+    };
 
     if (state.phase === "playing") {
       const fallback = Math.max(0, state.call_countdown_seconds);
       if (typeof state.server_time_ms === "number" && typeof state.next_call_at_ms === "number") {
         const virtualServerNowMs = state.server_time_ms + elapsedSinceSyncMs;
-        return Math.max(0, Math.ceil((state.next_call_at_ms - virtualServerNowMs) / 1000));
+        return stabilizeCountdown(Math.ceil((state.next_call_at_ms - virtualServerNowMs) / 1000));
       }
-      return Math.max(0, Math.ceil(Math.max(0, fallback * 1000 - elapsedSinceSyncMs) / 1000));
+      return stabilizeCountdown(Math.ceil(Math.max(0, fallback * 1000 - elapsedSinceSyncMs) / 1000));
     }
 
     if (state.phase === "selecting") {
       const fallback = Math.max(0, state.countdown_seconds ?? 0);
-      return Math.max(0, Math.ceil(Math.max(0, fallback * 1000 - elapsedSinceSyncMs) / 1000));
+      return stabilizeCountdown(Math.ceil(Math.max(0, fallback * 1000 - elapsedSinceSyncMs) / 1000));
     }
 
     const fallback = Math.max(0, state.announcement_seconds ?? 0);
-    return Math.max(0, Math.ceil(Math.max(0, fallback * 1000 - elapsedSinceSyncMs) / 1000));
+    return stabilizeCountdown(Math.ceil(Math.max(0, fallback * 1000 - elapsedSinceSyncMs) / 1000));
   };
 
   const bingoClaimable = room?.phase === "playing" && !!card ? hasBingo(card, room?.called_numbers ?? [], markedNumbers) : false;
-  const liveCallCountdown = room?.phase === "playing" ? getAuthoritativePhaseCountdown(room, roomSyncReceivedAtRef.current) : 0;
-  const gameCountdownValue = getAuthoritativePhaseCountdown(room, roomSyncReceivedAtRef.current);
+  const gameCountdownValue = getAuthoritativePhaseCountdown(room, roomSyncReceivedAtRef.current, "game");
+  const liveCallCountdown = room?.phase === "playing" ? gameCountdownValue : 0;
   const gameCountdownLabel = `0:${String(Math.max(0, gameCountdownValue)).padStart(2, "0")}`;
   const gameStatusLabel =
     room?.phase === "selecting"
@@ -3784,7 +3826,9 @@ export default function App() {
           ? `Next game in ${room.announcement_seconds}s`
           : "Round Complete";
   const pickerLiveCallCountdown =
-    pickerRoom?.phase === "playing" ? getAuthoritativePhaseCountdown(pickerRoom, pickerRoomSyncReceivedAtRef.current) : 0;
+    pickerRoom?.phase === "playing"
+      ? getAuthoritativePhaseCountdown(pickerRoom, pickerRoomSyncReceivedAtRef.current, "picker")
+      : 0;
   const currentPaidCount = room?.current_paid_count ?? room?.display_paid_count ?? room?.paid_cartellas.length ?? 0;
   const currentTotalSales = room ? room.current_total_sales ?? currentPaidCount * room.card_price : 0;
   const currentHouseCommission = room ? room.current_house_commission ?? currentTotalSales * 0.15 : 0;
@@ -3804,7 +3848,7 @@ export default function App() {
     (room.phase === "playing" || (room.phase === "selecting" && (room.called_numbers?.length ?? 0) > 0));
   const effectiveNowPlayingExpanded = callerLockedOpen ? true : nowPlayingExpanded;
   const nowPlayingCardLabel = selectedCardNo ? `Card ${selectedCardNo}` : `${cards.length} ${cards.length === 1 ? "Card" : "Cards"}`;
-  const pickerCountdownValue = getAuthoritativePhaseCountdown(pickerRoom, pickerRoomSyncReceivedAtRef.current);
+  const pickerCountdownValue = getAuthoritativePhaseCountdown(pickerRoom, pickerRoomSyncReceivedAtRef.current, "picker");
   const pickerPaidCount = pickerRoom?.display_paid_count ?? pickerRoom?.paid_cartellas.length ?? 0;
   const lockedPickerPaidCount = Math.max(pickerPaidCount, lockedPickerPaidCartellas.length);
   const pickerPhase = pickerRoom?.phase ?? "selecting";

@@ -46,9 +46,12 @@ const REQUEST_TIMEOUT_MS = 12000;
 const READ_REQUEST_TIMEOUT_MS = 15000;
 const DASHBOARD_REQUEST_TIMEOUT_MS = 30000;
 const GAME_READ_REQUEST_TIMEOUT_MS = 15000;
+const GAME_WRITE_REQUEST_TIMEOUT_MS = 25000;
 const GAME_JOIN_REQUEST_TIMEOUT_MS = 25000;
+const GAME_CLAIM_REQUEST_TIMEOUT_MS = 45000;
 const TRANSPORT_RETRY_LIMIT = 1;
 const DASHBOARD_TRANSPORT_RETRY_LIMIT = 2;
+const CLAIM_TRANSPORT_RETRY_LIMIT = 1;
 const AUTH_RECOVERY_TIMEOUT_MS = 7000;
 const AUTH_RECOVERY_RETRY_LIMIT = 1;
 const AUTH_SESSION_PROBE_PATH = "/api/auth/me";
@@ -114,6 +117,7 @@ const isAuthEndpointPath = (path: string) => {
 
 const isGameEndpointPath = (path: string) => normalizePath(path).startsWith("/api/game/");
 const isGameJoinEndpointPath = (path: string) => normalizePath(path) === "/api/game/join";
+const isGameClaimEndpointPath = (path: string) => normalizePath(path) === "/api/game/claim-bingo";
 const isDashboardEndpointPath = (path: string) => normalizePath(path) === "/api/dashboard";
 
 const normalizeMethod = (method?: string) => (method ?? "GET").toUpperCase();
@@ -124,14 +128,19 @@ const isRetrySafeMethod = (method?: string) => {
 };
 
 const getRequestTimeoutForPath = (path: string, method?: string) => {
+  if (isGameClaimEndpointPath(path)) return GAME_CLAIM_REQUEST_TIMEOUT_MS;
   if (isGameJoinEndpointPath(path)) return GAME_JOIN_REQUEST_TIMEOUT_MS;
-  if (!isRetrySafeMethod(method)) return REQUEST_TIMEOUT_MS;
+  if (!isRetrySafeMethod(method)) {
+    if (isGameEndpointPath(path)) return GAME_WRITE_REQUEST_TIMEOUT_MS;
+    return REQUEST_TIMEOUT_MS;
+  }
   if (isDashboardEndpointPath(path)) return DASHBOARD_REQUEST_TIMEOUT_MS;
   if (isGameEndpointPath(path)) return GAME_READ_REQUEST_TIMEOUT_MS;
   return READ_REQUEST_TIMEOUT_MS;
 };
 
 const getTransportRetryLimitForPath = (path: string) => {
+  if (isGameClaimEndpointPath(path)) return CLAIM_TRANSPORT_RETRY_LIMIT;
   if (isDashboardEndpointPath(path)) return DASHBOARD_TRANSPORT_RETRY_LIMIT;
   return TRANSPORT_RETRY_LIMIT;
 };
@@ -228,9 +237,10 @@ async function request<T>(
     response = await performFetch(path, options, headers, getRequestTimeoutForPath(path, options?.method));
   } catch (err) {
     const message = err instanceof Error ? err.message.toLowerCase() : "";
+    const retryableMethod = isRetrySafeMethod(options?.method) || isGameClaimEndpointPath(path);
     const canRetryTransport =
       transportRetryAttempt < getTransportRetryLimitForPath(path) &&
-      isRetrySafeMethod(options?.method) &&
+      retryableMethod &&
       (message.includes("timed out") || message.includes("network error") || message.includes("offline"));
     if (canRetryTransport) {
       return request<T>(path, options, authRetryAttempt, transportRetryAttempt + 1);

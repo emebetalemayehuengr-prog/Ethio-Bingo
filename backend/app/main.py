@@ -666,6 +666,7 @@ CLAIM_GRACE_SECONDS = 2
 FINAL_CALL_AUTO_CLOSE_SECONDS = max(CLAIM_GRACE_SECONDS, env_int("FINAL_CALL_AUTO_CLOSE_SECONDS", 20))
 ENABLE_DEMO_SEED = env_flag("ENABLE_DEMO_SEED", False)
 ENABLE_SIMULATED_ACTIVITY = env_flag("ENABLE_SIMULATED_ACTIVITY", True)
+FORCE_SIMULATED_ACTIVITY = env_flag("FORCE_SIMULATED_ACTIVITY", True)
 ENABLE_AUTO_MARK_CALLED_NUMBERS = env_flag("ENABLE_AUTO_MARK_CALLED_NUMBERS", True)
 SIMULATED_SELECTING_MAX_PAID = max(0, env_int("SIMULATED_SELECTING_MAX_PAID", 60))
 SIMULATED_PLAYING_MAX_PAID = max(SIMULATED_SELECTING_MAX_PAID, env_int("SIMULATED_PLAYING_MAX_PAID", 120))
@@ -758,6 +759,10 @@ SIMULATED_LAST_NAMES = [
     "Yohannes",
     "Zerihun",
 ]
+
+
+def simulated_activity_enabled() -> bool:
+    return ENABLE_SIMULATED_ACTIVITY or FORCE_SIMULATED_ACTIVITY
 ADMIN_BOOTSTRAP_PHONES = env_list("ADMIN_BOOTSTRAP_PHONES", os.getenv("ADMIN_PHONE_NUMBERS", ""))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 DEFAULT_ADMIN_ALERT_EMAILS = [
@@ -4138,7 +4143,7 @@ def compute_simulated_target(
     countdown_seconds: int,
     called_numbers: list[int],
 ) -> int:
-    if not ENABLE_SIMULATED_ACTIVITY or phase == "finished":
+    if not simulated_activity_enabled() or phase == "finished":
         return 0
 
     if phase == "selecting":
@@ -4201,7 +4206,7 @@ def ensure_simulated_cards_for_queue(
 
 
 def ensure_simulated_activity(room: RoomStore, now: datetime) -> None:
-    if not ENABLE_SIMULATED_ACTIVITY or room.ended_at is not None:
+    if not simulated_activity_enabled() or room.ended_at is not None:
         return
 
     elapsed_seconds = int((now - room.started_at).total_seconds())
@@ -4228,7 +4233,7 @@ def ensure_simulated_activity(room: RoomStore, now: datetime) -> None:
 
 
 def inject_simulated_claims(room: RoomStore, now: datetime) -> bool:
-    if not ENABLE_SIMULATED_ACTIVITY:
+    if not simulated_activity_enabled():
         return False
     if room.ended_at is not None:
         return False
@@ -4243,7 +4248,8 @@ def inject_simulated_claims(room: RoomStore, now: datetime) -> bool:
 
     changed = False
     added_count = 0
-    max_new_claims = 1 if room.claim_window_ends_at is None else 2
+    real_claim_present = any(not is_simulated_phone(entry.phone_number) for entry in room.pending_claims)
+    max_new_claims = 1 if room.claim_window_ends_at is None else (4 if real_claim_present else 2)
     existing = {(entry.phone_number, entry.cartella_no) for entry in room.pending_claims}
     for cartella_no, owner_phone in sorted(room.taken_cartellas.items()):
         if not is_simulated_phone(owner_phone):
