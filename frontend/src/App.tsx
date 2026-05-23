@@ -128,7 +128,7 @@ const REALTIME_SYNC_THROTTLE_MS = 400;
 const REALTIME_PUSH_STALE_MS = 3500;
 const REALTIME_FALLBACK_POLL_MS = 2600;
 const GAME_ROOM_FALLBACK_POLL_MS = 1600;
-const STAKES_DASHBOARD_POLL_MS = 3200;
+const STAKES_DASHBOARD_POLL_MS = 2000;
 const DEFAULT_DASHBOARD_POLL_MS = 4800;
 const CARTELLA_POLL_MS = 2200;
 const OPEN_STALE_FINISHED_RETRIES = 4;
@@ -180,7 +180,7 @@ const services: Array<{ view: ServiceView; label: string }> = [
 ];
 
 const mobileNavViews: ServiceView[] = ["home", "stakes", "game", "wallet", "history"];
-const drawerMenuViews: ServiceView[] = ["how", "contact"];
+const drawerMenuViews: ServiceView[] = ["stakes", "how", "contact"];
 
 const HOW_TO_PLAY_AMHARIC_STEPS = [
   "ወደ Rooms ገጽ በመግባት የሚፈልጉትን ዋጋ ይምረጡ እና ካርቴላ ይግዙ።",

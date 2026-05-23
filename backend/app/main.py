@@ -1146,6 +1146,64 @@ def db_merge_users_state(changed_users: dict[str, dict[str, object]]) -> None:
             )
 
 
+def db_merge_sessions_state(
+    changed_sessions: dict[str, dict[str, str]] | None = None,
+    removed_tokens: Iterable[str] | None = None,
+) -> None:
+    if not changed_sessions and not removed_tokens:
+        return
+    ensure_db_ready()
+    now = utc_now().replace(microsecond=0).isoformat()
+    normalized_changes: dict[str, dict[str, str]] = {}
+    for token, raw_record in (changed_sessions or {}).items():
+        if not isinstance(token, str):
+            continue
+        normalized_record = normalize_session_record(raw_record)
+        if normalized_record is None:
+            continue
+        normalized_changes[token] = normalized_record
+
+    cleaned_removed_tokens = {str(token).strip() for token in (removed_tokens or []) if str(token).strip()}
+
+    with DB_LOCK:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT state_value FROM app_state WHERE state_key = ?",
+                ("sessions",),
+            ).fetchone()
+            current_sessions: dict[str, dict[str, str]] = {}
+            if row and row[0]:
+                try:
+                    loaded = json.loads(str(row[0]))
+                    if isinstance(loaded, dict):
+                        for token, raw_record in loaded.items():
+                            if not isinstance(token, str):
+                                continue
+                            normalized_record = normalize_session_record(raw_record)
+                            if normalized_record is None:
+                                continue
+                            current_sessions[token] = normalized_record
+                except json.JSONDecodeError:
+                    current_sessions = {}
+
+            for token in cleaned_removed_tokens:
+                current_sessions.pop(token, None)
+
+            current_sessions.update(normalized_changes)
+            payload = json.dumps(current_sessions, separators=(",", ":"), ensure_ascii=False)
+            conn.execute(
+                """
+                INSERT INTO app_state (state_key, state_value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(state_key) DO UPDATE SET
+                    state_value = excluded.state_value,
+                    updated_at = excluded.updated_at
+                """,
+                ("sessions", payload, now),
+            )
+
+
 def persist_users(phone_numbers: Iterable[str] | None = None) -> None:
     payload: dict[str, dict[str, object]]
     if phone_numbers is None:
@@ -1501,7 +1559,7 @@ def maybe_refresh_session_record(token: str, record: dict[str, str], now: dateti
     if PG_STORE.enabled():
         PG_STORE.upsert_session(token, refreshed)
     else:
-        persist_sessions()
+        db_merge_sessions_state(changed_sessions={token: refreshed})
     return refreshed
 
 
@@ -1526,7 +1584,7 @@ def prune_expired_sessions(persist: bool = True) -> None:
             if PG_STORE.enabled():
                 PG_STORE.delete_sessions(expired_tokens)
             else:
-                persist_sessions()
+                db_merge_sessions_state(removed_tokens=expired_tokens)
 
 
 def verify_transfer_otp(phone_number: str, otp: str) -> bool:
@@ -3251,7 +3309,7 @@ def create_session(phone_number: str) -> str:
     if PG_STORE.enabled():
         PG_STORE.upsert_session(token, session_record)
     else:
-        persist_sessions()
+        db_merge_sessions_state(changed_sessions={token: session_record})
     return token
 
 
@@ -4625,7 +4683,7 @@ def logout(authorization: str | None = Header(default=None)) -> dict:
     if PG_STORE.enabled():
         PG_STORE.delete_session(token)
     else:
-        persist_sessions()
+        db_merge_sessions_state(removed_tokens=[token])
     return {"message": "Logged out"}
 
 
