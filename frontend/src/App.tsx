@@ -1404,6 +1404,7 @@ export default function App() {
 
   const [selectedStake, setSelectedStake] = useState<StakeOption | null>(null);
   const [cartellaOpen, setCartellaOpen] = useState(false);
+  const [cartellaLoading, setCartellaLoading] = useState(false);
   const [cartellaStep, setCartellaStep] = useState<CartellaStep>("pick");
   const [pickerRoom, setPickerRoom] = useState<RoomState | null>(null);
   const [lockedPickerPaidCartellas, setLockedPickerPaidCartellas] = useState<number[]>([]);
@@ -2705,7 +2706,7 @@ export default function App() {
     setPreview(null);
     setCartellaStep("pick");
     setCartellaOpen(true);
-    setWorking(true);
+    setCartellaLoading(true);
     setError("");
     try {
       const res = await fetchStakeRoom(stake.id);
@@ -2724,7 +2725,7 @@ export default function App() {
       setError(err instanceof Error ? err.message : "Unable to open cartella");
       setCartellaOpen(false);
     } finally {
-      setWorking(false);
+      setCartellaLoading(false);
     }
   };
 
@@ -4062,7 +4063,7 @@ export default function App() {
                     <button
                       className="join-btn"
                       type="button"
-                      disabled={stake.status === "none" || working}
+                      disabled={stake.status === "none" || working || cartellaLoading}
                       onClick={() => void (canOpen ? openOwnedStakeGame(stake) : onOpenStake(stake))}
                     >
                       {canOpen ? "Open" : "Join"}
@@ -5200,7 +5201,6 @@ export default function App() {
               }
             >
               <CartellaModalContent
-                loading={working}
                 cartellaStep={cartellaStep}
                 selectedStake={selectedStake}
                 pickerRoom={pickerRoom}
@@ -5218,7 +5218,7 @@ export default function App() {
                 preview={preview}
                 insufficientCardBalance={insufficientCardBalance}
                 cardBuyAmount={cardBuyAmount}
-                working={working}
+                working={working || processingCartella != null}
                 onClose={() => setCartellaOpen(false)}
                 onPreview={() => void onPreviewCartella()}
                 onConfirm={() => void onConfirmCartella()}

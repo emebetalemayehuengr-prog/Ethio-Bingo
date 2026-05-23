@@ -6,7 +6,6 @@ const cartellaNumbers = Array.from({ length: 200 }, (_, idx) => idx + 1);
 type CartellaStep = "pick" | "preview";
 
 type Props = {
-  loading: boolean;
   cartellaStep: CartellaStep;
   selectedStake: StakeOption | null;
   pickerRoom: RoomState | null;
@@ -66,7 +65,6 @@ const CartellaCell = memo(function CartellaCell({
 });
 
 export default function CartellaModalContent({
-  loading,
   cartellaStep,
   selectedStake,
   pickerRoom,
@@ -158,27 +156,6 @@ export default function CartellaModalContent({
         : pickerRoom?.active_queue === "next"
           ? "Buy For Next Game"
           : "Buy Card";
-
-  if (loading && !pickerRoom && cartellaStep === "pick") {
-    return (
-      <>
-        <div className="modal-head">
-          <h3 id="cartella-dialog-title">{selectedStake ? `${selectedStake.stake} Birr Current Game` : "Choose Cartella"}</h3>
-          <button type="button" onClick={onClose} aria-label="Close dialog">
-            &times;
-          </button>
-        </div>
-        <div className="modal-skeleton modal-skeleton-grid">
-          <p className="modal-skeleton-copy">Checking live cartella availability...</p>
-          <div className="modal-skeleton-grid-blocks">
-            {Array.from({ length: 24 }, (_, idx) => (
-              <span key={`cartella-skeleton-${idx}`} className="modal-skeleton-block small" />
-            ))}
-          </div>
-        </div>
-      </>
-    );
-  }
 
   if (cartellaStep === "preview" && preview) {
     return (
