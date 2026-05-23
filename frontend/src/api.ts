@@ -43,6 +43,8 @@ const API_BASE = normalizedRuntimeApiBase || normalizedEnvApiBase || inferApiBas
 const TOKEN_KEY = "40bingo_token";
 const LEGACY_TOKEN_KEY = "ethio_bingo_token";
 const REQUEST_TIMEOUT_MS = 12000;
+const GAME_READ_REQUEST_TIMEOUT_MS = 15000;
+const GAME_TRANSPORT_RETRY_LIMIT = 1;
 const AUTH_RECOVERY_TIMEOUT_MS = 7000;
 const AUTH_RECOVERY_RETRY_LIMIT = 1;
 const AUTH_SESSION_PROBE_PATH = "/api/auth/me";
@@ -104,6 +106,20 @@ const normalizePath = (path: string) => {
 const isAuthEndpointPath = (path: string) => {
   const normalized = normalizePath(path);
   return normalized === AUTH_SESSION_PROBE_PATH || AUTH_ENDPOINT_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+};
+
+const isGameEndpointPath = (path: string) => normalizePath(path).startsWith("/api/game/");
+
+const normalizeMethod = (method?: string) => (method ?? "GET").toUpperCase();
+
+const isRetrySafeMethod = (method?: string) => {
+  const normalized = normalizeMethod(method);
+  return normalized === "GET" || normalized === "HEAD";
+};
+
+const getRequestTimeoutForPath = (path: string, method?: string) => {
+  if (!isGameEndpointPath(path)) return REQUEST_TIMEOUT_MS;
+  return isRetrySafeMethod(method) ? GAME_READ_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
 };
 
 const notifyAuthExpired = () => {
@@ -178,7 +194,12 @@ async function probeAuthSessionRecovery(): Promise<boolean> {
   return authRecoveryPromise;
 }
 
-async function request<T>(path: string, options?: RequestInit, authRetryAttempt: number = 0): Promise<T> {
+async function request<T>(
+  path: string,
+  options?: RequestInit,
+  authRetryAttempt: number = 0,
+  transportRetryAttempt: number = 0,
+): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options?.headers as Record<string, string> | undefined),
@@ -188,7 +209,21 @@ async function request<T>(path: string, options?: RequestInit, authRetryAttempt:
     headers.Authorization = `Bearer ${authToken}`;
   }
 
-  const response = await performFetch(path, options, headers);
+  let response: Response;
+  try {
+    response = await performFetch(path, options, headers, getRequestTimeoutForPath(path, options?.method));
+  } catch (err) {
+    const message = err instanceof Error ? err.message.toLowerCase() : "";
+    const canRetryGameTransport =
+      transportRetryAttempt < GAME_TRANSPORT_RETRY_LIMIT &&
+      isGameEndpointPath(path) &&
+      isRetrySafeMethod(options?.method) &&
+      (message.includes("timed out") || message.includes("network error") || message.includes("offline"));
+    if (canRetryGameTransport) {
+      return request<T>(path, options, authRetryAttempt, transportRetryAttempt + 1);
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     if (response.status === 401) {
@@ -197,7 +232,7 @@ async function request<T>(path: string, options?: RequestInit, authRetryAttempt:
       if (canRecoverSession) {
         const recovered = await probeAuthSessionRecovery();
         if (recovered) {
-          return request<T>(path, options, authRetryAttempt + 1);
+          return request<T>(path, options, authRetryAttempt + 1, transportRetryAttempt);
         }
       }
       notifyAuthExpired();

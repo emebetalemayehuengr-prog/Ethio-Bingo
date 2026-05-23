@@ -613,6 +613,91 @@ const deriveStakeUiFromRoom = (stake: StakeOption, room: RoomState): StakeOption
   };
 };
 
+const sanitizeStakeOptions = (source: unknown): StakeOption[] => {
+  if (!Array.isArray(source)) return [];
+  const sanitized: StakeOption[] = [];
+  for (const entry of source) {
+    if (!entry || typeof entry !== "object") continue;
+    const item = entry as Partial<StakeOption>;
+    if (typeof item.id !== "string" || !item.id.trim()) continue;
+    if (typeof item.stake !== "number" || !Number.isFinite(item.stake)) continue;
+    sanitized.push({
+      id: item.id,
+      stake: item.stake,
+      status: item.status === "playing" || item.status === "none" ? item.status : "countdown",
+      countdown_seconds: typeof item.countdown_seconds === "number" && Number.isFinite(item.countdown_seconds) ? item.countdown_seconds : null,
+      possible_win: typeof item.possible_win === "number" && Number.isFinite(item.possible_win) ? item.possible_win : null,
+      bonus: Boolean(item.bonus),
+      room_phase: item.room_phase === "selecting" || item.room_phase === "playing" || item.room_phase === "finished" ? item.room_phase : null,
+      my_cards_current:
+        typeof item.my_cards_current === "number" && Number.isFinite(item.my_cards_current) ? item.my_cards_current : 0,
+      my_cards_next: typeof item.my_cards_next === "number" && Number.isFinite(item.my_cards_next) ? item.my_cards_next : 0,
+      open_available: Boolean(item.open_available),
+    });
+  }
+  if (source.length > 0 && sanitized.length !== source.length) {
+    console.error("[rooms] Dropped invalid stake options from dashboard payload", {
+      received: source.length,
+      usable: sanitized.length,
+    });
+  }
+  return sanitized;
+};
+
+const sanitizeDepositMethods = (source: unknown): DepositMethod[] => {
+  if (!Array.isArray(source)) return [];
+  const sanitized: DepositMethod[] = [];
+  for (const entry of source) {
+    if (!entry || typeof entry !== "object") continue;
+    const item = entry as Partial<DepositMethod>;
+    if ((item.code !== "telebirr" && item.code !== "cbebirr") || typeof item.label !== "string" || !item.label.trim()) {
+      continue;
+    }
+    const transferAccounts = Array.isArray(item.transfer_accounts)
+      ? item.transfer_accounts
+          .filter((account): account is { phone_number: string; owner_name: string } => {
+            if (!account || typeof account !== "object") return false;
+            const row = account as { phone_number?: unknown; owner_name?: unknown };
+            return typeof row.phone_number === "string" && typeof row.owner_name === "string";
+          })
+          .map((account) => ({
+            phone_number: account.phone_number,
+            owner_name: account.owner_name,
+          }))
+      : [];
+    sanitized.push({
+      code: item.code,
+      label: item.label,
+      logo_url: typeof item.logo_url === "string" || item.logo_url == null ? item.logo_url : null,
+      transfer_accounts: transferAccounts,
+      instruction_steps: Array.isArray(item.instruction_steps)
+        ? item.instruction_steps.filter((step): step is string => typeof step === "string")
+        : [],
+      receipt_example: typeof item.receipt_example === "string" ? item.receipt_example : "",
+    });
+  }
+  return sanitized;
+};
+
+const FALLBACK_DEPOSIT_METHODS: DepositMethod[] = [
+  {
+    code: "telebirr",
+    label: "Telebirr",
+    logo_url: "/providers/telebirr.svg",
+    transfer_accounts: [],
+    instruction_steps: [],
+    receipt_example: "",
+  },
+  {
+    code: "cbebirr",
+    label: "CBE Birr",
+    logo_url: "/providers/cbebirr.png",
+    transfer_accounts: [],
+    instruction_steps: [],
+    receipt_example: "",
+  },
+];
+
 type WithdrawFlowStatus = "Pending" | "Processing" | "Paid" | "Rejected";
 
 const normalizeWithdrawFlowStatus = (status: WithdrawTicket["status"]): WithdrawFlowStatus => {
@@ -1202,6 +1287,7 @@ export default function App() {
   const [methodCode, setMethodCode] = useState<"telebirr" | "cbebirr">("telebirr");
   const [walletTab, setWalletTab] = useState<WalletTab>("deposit");
   const [depositGuideOpen, setDepositGuideOpen] = useState(false);
+  const [cachedDepositMethods, setCachedDepositMethods] = useState<DepositMethod[]>([]);
   const [depositAmount, setDepositAmount] = useState("100");
   const [txNo, setTxNo] = useState("");
   const [receiptMessage, setReceiptMessage] = useState("");
@@ -1264,10 +1350,17 @@ export default function App() {
   const [autoMarkUpdating, setAutoMarkUpdating] = useState(false);
 
   const wallet: Wallet = dashboard?.wallet ?? { currency: "ETB", main_balance: 0, bonus_balance: 0 };
+  const liveDepositMethods = useMemo(() => sanitizeDepositMethods(dashboard?.deposit_methods), [dashboard?.deposit_methods]);
+  const depositMethodsForRender = useMemo(() => {
+    if (liveDepositMethods.length > 0) return liveDepositMethods;
+    if (cachedDepositMethods.length > 0) return cachedDepositMethods;
+    return FALLBACK_DEPOSIT_METHODS;
+  }, [liveDepositMethods, cachedDepositMethods]);
   const selectedMethod = useMemo(
-    () => dashboard?.deposit_methods.find((method) => method.code === methodCode) ?? null,
-    [dashboard, methodCode],
+    () => depositMethodsForRender.find((method) => method.code === methodCode) ?? depositMethodsForRender[0] ?? null,
+    [depositMethodsForRender, methodCode],
   );
+  const stakeOptionsForRender = useMemo(() => sanitizeStakeOptions(dashboard?.stake_options), [dashboard?.stake_options]);
   const selectedCartellaOwned = useMemo(() => {
     if (!pickerRoom || !selectedCartella) return false;
     return pickerRoom.my_cartellas.includes(selectedCartella) || pickerRoom.next_my_cartellas.includes(selectedCartella);
@@ -1295,7 +1388,7 @@ export default function App() {
   const hasPendingMarks = Object.keys(pendingMarks).length > 0;
   const canResumeLiveGame =
     Boolean(room?.id) ||
-    (dashboard?.stake_options ?? []).some(
+    stakeOptionsForRender.some(
       (stakeOption) => (stakeOption.my_cards_current ?? 0) > 0 || (stakeOption.my_cards_next ?? 0) > 0,
     );
   const activeStake = useMemo(() => {
@@ -1660,8 +1753,7 @@ export default function App() {
   }, [service, cartellaOpen]);
 
   useEffect(() => {
-    const stakeOptions = dashboard?.stake_options ?? [];
-    if (!stakeOptions.length) {
+    if (!stakeOptionsForRender.length) {
       setStakeCountdownDeadlines({});
       return;
     }
@@ -1669,7 +1761,7 @@ export default function App() {
     const syncedAt = Date.now();
     setStakeCountdownDeadlines((prev) => {
       const next: Record<string, number> = {};
-      for (const option of stakeOptions) {
+      for (const option of stakeOptionsForRender) {
         if (option.countdown_seconds == null) continue;
         const safeSeconds = Math.max(0, option.countdown_seconds);
         const serverDeadline = syncedAt + safeSeconds * 1000;
@@ -1682,10 +1774,20 @@ export default function App() {
       }
       return next;
     });
-  }, [dashboard?.stake_options]);
+  }, [stakeOptionsForRender]);
 
   useEffect(() => {
-    if (!dashboard?.deposit_methods?.length) return;
+    if (!liveDepositMethods.length) return;
+    setCachedDepositMethods((previous) => {
+      const previousSignature = JSON.stringify(previous);
+      const nextSignature = JSON.stringify(liveDepositMethods);
+      if (previousSignature === nextSignature) return previous;
+      return liveDepositMethods;
+    });
+  }, [liveDepositMethods]);
+
+  useEffect(() => {
+    if (!depositMethodsForRender.length) return;
     const onAdminTab = walletTab === "admin" && profile?.is_admin;
     setAdminDraftAccounts((prev) => {
       const next: Record<"telebirr" | "cbebirr", Array<{ phone_number: string; owner_name: string }>> = {
@@ -1695,14 +1797,14 @@ export default function App() {
       for (const code of ["telebirr", "cbebirr"] as const) {
         const keepLocalDraft = onAdminTab && adminDraftDirtyByMethod[code];
         if (keepLocalDraft) continue;
-        const serverRows = dashboard.deposit_methods.find((method) => method.code === code)?.transfer_accounts.map((account) => ({ ...account }));
+        const serverRows = depositMethodsForRender.find((method) => method.code === code)?.transfer_accounts.map((account) => ({ ...account }));
         if (serverRows) {
           next[code] = serverRows;
         }
       }
       return next;
     });
-  }, [dashboard?.deposit_methods, walletTab, profile?.is_admin, adminDraftDirtyByMethod.telebirr, adminDraftDirtyByMethod.cbebirr]);
+  }, [depositMethodsForRender, walletTab, profile?.is_admin, adminDraftDirtyByMethod.telebirr, adminDraftDirtyByMethod.cbebirr]);
 
   useEffect(() => {
     if (service === "stakes") {
@@ -1773,11 +1875,12 @@ export default function App() {
       if (!dashboard) {
         setDashboard(dash);
         setProfile(dash.user);
-        if (dash.deposit_methods.length > 0) {
-          setMethodCode((prev) => (dash.deposit_methods.some((method) => method.code === prev) ? prev : dash.deposit_methods[0].code));
+        const methods = sanitizeDepositMethods(dash.deposit_methods);
+        if (methods.length > 0) {
+          setMethodCode((prev) => (methods.some((method) => method.code === prev) ? prev : methods[0].code));
         }
       }
-      const ownedStakes = dash.stake_options.filter(
+      const ownedStakes = sanitizeStakeOptions(dash.stake_options).filter(
         (option) => (option.my_cards_current ?? 0) > 0 || (option.my_cards_next ?? 0) > 0,
       );
       const stake = ownedStakes.find((option) => option.room_phase !== "finished") ?? ownedStakes[0] ?? null;
@@ -1806,6 +1909,18 @@ export default function App() {
     if (next === "game" && !room) {
       void recoverCurrentGameView();
       return;
+    }
+    if (next === "stakes") {
+      console.warn("[rooms] Opening Rooms view", {
+        stake_count: stakeOptionsForRender.length,
+        has_dashboard: Boolean(dashboard),
+      });
+      if (!stakeOptionsForRender.length) {
+        console.warn("[rooms] Rooms opened with empty stake list", {
+          has_dashboard: Boolean(dashboard),
+          has_profile: Boolean(profile),
+        });
+      }
     }
     setService(next);
     setDrawerOpen(false);
@@ -1910,8 +2025,9 @@ export default function App() {
           const dash = dashResult.value;
           setDashboard(dash);
           setProfile(dash.user);
-          if (dash.deposit_methods.length > 0) {
-            setMethodCode((prev) => (dash.deposit_methods.some((method) => method.code === prev) ? prev : dash.deposit_methods[0].code));
+          const methods = sanitizeDepositMethods(dash.deposit_methods);
+          if (methods.length > 0) {
+            setMethodCode((prev) => (methods.some((method) => method.code === prev) ? prev : methods[0].code));
           }
         }
 
@@ -1935,6 +2051,7 @@ export default function App() {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to load data";
+      console.error("[app] loadData failed", err);
       setError(message);
       if (message.toLowerCase().includes("auth") || message.toLowerCase().includes("session")) {
         clearAuthToken();
@@ -2491,6 +2608,14 @@ export default function App() {
 
   async function reserveCartella(cartellaNo: number, showPreview = false) {
     if (!selectedStake) return;
+    if (!showPreview) {
+      // Keep tap selection instant. Server reservation is done on Preview/Buy.
+      setSelectedCartella(cartellaNo);
+      if (preview?.card_no !== cartellaNo) {
+        setPreview(null);
+      }
+      return;
+    }
     const alreadyReserved =
       pickerRoom?.my_held_cartella === cartellaNo ||
       pickerRoom?.my_cartellas.includes(cartellaNo) ||
@@ -2507,6 +2632,7 @@ export default function App() {
 
     setProcessingCartella(cartellaNo);
     setWorking(true);
+    setSelectedCartella(cartellaNo);
     setError("");
     try {
       const preferredRoundId =
@@ -2523,9 +2649,6 @@ export default function App() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to select cartella");
-      if (selectedCartella === cartellaNo) {
-        setSelectedCartella(null);
-      }
     } finally {
       setProcessingCartella(null);
       setWorking(false);
@@ -2546,45 +2669,38 @@ export default function App() {
     setWorking(true);
     setError("");
     try {
-      const shouldPreflightReserve = !preview || preview.card_no !== selectedCartella;
-      let candidateRoom = pickerRoom;
-      if (shouldPreflightReserve) {
-        const reserveRoundId =
-          candidateRoom?.active_queue === "next"
-            ? candidateRoom?.next_round_id
-            : candidateRoom?.round_id ?? room?.round_id;
-        const reserve = await previewCard(selectedStake.id, selectedCartella, reserveRoundId);
-        setPickerRoomWithSyncMeta(reserve.room);
-        setRoomWithPendingMarks(reserve.room);
-        setPreview(reserve.card);
-        candidateRoom = reserve.room;
-      }
-
+      const stakeId = selectedStake.id;
+      const cartellaNo = selectedCartella;
       const preferredRoundId =
-        candidateRoom?.active_queue === "next"
-          ? candidateRoom?.next_round_id
-          : candidateRoom?.round_id ?? room?.round_id;
+        pickerRoom?.active_queue === "next"
+          ? pickerRoom?.next_round_id
+          : pickerRoom?.round_id ?? room?.round_id;
+      console.info("[cartella] Buy requested", {
+        stakeId,
+        cartellaNo,
+        preferredRoundId: preferredRoundId ?? null,
+        activeQueue: pickerRoom?.active_queue ?? null,
+      });
       let res;
       try {
-        res = await joinStake(selectedStake.id, selectedCartella, preferredRoundId);
+        res = await joinStake(stakeId, cartellaNo, preferredRoundId);
       } catch (err) {
         const message = err instanceof Error ? err.message.toLowerCase() : "";
         if (!message.includes("round changed")) {
           throw err;
         }
-        const refreshed = await fetchStakeRoom(selectedStake.id);
+        console.warn("[cartella] Round changed while buying; refreshing room snapshot and retrying", {
+          stakeId,
+          cartellaNo,
+        });
+        const refreshed = await fetchStakeRoom(stakeId);
         setPickerRoomWithSyncMeta(refreshed.room);
         setRoomWithPendingMarks(refreshed.room);
         const refreshedRoundId =
           refreshed.room.active_queue === "next"
             ? refreshed.room.next_round_id
             : refreshed.room.round_id;
-        const reserve = await previewCard(selectedStake.id, selectedCartella, refreshedRoundId);
-        setPickerRoomWithSyncMeta(reserve.room);
-        setRoomWithPendingMarks(reserve.room);
-        setPreview(reserve.card);
-        const confirmedRoundId = reserve.room.active_queue === "next" ? reserve.room.next_round_id : reserve.room.round_id;
-        res = await joinStake(selectedStake.id, selectedCartella, confirmedRoundId);
+        res = await joinStake(stakeId, cartellaNo, refreshedRoundId);
       }
       setDashboard((prev) => (prev ? { ...prev, wallet: res.wallet } : prev));
       setDashboard((prev) => {
@@ -2603,9 +2719,9 @@ export default function App() {
           ? [...returnedCards, res.card]
           : returnedCards;
       const purchasedForCurrentQueue = res.queue !== "next";
-      const purchasedCardNo = res.card?.card_no ?? selectedCartella;
+      const purchasedCardNo = res.card?.card_no ?? cartellaNo;
       
-      if (!res.card && !selectedCartella) {
+      if (!res.card && mergedCards.length === 0) {
         throw new Error("No card available for selection");
       }
       
@@ -2636,6 +2752,7 @@ export default function App() {
         }
       });
     } catch (err) {
+      console.error("[cartella] Buy failed", err);
       setError(err instanceof Error ? err.message : "Unable to confirm cartella");
     } finally {
       setProcessingCartella(null);
@@ -2660,8 +2777,8 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!sharedStakeId || !profile || !(dashboard?.stake_options?.length ?? 0) || sharedStakeOpeningRef.current) return;
-    const linkedStake = dashboard?.stake_options.find((option) => option.id === sharedStakeId) ?? null;
+    if (!sharedStakeId || !profile || !stakeOptionsForRender.length || sharedStakeOpeningRef.current) return;
+    const linkedStake = stakeOptionsForRender.find((option) => option.id === sharedStakeId) ?? null;
     if (!linkedStake) {
       setSharedStakeId("");
       clearSharedStakeParamsFromLocation();
@@ -2685,7 +2802,7 @@ export default function App() {
         clearSharedStakeParamsFromLocation();
       }
     })();
-  }, [dashboard?.stake_options, profile, sharedStakeId]);
+  }, [stakeOptionsForRender, profile, sharedStakeId]);
   const clearWalletFieldError = (field: keyof WalletFieldErrorMap) => {
     setWalletFieldErrors((prev) => {
       if (!prev[field]) return prev;
@@ -2974,13 +3091,29 @@ export default function App() {
   };
 
   const openDepositGuide = () => {
-    if (!selectedMethod) {
-      const fallbackMethod = dashboard?.deposit_methods?.[0];
-      if (fallbackMethod) {
-        setMethodCode(fallbackMethod.code);
-      }
-    }
+    console.warn("[deposit] Open Deposit Instructions clicked", {
+      live_methods: liveDepositMethods.length,
+      rendered_methods: depositMethodsForRender.length,
+      selected_method: selectedMethod?.code ?? null,
+    });
     setDepositGuideOpen(true);
+    if (liveDepositMethods.length > 0) return;
+    console.warn("[deposit] Opening instructions without live methods, forcing dashboard refresh");
+    void (async () => {
+      try {
+        const dash = await fetchDashboard();
+        startTransition(() => {
+          setDashboard(dash);
+          setProfile(dash.user);
+          const methods = sanitizeDepositMethods(dash.deposit_methods);
+          if (methods.length > 0) {
+            setMethodCode((prev) => (methods.some((method) => method.code === prev) ? prev : methods[0].code));
+          }
+        });
+      } catch (err) {
+        console.error("[deposit] Failed to refresh deposit methods", err);
+      }
+    })();
   };
 
   const onCloseBrandModal = () => {
@@ -3778,7 +3911,7 @@ export default function App() {
               <span>Join</span>
             </div>
             <div className="stake-list">
-              {(dashboard?.stake_options ?? []).map((stake) => {
+              {stakeOptionsForRender.map((stake) => {
                 const isPlaying = stake.room_phase === "playing" || stake.status === "playing";
                 const hasCurrentCard = (stake.my_cards_current ?? 0) > 0;
                 const liveCountdown = getStakeCountdownSeconds(stake);
@@ -3811,6 +3944,12 @@ export default function App() {
                 );
               })}
             </div>
+            {stakeOptionsForRender.length === 0 && (
+              <div className="empty-state">
+                <h3>No rooms available</h3>
+                <p>Rooms are syncing. Tap Refresh and try again.</p>
+              </div>
+            )}
           </section>
         )}
 
@@ -4271,7 +4410,7 @@ export default function App() {
             {walletTab === "deposit" && (
               <div className="wallet-subpanel">
                 <div className="method-grid">
-                  {(dashboard?.deposit_methods ?? []).map((method) => (
+                  {depositMethodsForRender.map((method) => (
                     <MethodCard
                       key={method.code}
                       method={method}
