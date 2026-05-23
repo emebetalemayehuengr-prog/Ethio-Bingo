@@ -2639,7 +2639,7 @@ export default function App() {
   }, [autoClaimRequested, hasPendingMarks, claimingBingo, room, card, markedNumbers]);
 
   useEffect(() => {
-    if (!room?.id || room.phase !== "playing" || !room.auto_mark_called_numbers || !card || !selectedCardNo) return;
+    if (!room?.id || room.phase !== "playing" || !card || !selectedCardNo) return;
     if (hasPendingMarks || claimingBingo) return;
     const claimReady = hasBingo(card, room.called_numbers ?? [], markedNumbers);
     if (!claimReady) return;
@@ -2654,7 +2654,6 @@ export default function App() {
     room?.id,
     room?.round_id,
     room?.phase,
-    room?.auto_mark_called_numbers,
     room?.called_numbers,
     card,
     selectedCardNo,
@@ -4402,7 +4401,12 @@ export default function App() {
                     </div>
 
                     <div className="game-actions compact">
-                      <button className="primary-btn" type="button" onClick={() => void onClaimBingo()} disabled={!bingoClaimable || claimingBingo || room.phase !== "playing"}>
+                      <button
+                        className="primary-btn"
+                        type="button"
+                        onClick={() => void onClaimBingo()}
+                        disabled={claimingBingo || room.phase !== "playing" || (!bingoClaimable && !hasPendingMarks)}
+                      >
                         {claimingBingo ? "Confirming..." : "Bingo"}
                       </button>
                     </div>
