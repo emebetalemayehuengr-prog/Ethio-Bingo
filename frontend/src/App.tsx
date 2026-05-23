@@ -131,6 +131,7 @@ const GAME_ROOM_FALLBACK_POLL_MS = 1600;
 const STAKES_DASHBOARD_POLL_MS = 2000;
 const DEFAULT_DASHBOARD_POLL_MS = 4800;
 const CARTELLA_POLL_MS = 2200;
+const CARTELLA_HEARTBEAT_POLL_MS = 9000;
 const OPEN_STALE_FINISHED_RETRIES = 4;
 const OPEN_STALE_RETRY_DELAY_MS = 250;
 
@@ -1311,6 +1312,7 @@ export default function App() {
   const pusherClientRef = useRef<PusherClientLike | null>(null);
   const realtimeLastEventAtRef = useRef(0);
   const realtimeLastSyncAtRef = useRef(0);
+  const lastCartellaPollAtRef = useRef(0);
   const lastRoomTransitionLogRef = useRef<string>("");
   const lastPickerTransitionLogRef = useRef<string>("");
   const lastFinishedRoomRef = useRef<string | null>(null);
@@ -1410,6 +1412,7 @@ export default function App() {
   const [lockedPickerPaidCartellas, setLockedPickerPaidCartellas] = useState<number[]>([]);
   const [lockedPickerSimulatedCartellas, setLockedPickerSimulatedCartellas] = useState<number[]>([]);
   const [selectedCartella, setSelectedCartella] = useState<number | null>(null);
+  const [reservedCartellaNo, setReservedCartellaNo] = useState<number | null>(null);
   const [processingCartella, setProcessingCartella] = useState<number | null>(null);
   const [preview, setPreview] = useState<BingoCard | null>(null);
 
@@ -2455,13 +2458,18 @@ export default function App() {
     let inFlight = false;
     const pollStakeRoom = () => {
       if (inFlight) return;
+      const now = Date.now();
+      const msSinceLastStakePoll = now - lastCartellaPollAtRef.current;
       if (pusherReady) {
         const msSinceRealtimeSync = Date.now() - realtimeLastSyncAtRef.current;
-        if (msSinceRealtimeSync < REALTIME_PUSH_STALE_MS) {
+        const shouldSkipForFreshRealtime =
+          msSinceRealtimeSync < REALTIME_PUSH_STALE_MS && msSinceLastStakePoll < CARTELLA_HEARTBEAT_POLL_MS;
+        if (shouldSkipForFreshRealtime) {
           return;
         }
       }
       inFlight = true;
+      lastCartellaPollAtRef.current = now;
       void (async () => {
         try {
           const res = await fetchStakeRoom(selectedStake.id);
@@ -2490,9 +2498,17 @@ export default function App() {
   }, [cartellaOpen, selectedStake, cartellaStep, selectedCartella, isPageVisible, pusherReady]);
 
   useEffect(() => {
+    if (cartellaOpen) return;
+    if (reservedCartellaNo == null) return;
+    setReservedCartellaNo(null);
+  }, [cartellaOpen, reservedCartellaNo]);
+
+  useEffect(() => {
     if (!cartellaOpen || !selectedCartella || processingCartella === selectedCartella) return;
+    if (reservedCartellaNo == null || selectedCartella !== reservedCartellaNo) return;
     if (selectedCartellaHeld || selectedCartellaOwned) return;
     setSelectedCartella(null);
+    setReservedCartellaNo(null);
     if (preview?.card_no === selectedCartella) {
       setPreview(null);
     }
@@ -2505,6 +2521,7 @@ export default function App() {
     cartellaStep,
     preview?.card_no,
     processingCartella,
+    reservedCartellaNo,
     selectedCartella,
     selectedCartellaHeld,
     selectedCartellaOwned,
@@ -2702,6 +2719,7 @@ export default function App() {
   const onOpenStake = async (stake: StakeOption) => {
     setSelectedStake(stake);
     setSelectedCartella(null);
+    setReservedCartellaNo(null);
     setProcessingCartella(null);
     setPreview(null);
     setCartellaStep("pick");
@@ -2715,8 +2733,10 @@ export default function App() {
       setCards(res.cards ?? (res.card ? [res.card] : []));
       if (res.room.my_cartella) {
         setSelectedCartella(res.room.my_cartella);
+        setReservedCartellaNo(res.room.my_cartella);
       } else if (res.room.my_held_cartella) {
         setSelectedCartella(res.room.my_held_cartella);
+        setReservedCartellaNo(res.room.my_held_cartella);
       }
       if (res.card) {
         setPreview(res.card);
@@ -2766,6 +2786,7 @@ export default function App() {
       setPickerRoomWithSyncMeta(res.room);
       setRoomWithPendingMarks(res.room);
       setSelectedCartella(cartellaNo);
+      setReservedCartellaNo(cartellaNo);
       setPreview(res.card);
       if (showPreview) {
         setCartellaStep("preview");
@@ -2849,6 +2870,7 @@ export default function App() {
       }
       
       setCards(mergedCards);
+      setReservedCartellaNo(null);
       
       if (purchasedForCurrentQueue) {
         setSelectedCardNo(purchasedCardNo);
