@@ -803,6 +803,11 @@ try:
     SESSION_TTL_SECONDS = max(300, int(os.getenv("SESSION_TTL_SECONDS", "86400").strip() or "86400"))
 except ValueError:
     SESSION_TTL_SECONDS = 86400
+try:
+    raw_session_refresh_window = int(os.getenv("SESSION_ACTIVITY_REFRESH_WINDOW_SECONDS", "900").strip() or "900")
+except ValueError:
+    raw_session_refresh_window = 900
+SESSION_ACTIVITY_REFRESH_WINDOW_SECONDS = max(60, min(SESSION_TTL_SECONDS - 60, raw_session_refresh_window))
 ENABLE_INTERNAL_TRANSFER = env_flag("ENABLE_INTERNAL_TRANSFER", False)
 TRANSFER_OTP_VERIFY_URL = os.getenv("TRANSFER_OTP_VERIFY_URL", "").strip()
 try:
@@ -1481,6 +1486,25 @@ def normalize_session_record(record: object) -> dict[str, str] | None:
     return None
 
 
+def maybe_refresh_session_record(token: str, record: dict[str, str], now: datetime, expires_at: datetime) -> dict[str, str]:
+    remaining_seconds = (expires_at - now).total_seconds()
+    if remaining_seconds > SESSION_ACTIVITY_REFRESH_WINDOW_SECONDS:
+        return record
+    refreshed_expires_at = (now + timedelta(seconds=SESSION_TTL_SECONDS)).replace(microsecond=0)
+    if refreshed_expires_at <= expires_at:
+        return record
+    refreshed = {
+        **record,
+        "expires_at": refreshed_expires_at.isoformat(),
+    }
+    SESSIONS[token] = refreshed
+    if PG_STORE.enabled():
+        PG_STORE.upsert_session(token, refreshed)
+    else:
+        persist_sessions()
+    return refreshed
+
+
 def prune_expired_sessions(persist: bool = True) -> None:
     now = utc_now()
     expired_tokens: list[str] = []
@@ -1499,7 +1523,10 @@ def prune_expired_sessions(persist: bool = True) -> None:
         for token in expired_tokens:
             SESSIONS.pop(token, None)
         if persist:
-            persist_sessions()
+            if PG_STORE.enabled():
+                PG_STORE.delete_sessions(expired_tokens)
+            else:
+                persist_sessions()
 
 
 def verify_transfer_otp(phone_number: str, otp: str) -> bool:
@@ -3219,8 +3246,12 @@ def reserve_deposit_receipt(tx_number: str, phone_number: str, links: list[str])
 
 def create_session(phone_number: str) -> str:
     token = secrets.token_urlsafe(32)
-    SESSIONS[token] = create_session_record(phone_number)
-    persist_sessions()
+    session_record = create_session_record(phone_number)
+    SESSIONS[token] = session_record
+    if PG_STORE.enabled():
+        PG_STORE.upsert_session(token, session_record)
+    else:
+        persist_sessions()
     return token
 
 
@@ -3279,8 +3310,10 @@ def get_current_user(authorization: str | None = Header(default=None)) -> UserSt
     if not record:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
     expires_at = parse_iso_datetime(record.get("expires_at"))
-    if expires_at is None or utc_now() >= expires_at:
+    now = utc_now()
+    if expires_at is None or now >= expires_at:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+    record = maybe_refresh_session_record(token, record, now, expires_at)
     phone_number = record["phone_number"]
     SESSIONS[token] = record
     user = USERS.get(phone_number)
@@ -4589,7 +4622,10 @@ def telegram_auth(payload: TelegramAuthRequest) -> dict:
 def logout(authorization: str | None = Header(default=None)) -> dict:
     token = get_auth_token(authorization)
     SESSIONS.pop(token, None)
-    persist_sessions()
+    if PG_STORE.enabled():
+        PG_STORE.delete_session(token)
+    else:
+        persist_sessions()
     return {"message": "Logged out"}
 
 

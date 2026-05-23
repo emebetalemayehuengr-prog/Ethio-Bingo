@@ -125,12 +125,14 @@ const PUSHER_KEY = ((import.meta.env.VITE_PUSHER_KEY as string | undefined)?.tri
 const PUSHER_CLUSTER = ((import.meta.env.VITE_PUSHER_CLUSTER as string | undefined)?.trim() || "ap2");
 const PUSHER_JS_URL = "https://js.pusher.com/8.4.0/pusher.min.js";
 const REALTIME_SYNC_THROTTLE_MS = 400;
-const REALTIME_PUSH_STALE_MS = 6000;
-const REALTIME_FALLBACK_POLL_MS = 3000;
+const REALTIME_PUSH_STALE_MS = 3500;
+const REALTIME_FALLBACK_POLL_MS = 2600;
+const GAME_ROOM_FALLBACK_POLL_MS = 1600;
 const STAKES_DASHBOARD_POLL_MS = 3200;
 const DEFAULT_DASHBOARD_POLL_MS = 4800;
 const CARTELLA_POLL_MS = 2200;
-const OPEN_STALE_FINISHED_RETRIES = 2;
+const OPEN_STALE_FINISHED_RETRIES = 4;
+const OPEN_STALE_RETRY_DELAY_MS = 250;
 
 let pusherScriptReadyPromise: Promise<void> | null = null;
 function ensurePusherScriptLoaded() {
@@ -590,8 +592,8 @@ const getPickerQueueKey = (state: RoomState | null) => {
 };
 
 const deriveStakeUiFromRoom = (stake: StakeOption, room: RoomState): StakeOption => {
-  const myCardsCurrent = room.my_cartellas?.length ?? stake.my_cards_current;
-  const myCardsNext = room.next_my_cartellas?.length ?? stake.my_cards_next;
+  const myCardsCurrent = Math.max(stake.my_cards_current ?? 0, room.my_cartellas?.length ?? 0);
+  const myCardsNext = Math.max(stake.my_cards_next ?? 0, room.next_my_cartellas?.length ?? 0);
   const phase = room.phase;
   const status: StakeOption["status"] = phase === "playing" ? "playing" : "countdown";
   const countdownSeconds =
@@ -1733,6 +1735,7 @@ export default function App() {
           (res.room.my_cartellas?.length ?? 0) === 0 &&
           ownedCards.length === 0;
         if (!likelyStaleFinished) break;
+        await new Promise<void>((resolve) => window.setTimeout(resolve, OPEN_STALE_RETRY_DELAY_MS));
         try {
           res = await fetchStakeRoom(stake.id);
           ownedCards = res.cards ?? (res.card ? [res.card] : []);
@@ -2164,7 +2167,7 @@ export default function App() {
     pollRoom();
     const timer = window.setInterval(() => {
       pollRoom();
-    }, REALTIME_FALLBACK_POLL_MS);
+    }, GAME_ROOM_FALLBACK_POLL_MS);
     return () => window.clearInterval(timer);
   }, [room?.id, service, isPageVisible, pusherReady]);
 
@@ -3777,6 +3780,7 @@ export default function App() {
             <div className="stake-list">
               {(dashboard?.stake_options ?? []).map((stake) => {
                 const isPlaying = stake.room_phase === "playing" || stake.status === "playing";
+                const hasCurrentCard = (stake.my_cards_current ?? 0) > 0;
                 const liveCountdown = getStakeCountdownSeconds(stake);
                 const active =
                   stake.room_phase === "selecting" || (stake.status === "countdown" && stake.room_phase !== "finished")
@@ -3786,7 +3790,7 @@ export default function App() {
                       : stake.room_phase === "finished"
                         ? fmtClock(liveCountdown)
                       : "None";
-                const canOpen = Boolean(stake.open_available) || (isPlaying && (stake.my_cards_current ?? 0) > 0);
+                const canOpen = stake.room_phase !== "finished" && (hasCurrentCard || Boolean(stake.open_available));
                 return (
                   <div key={stake.id} className={`stake-row ${stake.bonus ? "bonus" : ""}`}>
                     <span className="stake-col">

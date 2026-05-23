@@ -686,6 +686,64 @@ class PostgresStateStore:
             "expires_at": str(row["expires_at"]) if row["expires_at"] is not None else None,
         }
 
+    def upsert_session(self, token: str, record: dict[str, str]) -> None:
+        if not self.enabled():
+            return
+
+        clean_token = str(token).strip()
+        if not clean_token:
+            return
+
+        phone_number = str(record.get("phone_number") or "").strip()
+        if not phone_number:
+            return
+
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO sessions(token, phone_number, created_at, expires_at)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT(token) DO UPDATE SET
+                        phone_number = EXCLUDED.phone_number,
+                        created_at = EXCLUDED.created_at,
+                        expires_at = EXCLUDED.expires_at
+                    """,
+                    (
+                        clean_token,
+                        phone_number,
+                        record.get("created_at"),
+                        record.get("expires_at"),
+                    ),
+                )
+            conn.commit()
+
+    def delete_session(self, token: str) -> None:
+        if not self.enabled():
+            return
+
+        clean_token = str(token).strip()
+        if not clean_token:
+            return
+
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM sessions WHERE token = %s", (clean_token,))
+            conn.commit()
+
+    def delete_sessions(self, tokens: list[str]) -> None:
+        if not self.enabled():
+            return
+
+        clean_tokens = [str(token).strip() for token in tokens if str(token).strip()]
+        if not clean_tokens:
+            return
+
+        with psycopg.connect(self.dsn, prepare_threshold=None) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM sessions WHERE token = ANY(%s)", (clean_tokens,))
+            conn.commit()
+
     def adjust_wallet_and_record_transaction(
         self,
         phone_number: str,

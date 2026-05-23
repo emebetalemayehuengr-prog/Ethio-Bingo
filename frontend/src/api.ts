@@ -43,6 +43,10 @@ const API_BASE = normalizedRuntimeApiBase || normalizedEnvApiBase || inferApiBas
 const TOKEN_KEY = "40bingo_token";
 const LEGACY_TOKEN_KEY = "ethio_bingo_token";
 const REQUEST_TIMEOUT_MS = 12000;
+const AUTH_RECOVERY_TIMEOUT_MS = 7000;
+const AUTH_RECOVERY_RETRY_LIMIT = 1;
+const AUTH_SESSION_PROBE_PATH = "/api/auth/me";
+const AUTH_ENDPOINT_PREFIXES = ["/api/auth/login", "/api/auth/signup", "/api/auth/telegram", "/api/auth/logout"];
 
 export class ApiRequestError extends Error {
   status: number;
@@ -67,6 +71,8 @@ if (tokenFromStorage && !window.localStorage.getItem(TOKEN_KEY)) {
   window.localStorage.removeItem(LEGACY_TOKEN_KEY);
 }
 let authToken = tokenFromStorage;
+let authRecoveryPromise: Promise<boolean> | null = null;
+let authExpiredTokenNotified = "";
 
 export function getAuthToken() {
   return authToken;
@@ -74,6 +80,9 @@ export function getAuthToken() {
 
 export function setAuthToken(token: string | null) {
   authToken = token ?? "";
+  if (authToken) {
+    authExpiredTokenNotified = "";
+  }
   if (authToken) {
     window.localStorage.setItem(TOKEN_KEY, authToken);
     window.localStorage.removeItem(LEGACY_TOKEN_KEY);
@@ -87,21 +96,34 @@ export function clearAuthToken() {
   setAuthToken(null);
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(options?.headers as Record<string, string> | undefined),
-  };
+const normalizePath = (path: string) => {
+  const queryIndex = path.indexOf("?");
+  return queryIndex >= 0 ? path.slice(0, queryIndex) : path;
+};
 
-  if (authToken) {
-    headers.Authorization = `Bearer ${authToken}`;
-  }
+const isAuthEndpointPath = (path: string) => {
+  const normalized = normalizePath(path);
+  return normalized === AUTH_SESSION_PROBE_PATH || AUTH_ENDPOINT_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+};
 
+const notifyAuthExpired = () => {
+  if (!authToken) return;
+  if (authExpiredTokenNotified === authToken) return;
+  authExpiredTokenNotified = authToken;
+  clearAuthToken();
+  window.dispatchEvent(new CustomEvent("auth:expired"));
+};
+
+async function performFetch(
+  path: string,
+  options: RequestInit | undefined,
+  headers: Record<string, string>,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  let response: Response;
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    response = await fetch(`${API_BASE}${path}`, {
+    return await fetch(`${API_BASE}${path}`, {
       ...options,
       headers,
       cache: options?.cache ?? "no-store",
@@ -123,11 +145,62 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   } finally {
     window.clearTimeout(timeoutId);
   }
+}
+
+async function probeAuthSessionRecovery(): Promise<boolean> {
+  if (!authToken) return false;
+  if (authRecoveryPromise) return authRecoveryPromise;
+  const tokenAtStart = authToken;
+  authRecoveryPromise = (async () => {
+    const probeHeaders: Record<string, string> = {
+      Authorization: `Bearer ${tokenAtStart}`,
+    };
+    try {
+      const response = await performFetch(
+        AUTH_SESSION_PROBE_PATH,
+        {
+          method: "GET",
+          cache: "no-store",
+        },
+        probeHeaders,
+        AUTH_RECOVERY_TIMEOUT_MS,
+      );
+      if (authToken !== tokenAtStart) {
+        return Boolean(authToken);
+      }
+      return response.ok;
+    } catch {
+      return false;
+    }
+  })().finally(() => {
+    authRecoveryPromise = null;
+  });
+  return authRecoveryPromise;
+}
+
+async function request<T>(path: string, options?: RequestInit, authRetryAttempt: number = 0): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options?.headers as Record<string, string> | undefined),
+  };
+
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
+  const response = await performFetch(path, options, headers);
 
   if (!response.ok) {
     if (response.status === 401) {
-      clearAuthToken();
-      window.dispatchEvent(new CustomEvent("auth:expired"));
+      const canRecoverSession =
+        authRetryAttempt < AUTH_RECOVERY_RETRY_LIMIT && !isAuthEndpointPath(path) && Boolean(authToken);
+      if (canRecoverSession) {
+        const recovered = await probeAuthSessionRecovery();
+        if (recovered) {
+          return request<T>(path, options, authRetryAttempt + 1);
+        }
+      }
+      notifyAuthExpired();
     }
     const errorBody = await response.json().catch(() => ({}));
     let detail = "Request failed";
